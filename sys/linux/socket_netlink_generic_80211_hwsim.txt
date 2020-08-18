@@ -6,7 +6,7 @@ include <include/net/mac80211.h>
 
 # TODO: consider other name prefixes
 
-wifi_mac_addr [
+mac_addr_80211 [
 	empty		array[const[0x0, int8], 6]
 	hwsim1		array[const[0x1, int8], 6]
 	hwsim2		array[const[0x2, int8], 6]
@@ -38,7 +38,7 @@ hwsim80211_tx_rate {
 } [packed]
 
 hwsim80211_tx_info_policy [
-	HWSIM_ATTR_ADDR_TRANSMITTER	nlattr[HWSIM_ATTR_ADDR_TRANSMITTER, wifi_mac_addr]
+	HWSIM_ATTR_ADDR_TRANSMITTER	nlattr[HWSIM_ATTR_ADDR_TRANSMITTER, mac_addr_80211]
 	HWSIM_ATTR_FLAGS		nlattr[HWSIM_ATTR_FLAGS, flags[hwsim80211_tx_control_flags,int32]]
 	HWSIM_ATTR_COOKIE		nlattr[HWSIM_ATTR_COOKIE, int64]
 	HWSIM_ATTR_SIGNAL		nlattr[HWSIM_ATTR_SIGNAL, int32]
@@ -58,7 +58,7 @@ hwsim80211_new_radio_policy [
 	HWSIM_ATTR_USE_CHANCTX		nlattr[HWSIM_ATTR_USE_CHANCTX, void]
 	HWSIM_ATTR_REG_HINT_ALPHA2	nlattr[HWSIM_ATTR_REG_HINT_ALPHA2, array[int8, 2]]
 	HWSIM_ATTR_REG_CUSTOM_REG	nlattr[HWSIM_ATTR_REG_CUSTOM_REG, int32[0:1]]
-	HWSIM_ATTR_PERM_ADDR		nlattr[HWSIM_ATTR_PERM_ADDR, wifi_mac_addr]
+	HWSIM_ATTR_PERM_ADDR		nlattr[HWSIM_ATTR_PERM_ADDR, mac_addr_80211]
 ] [varlen]
 
 hwsim80211_del_radio_policy [
@@ -73,7 +73,7 @@ hwsim80211_get_radio_policy [
 type ieee80211_frame array[int8]
 
 hwsim80211_frame_policy [
-	HWSIM_ATTR_ADDR_RECEIVER	nlattr[HWSIM_ATTR_ADDR_RECEIVER, wifi_mac_addr]
+	HWSIM_ATTR_ADDR_RECEIVER	nlattr[HWSIM_ATTR_ADDR_RECEIVER, mac_addr_80211]
 	HWSIM_ATTR_FRAME		nlattr[HWSIM_ATTR_FRAME, ieee80211_frame]
 	HWSIM_ATTR_RX_RATE		nlattr[HWSIM_ATTR_RX_RATE, int32[0:IEEE80211_TX_MAX_RATES]]
 	HWSIM_ATTR_SIGNAL		nlattr[HWSIM_ATTR_SIGNAL, int32]
