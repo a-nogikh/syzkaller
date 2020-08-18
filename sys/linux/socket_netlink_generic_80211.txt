@@ -20,7 +20,7 @@ nl80211_ssid [
     random		array[int8, 0:IEEE80211_MAX_SSID_LEN]
     special1		array[const[0x1, int8], 10]
     special2		array[const[0x2, int8], 10]
-]
+] [varlen]
 
 type nl80211_wiphy_freq int32[2401:5990]
 type nl80211_beacon_int int32[10:10000]
