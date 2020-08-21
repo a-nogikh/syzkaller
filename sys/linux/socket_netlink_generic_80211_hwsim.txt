@@ -6,18 +6,23 @@ include <include/net/mac80211.h>
 
 # TODO: consider other name prefixes
 
+type _nl80211_mac_addr[LAST] {
+	byte0		const[0xaa, int8]
+	byte1		const[0xaa, int8]
+	byte2		const[0x08, int8]
+	byte3		const[0x02, int8]
+	byte4		const[0x11, int8]
+	byte5		LAST
+} [packed]
+
 mac_addr_80211 [
-	empty		array[const[0x0, int8], 6]
-	hwsim1		array[const[0x1, int8], 6]
-	hwsim2		array[const[0x2, int8], 6]
-	hwsim3		array[const[0x3, int8], 6]
-	hwsim4		array[const[0x4, int8], 6]
+	device_a    _nl80211_mac_addr[const[0x00, int8]]
+	device_b  	_nl80211_mac_addr[const[0x01, int8]]
 	broadcast	array[const[0xff, int8], 6]
-	random		array[int8, 6]
 ]
 
-
 resource hwsim80211_family_id[int16]
+#resource hwsim80211_injector_handle[int32]
 
 type msghdr_hwsim80211[CMD, POLICY] msghdr_netlink[netlink_msg_t[hwsim80211_family_id, genlmsghdr_t[CMD], POLICY]]
 
@@ -29,45 +34,44 @@ sendmsg$HWSIM_CMD_TX_INFO_FRAME(fd sock_nl_generic, msg ptr[in, msghdr_hwsim8021
 sendmsg$HWSIM_CMD_NEW_RADIO(fd sock_nl_generic, msg ptr[in, msghdr_hwsim80211[HWSIM_CMD_NEW_RADIO, hwsim80211_new_radio_policy]], f flags[send_flags])
 sendmsg$HWSIM_CMD_DEL_RADIO(fd sock_nl_generic, msg ptr[in, msghdr_hwsim80211[HWSIM_CMD_DEL_RADIO, hwsim80211_del_radio_policy]], f flags[send_flags])
 sendmsg$HWSIM_CMD_GET_RADIO(fd sock_nl_generic, msg ptr[in, msghdr_hwsim80211[HWSIM_CMD_GET_RADIO, hwsim80211_get_radio_policy]], f flags[send_flags])
-
-
+syz_hwsim80211_join_ibss(ssid ptr[in, nl80211_ssid], ssid_len len[ssid])
 
 hwsim80211_tx_rate {
-	idx   int8
-	count int8[0:255]
+	idx	int8
+	count	int8[0:255]
 } [packed]
 
 hwsim80211_tx_info_policy [
 	HWSIM_ATTR_ADDR_TRANSMITTER	nlattr[HWSIM_ATTR_ADDR_TRANSMITTER, mac_addr_80211]
-	HWSIM_ATTR_FLAGS		nlattr[HWSIM_ATTR_FLAGS, flags[hwsim80211_tx_control_flags,int32]]
+	HWSIM_ATTR_FLAGS		nlattr[HWSIM_ATTR_FLAGS, flags[hwsim80211_tx_control_flags, int32]]
 	HWSIM_ATTR_COOKIE		nlattr[HWSIM_ATTR_COOKIE, int64]
 	HWSIM_ATTR_SIGNAL		nlattr[HWSIM_ATTR_SIGNAL, int32]
-  	HWSIM_ATTR_TX_INFO_FLAGS	nlattr[HWSIM_ATTR_TX_INFO_FLAGS, array[hwsim80211_tx_rate_flag, IEEE80211_TX_MAX_RATES]]
-  	HWSIM_ATTR_TX_INFO		nlattr[HWSIM_ATTR_TX_INFO, array[hwsim80211_tx_rate, IEEE80211_TX_MAX_RATES]]
+	HWSIM_ATTR_TX_INFO_FLAGS	nlattr[HWSIM_ATTR_TX_INFO_FLAGS, array[hwsim80211_tx_rate_flag, IEEE80211_TX_MAX_RATES]]
+	HWSIM_ATTR_TX_INFO		nlattr[HWSIM_ATTR_TX_INFO, array[hwsim80211_tx_rate, IEEE80211_TX_MAX_RATES]]
 ] [varlen]
 
 type radio_name_t array[int8]
 
 hwsim80211_new_radio_policy [
-  	HWSIM_ATTR_RADIO_NAME		nlattr[HWSIM_ATTR_RADIO_NAME, radio_name_t]
-	HWSIM_ATTR_REG_STRICT_REG	nlattr[HWSIM_ATTR_REG_STRICT_REG, void]
+	HWSIM_ATTR_RADIO_NAME			nlattr[HWSIM_ATTR_RADIO_NAME, radio_name_t]
+	HWSIM_ATTR_REG_STRICT_REG		nlattr[HWSIM_ATTR_REG_STRICT_REG, void]
 	HWSIM_ATTR_DESTROY_RADIO_ON_CLOSE	nlattr[HWSIM_ATTR_DESTROY_RADIO_ON_CLOSE, void]
-	HWSIM_ATTR_NO_VIF		nlattr[HWSIM_ATTR_NO_VIF, void]
-	HWSIM_ATTR_SUPPORT_P2P_DEVICE	nlattr[HWSIM_ATTR_SUPPORT_P2P_DEVICE, void]
-	HWSIM_ATTR_CHANNELS		nlattr[HWSIM_ATTR_CHANNELS, int32]
-	HWSIM_ATTR_USE_CHANCTX		nlattr[HWSIM_ATTR_USE_CHANCTX, void]
-	HWSIM_ATTR_REG_HINT_ALPHA2	nlattr[HWSIM_ATTR_REG_HINT_ALPHA2, array[int8, 2]]
-	HWSIM_ATTR_REG_CUSTOM_REG	nlattr[HWSIM_ATTR_REG_CUSTOM_REG, int32[0:1]]
-	HWSIM_ATTR_PERM_ADDR		nlattr[HWSIM_ATTR_PERM_ADDR, mac_addr_80211]
+	HWSIM_ATTR_NO_VIF			nlattr[HWSIM_ATTR_NO_VIF, void]
+	HWSIM_ATTR_SUPPORT_P2P_DEVICE		nlattr[HWSIM_ATTR_SUPPORT_P2P_DEVICE, void]
+	HWSIM_ATTR_CHANNELS			nlattr[HWSIM_ATTR_CHANNELS, int32]
+	HWSIM_ATTR_USE_CHANCTX			nlattr[HWSIM_ATTR_USE_CHANCTX, void]
+	HWSIM_ATTR_REG_HINT_ALPHA2		nlattr[HWSIM_ATTR_REG_HINT_ALPHA2, array[int8, 2]]
+	HWSIM_ATTR_REG_CUSTOM_REG		nlattr[HWSIM_ATTR_REG_CUSTOM_REG, int32[0:1]]
+	HWSIM_ATTR_PERM_ADDR			nlattr[HWSIM_ATTR_PERM_ADDR, mac_addr_80211]
 ] [varlen]
 
 hwsim80211_del_radio_policy [
-	HWSIM_ATTR_RADIO_ID		nlattr[HWSIM_ATTR_RADIO_ID, int32[0:64]]
-	HWSIM_ATTR_RADIO_NAME		nlattr[HWSIM_ATTR_RADIO_NAME, radio_name_t]
+	HWSIM_ATTR_RADIO_ID	nlattr[HWSIM_ATTR_RADIO_ID, int32[0:64]]
+	HWSIM_ATTR_RADIO_NAME	nlattr[HWSIM_ATTR_RADIO_NAME, radio_name_t]
 ] [varlen]
 
 hwsim80211_get_radio_policy [
-	HWSIM_ATTR_RADIO_ID		nlattr[HWSIM_ATTR_RADIO_ID, int32[0:64]]
+	HWSIM_ATTR_RADIO_ID	nlattr[HWSIM_ATTR_RADIO_ID, int32[0:64]]
 ] [varlen]
 
 type ieee80211_frame array[int8]
@@ -80,8 +84,8 @@ hwsim80211_frame_policy [
 ] [varlen]
 
 hwsim80211_tx_rate_flag {
-	idx int8
-	flags flags[hwsim80211_tx_rate_flags, int16]
+	idx	int8
+	flags	flags[hwsim80211_tx_rate_flags, int16]
 } [packed]
 
 hwsim80211_tx_control_flags = HWSIM_TX_CTL_REQ_TX_STATUS, HWSIM_TX_CTL_NO_ACK, HWSIM_TX_STAT_ACK
