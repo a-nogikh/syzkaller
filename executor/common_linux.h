@@ -121,6 +121,7 @@ static bool write_file(const char* file, const char* what, ...)
 #include <linux/neighbour.h>
 #include <linux/net.h>
 #include <linux/netlink.h>
+#include <linux/genetlink.h>
 #include <linux/rtnetlink.h>
 #include <linux/veth.h>
 
@@ -204,6 +205,36 @@ static int netlink_send_ext(struct nlmsg* nlmsg, int sock,
 static int netlink_send(struct nlmsg* nlmsg, int sock)
 {
 	return netlink_send_ext(nlmsg, sock, 0, NULL);
+}
+
+static int netlink_query_family_id(struct nlmsg* nlmsg, int sock, const char *family_name)
+{
+	struct genlmsghdr genlhdr;
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = CTRL_CMD_GETFAMILY;
+	netlink_init(nlmsg, GENL_ID_CTRL, 0, &genlhdr, sizeof(genlhdr));
+	netlink_attr(nlmsg, CTRL_ATTR_FAMILY_NAME, family_name, strnlen(family_name, GENL_NAMSIZ - 1) + 1);
+	int n = 0;
+	int err = netlink_send_ext(nlmsg, sock, GENL_ID_CTRL, &n);
+	if (err) {
+		debug("netlink: failed to get family id: %s\n", strerror(err));
+		return -1;
+	}
+	uint16 id = 0;
+	struct nlattr* attr = (struct nlattr*)(nlmsg->buf + NLMSG_HDRLEN + NLMSG_ALIGN(sizeof(genlhdr)));
+	for (; (char*)attr < nlmsg->buf + n; attr = (struct nlattr*)((char*)attr + NLMSG_ALIGN(attr->nla_len))) {
+		if (attr->nla_type == CTRL_ATTR_FAMILY_ID) {
+			id = *(uint16*)(attr + 1);
+			break;
+		}
+	}
+	if (!id) {
+		debug("netlink: failed to parse message for family id\n");
+		return -1;
+	}
+	recv(sock, nlmsg->buf, sizeof(nlmsg->buf), 0); // recv ack
+
+	return id;
 }
 
 #if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_DEVLINK_PCI
@@ -1025,6 +1056,78 @@ error:
 	close(sock);
 }
 
+#define HWSIM_CMD_REGISTER 1
+#define HWSIM_CMD_FRAME 2
+#define HWSIM_CMD_NEW_RADIO 4
+#define HWSIM_CMD_DEL_RADIO 5
+#define HWSIM_CMD_GET_RADIO 6
+
+#define HWSIM_ATTR_SUPPORT_P2P_DEVICE 14
+#define HWSIM_ATTR_PERM_ADDR 22
+
+
+static int create_hwsim_device(int sock, int hwsim_family, uint8_t mac_addr[ETH_ALEN]) {
+	char buf[512] = {0};
+	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
+	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
+	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
+
+	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 2 * sizeof(*attr) + 8;
+	hdr->nlmsg_type = hwsim_family;
+	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	genlhdr->cmd = HWSIM_CMD_NEW_RADIO;
+	attr->nla_type = HWSIM_ATTR_SUPPORT_P2P_DEVICE;
+	attr->nla_len = sizeof(*attr);
+	attr++;
+	attr->nla_type = HWSIM_ATTR_PERM_ADDR;
+	attr->nla_len = sizeof(*attr) + ETH_ALEN;
+	memcpy(attr + 1, mac_addr, ETH_ALEN);
+
+	struct sockaddr_nl addr = {0};
+	addr.nl_family = AF_NETLINK;
+	struct iovec iov = {hdr, hdr->nlmsg_len};
+	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
+	if (sendmsg(sock, &msg, 0) == -1) {
+		debug("create_device: sendmsg failed: %d\n", errno);
+		return -1;
+	}
+
+	ssize_t n = recv(sock, buf, sizeof(buf), 0);
+	if (n > 0 && hdr->nlmsg_type == NLMSG_ERROR)
+	{
+		struct nlmsgerr *err = (struct nlmsgerr*)(hdr + 1);
+		if (err->error != 0)
+		{
+			debug("create_device: error %d\n", err->error);
+			return -1;
+		}
+	}
+	else
+	{
+		debug("create_device: did not receive ACK\n");
+		return -1;
+	}
+	return 0;
+}
+
+/* TODO: initialize this only when HWSIM is present */
+/* TODO: switch others to netlink_query_family_id */
+static void initialize_80211hwsim(void)
+{
+	static uint8_t mac_addr[][6] = {{0xaa, 0xaa, 0x08, 0x02, 0x11, 0x00}, {0xaa, 0xaa, 0x08, 0x02, 0x11, 0x01} };
+	int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+    if (sock < 0) {
+		debug("initialize_80211hwsim: failed to create socket (%d)\n", errno);
+		return;
+	}
+	int hwsim_family_id = netlink_query_family_id(&nlmsg, sock, "MAC80211_HWSIM");
+	int device_id;
+	for (device_id = 0; device_id < 2; device_id++)
+	{
+		create_hwsim_device(sock, hwsim_family_id, mac_addr[device_id]);
+	}
+}
+
 // We test in a separate namespace, which does not have any network devices initially (even lo).
 // Create/up as many as we can.
 static void initialize_netdevices(void)
@@ -1222,6 +1325,7 @@ static void initialize_netdevices(void)
 		netlink_device_change(&nlmsg, sock, devices[i].name, true, 0, &macaddr, devices[i].macsize, NULL);
 	}
 	close(sock);
+	initialize_80211hwsim();
 }
 
 // Same as initialize_netdevices, but called in init net namespace.
