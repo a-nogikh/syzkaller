@@ -7,22 +7,22 @@ include <include/net/mac80211.h>
 # TODO: consider other name prefixes
 
 type _nl80211_mac_addr[LAST] {
-	byte0		const[0xaa, int8]
-	byte1		const[0xaa, int8]
-	byte2		const[0x08, int8]
-	byte3		const[0x02, int8]
-	byte4		const[0x11, int8]
-	byte5		LAST
+	byte0	const[0xaa, int8]
+	byte1	const[0xaa, int8]
+	byte2	const[0x8, int8]
+	byte3	const[0x2, int8]
+	byte4	const[0x11, int8]
+	byte5	LAST
 } [packed]
 
 mac_addr_80211 [
-	device_a    _nl80211_mac_addr[const[0x00, int8]]
-	device_b  	_nl80211_mac_addr[const[0x01, int8]]
+	device_a	_nl80211_mac_addr[const[0x0, int8]]
+	device_b	_nl80211_mac_addr[const[0x1, int8]]
 	broadcast	array[const[0xff, int8], 6]
 ]
 
 resource hwsim80211_family_id[int16]
-#resource hwsim80211_injector_handle[int32]
+resource hwsim80211_injector_handle[int32]
 
 type msghdr_hwsim80211[CMD, POLICY] msghdr_netlink[netlink_msg_t[hwsim80211_family_id, genlmsghdr_t[CMD], POLICY]]
 
@@ -34,7 +34,8 @@ sendmsg$HWSIM_CMD_TX_INFO_FRAME(fd sock_nl_generic, msg ptr[in, msghdr_hwsim8021
 sendmsg$HWSIM_CMD_NEW_RADIO(fd sock_nl_generic, msg ptr[in, msghdr_hwsim80211[HWSIM_CMD_NEW_RADIO, hwsim80211_new_radio_policy]], f flags[send_flags])
 sendmsg$HWSIM_CMD_DEL_RADIO(fd sock_nl_generic, msg ptr[in, msghdr_hwsim80211[HWSIM_CMD_DEL_RADIO, hwsim80211_del_radio_policy]], f flags[send_flags])
 sendmsg$HWSIM_CMD_GET_RADIO(fd sock_nl_generic, msg ptr[in, msghdr_hwsim80211[HWSIM_CMD_GET_RADIO, hwsim80211_get_radio_policy]], f flags[send_flags])
-syz_hwsim80211_join_ibss(ssid ptr[in, nl80211_ssid], ssid_len len[ssid])
+syz_hwsim80211_join_ibss(ssid ptr[in, nl80211_ssid], ssid_len len[ssid]) hwsim80211_injector_handle
+syz_hwsim80211_inject_frame(fd hwsim80211_injector_handle, mac_addr ptr[in, mac_addr_80211], buf ptr[in, ieee80211_frame], buf_len len[buf])
 
 hwsim80211_tx_rate {
 	idx	int8

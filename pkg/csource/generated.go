@@ -9197,7 +9197,7 @@ static volatile long syz_fuse_handle_req(volatile long a0,
 }
 #endif
 
-#if SYZ_EXECUTOR || __NR_syz_hwsim80211_join_ibss
+#if SYZ_EXECUTOR || __NR_syz_hwsim80211_join_ibss || __NR_syz_hwsim80211_inject_frame
 #include <linux/if.h>
 #include <linux/nl80211.h>
 #include <linux/rtnetlink.h>
@@ -9430,6 +9430,72 @@ static long syz_hwsim80211_join_ibss(volatile long a0, volatile long a1)
 
 	hwsim_register_socket(sock, hwsim_family_id);
 	return sock;
+}
+
+static int hwsim_inject_frame(int sock, int hwsim_family_id, int8_t* mac_addr, uint8_t* data, int len)
+{
+	char buf[4096] = {0};
+	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
+	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
+	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
+	int8_t* mac_addr_ptr = NULL;
+
+	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 4 * sizeof(*attr) + 2 * sizeof(uint32_t) + 8 + NLMSG_ALIGN(len);
+	if (hdr->nlmsg_len >= 4096) {
+		return -1;
+	}
+	hdr->nlmsg_type = hwsim_family_id;
+	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	genlhdr->cmd = HWSIM_CMD_FRAME;
+	attr->nla_type = HWSIM_ATTR_RX_RATE;
+	attr->nla_len = sizeof(*attr) + sizeof(uint32_t);
+	*(uint32_t*)(attr + 1) = 1;
+	attr = (struct nlattr*)((uint8_t*)attr + attr->nla_len);
+	attr->nla_type = HWSIM_ATTR_SIGNAL;
+	attr->nla_len = sizeof(*attr) + sizeof(uint32_t);
+	*(uint32_t*)(attr + 1) = 0; /* TODO: add signal as param */
+	attr = (struct nlattr*)((uint8_t*)attr + attr->nla_len);
+	attr->nla_type = HWSIM_ATTR_ADDR_RECEIVER;
+	attr->nla_len = sizeof(*attr) + ETH_ALEN;
+	memcpy((int8_t*)(attr + 1), mac_addr, ETH_ALEN);
+	attr = (struct nlattr*)((uint8_t*)attr + NLMSG_ALIGN(attr->nla_len));
+	attr->nla_type = HWSIM_ATTR_FRAME;
+	attr->nla_len = sizeof(*attr) + len;
+	memcpy(attr + 1, data, len);
+
+	struct sockaddr_nl addr = {0};
+	addr.nl_family = AF_NETLINK;
+	struct iovec iov = {hdr, hdr->nlmsg_len};
+	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
+	if (sendmsg(sock, &msg, 0) == -1) {
+		debug("hwsim_inject_frame: sendmsg failed: %d\n", errno);
+		return -1;
+	}
+
+	ssize_t n = recv(sock, buf, sizeof(buf), 0);
+	if (hdr->nlmsg_type == NLMSG_ERROR) {
+		struct nlmsgerr* err = (struct nlmsgerr*)(hdr + 1);
+		if (err->error != 0) {
+			debug("inject_frame: error %d\n", err->error);
+			return -1;
+		}
+	} else {
+		debug("hwsim_inject_frame: did not receive ACK\n");
+		return -1;
+	}
+	return 0;
+}
+
+static long syz_hwsim80211_inject_frame(volatile long a0, volatile long a1, volatile long a2, volatile long a3)
+{
+	uint32_t sock = (uint32_t)a0;
+	uint8_t* mac_addr = (uint8_t*)a1;
+	uint8_t* buf = (uint8_t*)a2;
+	uint32_t buf_len = (uint32_t)a3;
+
+	/* TODO: avoid re-querying */
+	int hwsim_family_id = netlink_query_family_id(&nlmsg, sock, "MAC80211_HWSIM");
+	return hwsim_inject_frame(sock, hwsim_family_id, mac_addr, buf, buf_len);
 }
 
 #endif
