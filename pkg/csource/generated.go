@@ -9198,7 +9198,9 @@ static volatile long syz_fuse_handle_req(volatile long a0,
 #endif
 
 #if SYZ_EXECUTOR || __NR_syz_hwsim80211_join_ibss || __NR_syz_hwsim80211_inject_frame
+#include <linux/genetlink.h>
 #include <linux/if.h>
+#include <linux/if_ether.h>
 #include <linux/nl80211.h>
 #include <linux/rtnetlink.h>
 
