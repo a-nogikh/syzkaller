@@ -9266,28 +9266,35 @@ static int nl80211_set_interface(int fd, int nl80211_family, const char* ifname,
 	return 0;
 }
 
-static int nl80211_join_ibss(int fd, int nl80211_family, const char* ifname, int32_t ssid_len, uint8* ssid, int freq)
+/* TOOD: put parameters in a struct */
+static int nl80211_join_ibss(int fd, int nl80211_family, const char* ifname, int32_t ssid_len, uint8* ssid, int freq, uint8* bssid)
 {
 	char buf[512] = {0};
 	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
 	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
 	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
-	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 3 * sizeof(*attr) + 2 * sizeof(int32_t) + NLMSG_ALIGN(ssid_len);
+	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 5 * sizeof(*attr) + 2 * sizeof(int32_t) + NLMSG_ALIGN(ssid_len) + NLMSG_ALIGN(ETH_ALEN);
 	hdr->nlmsg_type = nl80211_family;
 	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
 	genlhdr->cmd = NL80211_CMD_JOIN_IBSS;
 	attr->nla_type = NL80211_ATTR_IFINDEX;
 	attr->nla_len = sizeof(*attr) + sizeof(int32_t);
 	*(int32_t*)(attr + 1) = if_nametoindex(ifname);
-	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
+	attr = (struct nlattr*)((uint8_t*)attr + attr->nla_len);
 	attr->nla_type = NL80211_ATTR_WIPHY_FREQ;
 	attr->nla_len = sizeof(*attr) + sizeof(int32_t);
 	*(int32_t*)(attr + 1) = freq;
-	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
+	attr = (struct nlattr*)((uint8_t*)attr + attr->nla_len);
+	attr->nla_type = NL80211_ATTR_FREQ_FIXED;
+	attr->nla_len = sizeof(*attr);
+	attr = (struct nlattr*)((uint8_t*)attr + attr->nla_len);
 	attr->nla_type = NL80211_ATTR_SSID;
 	attr->nla_len = sizeof(*attr) + ssid_len;
 	memcpy(attr + 1, ssid, ssid_len);
-
+	attr = (struct nlattr*)((uint8_t*)attr + NLMSG_ALIGN(attr->nla_len));
+	attr->nla_type = NL80211_ATTR_MAC;
+	attr->nla_len = sizeof(*attr) + ETH_ALEN;
+	memcpy(attr + 1, bssid, ETH_ALEN);
 	struct sockaddr_nl addr = {0};
 	addr.nl_family = AF_NETLINK;
 	struct iovec iov = {hdr, hdr->nlmsg_len};
@@ -9402,6 +9409,7 @@ static long syz_hwsim80211_join_ibss(volatile long a0, volatile long a1)
 	uint8* ssid = (uint8*)a0;
 	uint32 ssid_len = (uint32)a1;
 	struct nlmsg tmp_msg;
+	uint8 bssid[ETH_ALEN] = {0xde, 0xad, 0xbe, 0xef, 0x00, 0x00};
 
 	if (ssid_len < 0 || ssid_len > 128) {
 		/* TODO: move to consts */
@@ -9426,8 +9434,8 @@ static long syz_hwsim80211_join_ibss(volatile long a0, volatile long a1)
 	set_interface_state("wlan0", 1);
 	set_interface_state("wlan1", 1);
 
-	nl80211_join_ibss(sock, nl80211_family_id, "wlan0", ssid_len, ssid, 2412);
-	nl80211_join_ibss(sock, nl80211_family_id, "wlan1", ssid_len, ssid, 2412);
+	nl80211_join_ibss(sock, nl80211_family_id, "wlan0", ssid_len, ssid, 2412, bssid);
+	nl80211_join_ibss(sock, nl80211_family_id, "wlan1", ssid_len, ssid, 2412, bssid);
 
 	while (get_ifla_operstate("wlan0") != IF_OPER_UP)
 		usleep(1000);
