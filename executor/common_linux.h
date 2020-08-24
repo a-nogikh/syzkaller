@@ -4575,22 +4575,22 @@ static void set_interface_state(const char* interface_name, int on)
 	close(sock);
 }
 
-static int nl80211_set_interface(int fd, int nl80211_family, const char* ifname, int32_t iftype)
+static int nl80211_set_interface(int fd, int nl80211_family, const char* ifname, int iftype)
 {
 	char buf[512] = {0};
 	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
 	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
 	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
-	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 2 * sizeof(*attr) + 2 * sizeof(int32_t);
+	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 2 * sizeof(*attr) + 2 * sizeof(uint32);
 	hdr->nlmsg_type = nl80211_family;
 	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
 	genlhdr->cmd = NL80211_CMD_SET_INTERFACE;
 	attr->nla_type = NL80211_ATTR_IFINDEX;
-	attr->nla_len = sizeof(*attr) + sizeof(int32_t);
-	*(int32_t*)(attr + 1) = if_nametoindex(ifname);
+	attr->nla_len = sizeof(*attr) + sizeof(uint32);
+	*(uint32*)(attr + 1) = if_nametoindex(ifname);
 	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
 	attr->nla_type = NL80211_ATTR_IFTYPE;
-	attr->nla_len = sizeof(*attr) + sizeof(int32_t);
+	attr->nla_len = sizeof(*attr) + sizeof(uint32);
 	memcpy(attr + 1, &iftype, sizeof(iftype));
 
 	struct sockaddr_nl addr = {0};
@@ -4617,31 +4617,31 @@ static int nl80211_set_interface(int fd, int nl80211_family, const char* ifname,
 }
 
 /* TOOD: put parameters in a struct */
-static int nl80211_join_ibss(int fd, int nl80211_family, const char* ifname, int32_t ssid_len, uint8* ssid, int freq, uint8* bssid)
+static int nl80211_join_ibss(int fd, int nl80211_family, const char* ifname, int ssid_len, uint8* ssid, int freq, uint8* bssid)
 {
 	char buf[512] = {0};
 	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
 	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
 	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
-	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 5 * sizeof(*attr) + 2 * sizeof(int32_t) + NLMSG_ALIGN(ssid_len) + NLMSG_ALIGN(ETH_ALEN);
+	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 5 * sizeof(*attr) + 2 * sizeof(uint32) + NLMSG_ALIGN(ssid_len) + NLMSG_ALIGN(ETH_ALEN);
 	hdr->nlmsg_type = nl80211_family;
 	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
 	genlhdr->cmd = NL80211_CMD_JOIN_IBSS;
 	attr->nla_type = NL80211_ATTR_IFINDEX;
-	attr->nla_len = sizeof(*attr) + sizeof(int32_t);
-	*(int32_t*)(attr + 1) = if_nametoindex(ifname);
-	attr = (struct nlattr*)((uint8_t*)attr + attr->nla_len);
+	attr->nla_len = sizeof(*attr) + sizeof(uint32);
+	*(uint32*)(attr + 1) = if_nametoindex(ifname);
+	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
 	attr->nla_type = NL80211_ATTR_WIPHY_FREQ;
-	attr->nla_len = sizeof(*attr) + sizeof(int32_t);
-	*(int32_t*)(attr + 1) = freq;
-	attr = (struct nlattr*)((uint8_t*)attr + attr->nla_len);
+	attr->nla_len = sizeof(*attr) + sizeof(uint32);
+	*(uint32*)(attr + 1) = freq;
+	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
 	attr->nla_type = NL80211_ATTR_FREQ_FIXED;
 	attr->nla_len = sizeof(*attr);
-	attr = (struct nlattr*)((uint8_t*)attr + attr->nla_len);
+	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
 	attr->nla_type = NL80211_ATTR_SSID;
 	attr->nla_len = sizeof(*attr) + ssid_len;
 	memcpy(attr + 1, ssid, ssid_len);
-	attr = (struct nlattr*)((uint8_t*)attr + NLMSG_ALIGN(attr->nla_len));
+	attr = (struct nlattr*)((uint8*)attr + NLMSG_ALIGN(attr->nla_len));
 	attr->nla_type = NL80211_ATTR_MAC;
 	attr->nla_len = sizeof(*attr) + ETH_ALEN;
 	memcpy(attr + 1, bssid, ETH_ALEN);
@@ -4710,7 +4710,7 @@ static int get_ifla_operstate(const char* interface_name)
 
 	for (; RTA_OK(attr, hdr->nlmsg_len); attr = RTA_NEXT(attr, hdr->nlmsg_len)) {
 		if (attr->rta_type == IFLA_OPERSTATE) {
-			int32_t value = *((int32_t*)RTA_DATA(attr));
+			uint32 value = *((uint32*)RTA_DATA(attr));
 			return value;
 		}
 	}
@@ -4820,7 +4820,7 @@ static int hwsim_inject_frame(int sock, int hwsim_family_id, uint8* mac_addr, ui
 	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
 	attr->nla_type = HWSIM_ATTR_ADDR_RECEIVER;
 	attr->nla_len = sizeof(*attr) + ETH_ALEN;
-	memcpy((int8_t*)(attr + 1), mac_addr, ETH_ALEN);
+	memcpy((uint8*)(attr + 1), mac_addr, ETH_ALEN);
 	attr = (struct nlattr*)((uint8*)attr + NLMSG_ALIGN(attr->nla_len));
 	attr->nla_type = HWSIM_ATTR_FRAME;
 	attr->nla_len = sizeof(*attr) + len;
