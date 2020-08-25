@@ -14,6 +14,8 @@ struct cover_t;
 static void cover_reset(cover_t* cov);
 #endif
 
+#define SYZ_NEED_HWSIM_80211 (__NR_syz_hwsim80211_join_ibss || __NR_syz_hwsim80211_inject_frame || SYZ_EXECUTOR || SYZ_NET_DEVICES)
+
 #if SYZ_EXECUTOR || SYZ_THREADED
 #include <linux/futex.h>
 #include <pthread.h>
@@ -107,7 +109,7 @@ static bool write_file(const char* file, const char* what, ...)
 }
 #endif
 
-#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION || SYZ_DEVLINK_PCI
+#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION || SYZ_DEVLINK_PCI || SYZ_NEED_HWSIM_80211
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -753,6 +755,60 @@ static void initialize_devlink_pci(void)
 #endif
 #endif
 
+#if SYZ_NEED_HWSIM_80211
+
+#define HWSIM_CMD_REGISTER 1
+#define HWSIM_CMD_FRAME 2
+#define HWSIM_CMD_NEW_RADIO 4
+#define HWSIM_CMD_DEL_RADIO 5
+#define HWSIM_CMD_GET_RADIO 6
+
+#define HWSIM_ATTR_SUPPORT_P2P_DEVICE 14
+#define HWSIM_ATTR_PERM_ADDR 22
+
+static int create_hwsim_device(int sock, int hwsim_family, uint8 mac_addr[ETH_ALEN])
+{
+	char buf[512] = {0};
+	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
+	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
+	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
+
+	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 2 * sizeof(*attr) + 8;
+	hdr->nlmsg_type = hwsim_family;
+	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	genlhdr->cmd = HWSIM_CMD_NEW_RADIO;
+	attr->nla_type = HWSIM_ATTR_SUPPORT_P2P_DEVICE;
+	attr->nla_len = sizeof(*attr);
+	attr++;
+	attr->nla_type = HWSIM_ATTR_PERM_ADDR;
+	attr->nla_len = sizeof(*attr) + ETH_ALEN;
+	memcpy(attr + 1, mac_addr, ETH_ALEN);
+
+	struct sockaddr_nl addr = {0};
+	addr.nl_family = AF_NETLINK;
+	struct iovec iov = {hdr, hdr->nlmsg_len};
+	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
+	if (sendmsg(sock, &msg, 0) == -1) {
+		debug("create_device: sendmsg failed: %d\n", errno);
+		return -1;
+	}
+
+	ssize_t n = recv(sock, buf, sizeof(buf), 0);
+	if (n > 0 && hdr->nlmsg_type == NLMSG_ERROR) {
+		struct nlmsgerr* err = (struct nlmsgerr*)(hdr + 1);
+		if (err->error != 0) {
+			debug("create_device: error %d\n", err->error);
+			return -1;
+		}
+	} else {
+		debug("create_device: did not receive ACK\n");
+		return -1;
+	}
+	return 0;
+}
+
+#endif
+
 #if SYZ_EXECUTOR || SYZ_NET_DEVICES
 #include <arpa/inet.h>
 #include <errno.h>
@@ -1054,56 +1110,6 @@ static void netlink_wireguard_setup(void)
 
 error:
 	close(sock);
-}
-
-#define HWSIM_CMD_REGISTER 1
-#define HWSIM_CMD_FRAME 2
-#define HWSIM_CMD_NEW_RADIO 4
-#define HWSIM_CMD_DEL_RADIO 5
-#define HWSIM_CMD_GET_RADIO 6
-
-#define HWSIM_ATTR_SUPPORT_P2P_DEVICE 14
-#define HWSIM_ATTR_PERM_ADDR 22
-
-static int create_hwsim_device(int sock, int hwsim_family, uint8 mac_addr[ETH_ALEN])
-{
-	char buf[512] = {0};
-	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
-	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
-	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
-
-	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 2 * sizeof(*attr) + 8;
-	hdr->nlmsg_type = hwsim_family;
-	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-	genlhdr->cmd = HWSIM_CMD_NEW_RADIO;
-	attr->nla_type = HWSIM_ATTR_SUPPORT_P2P_DEVICE;
-	attr->nla_len = sizeof(*attr);
-	attr++;
-	attr->nla_type = HWSIM_ATTR_PERM_ADDR;
-	attr->nla_len = sizeof(*attr) + ETH_ALEN;
-	memcpy(attr + 1, mac_addr, ETH_ALEN);
-
-	struct sockaddr_nl addr = {0};
-	addr.nl_family = AF_NETLINK;
-	struct iovec iov = {hdr, hdr->nlmsg_len};
-	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
-	if (sendmsg(sock, &msg, 0) == -1) {
-		debug("create_device: sendmsg failed: %d\n", errno);
-		return -1;
-	}
-
-	ssize_t n = recv(sock, buf, sizeof(buf), 0);
-	if (n > 0 && hdr->nlmsg_type == NLMSG_ERROR) {
-		struct nlmsgerr* err = (struct nlmsgerr*)(hdr + 1);
-		if (err->error != 0) {
-			debug("create_device: error %d\n", err->error);
-			return -1;
-		}
-	} else {
-		debug("create_device: did not receive ACK\n");
-		return -1;
-	}
-	return 0;
 }
 
 /* TODO: initialize this only when HWSIM is present */
