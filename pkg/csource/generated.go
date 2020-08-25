@@ -9209,6 +9209,8 @@ static volatile long syz_fuse_handle_req(volatile long a0,
 #include <linux/if_ether.h>
 #include <linux/nl80211.h>
 #include <linux/rtnetlink.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
 
 #define HWSIM_ATTR_RX_RATE 5
 #define HWSIM_ATTR_SIGNAL 6
