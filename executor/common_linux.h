@@ -14,8 +14,6 @@ struct cover_t;
 static void cover_reset(cover_t* cov);
 #endif
 
-#define SYZ_NEED_HWSIM_80211 (__NR_syz_hwsim80211_join_ibss || __NR_syz_hwsim80211_inject_frame || SYZ_EXECUTOR || SYZ_NET_DEVICES)
-
 #if SYZ_EXECUTOR || SYZ_THREADED
 #include <linux/futex.h>
 #include <pthread.h>
@@ -109,7 +107,7 @@ static bool write_file(const char* file, const char* what, ...)
 }
 #endif
 
-#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION || SYZ_DEVLINK_PCI || SYZ_NEED_HWSIM_80211
+#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION || SYZ_DEVLINK_PCI || __NR_syz_hwsim80211_join_ibss || __NR_syz_hwsim80211_inject_frame
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -131,7 +129,7 @@ struct nlmsg {
 	char* pos;
 	int nesting;
 	struct nlattr* nested[8];
-	char buf[1024];
+	char buf[4096];
 };
 
 static struct nlmsg nlmsg;
@@ -153,7 +151,8 @@ static void netlink_attr(struct nlmsg* nlmsg, int typ,
 	struct nlattr* attr = (struct nlattr*)nlmsg->pos;
 	attr->nla_len = sizeof(*attr) + size;
 	attr->nla_type = typ;
-	memcpy(attr + 1, data, size);
+	if (size > 0)
+		memcpy(attr + 1, data, size);
 	nlmsg->pos += NLMSG_ALIGN(attr->nla_len);
 }
 
@@ -755,7 +754,7 @@ static void initialize_devlink_pci(void)
 #endif
 #endif
 
-#if SYZ_NEED_HWSIM_80211
+#if __NR_syz_hwsim80211_join_ibss || __NR_syz_hwsim80211_inject_frame || SYZ_EXECUTOR || SYZ_NET_DEVICES
 
 #define HWSIM_CMD_REGISTER 1
 #define HWSIM_CMD_FRAME 2
@@ -766,46 +765,18 @@ static void initialize_devlink_pci(void)
 #define HWSIM_ATTR_SUPPORT_P2P_DEVICE 14
 #define HWSIM_ATTR_PERM_ADDR 22
 
-static int create_hwsim_device(int sock, int hwsim_family, uint8 mac_addr[ETH_ALEN])
-{
-	char buf[512] = {0};
-	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
-	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
-	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
-
-	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 2 * sizeof(*attr) + 8;
-	hdr->nlmsg_type = hwsim_family;
-	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-	genlhdr->cmd = HWSIM_CMD_NEW_RADIO;
-	attr->nla_type = HWSIM_ATTR_SUPPORT_P2P_DEVICE;
-	attr->nla_len = sizeof(*attr);
-	attr++;
-	attr->nla_type = HWSIM_ATTR_PERM_ADDR;
-	attr->nla_len = sizeof(*attr) + ETH_ALEN;
-	memcpy(attr + 1, mac_addr, ETH_ALEN);
-
-	struct sockaddr_nl addr = {0};
-	addr.nl_family = AF_NETLINK;
-	struct iovec iov = {hdr, hdr->nlmsg_len};
-	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
-	if (sendmsg(sock, &msg, 0) == -1) {
-		debug("create_device: sendmsg failed: %d\n", errno);
-		return -1;
+#define SYZ_WIFI_INTIT_DEVICES_COUNT 2
+#define SYZ_WIFI_MAC_BASE                          \
+	{                                          \
+		0x08, 0x02, 0x11, 0x00, 0x00, 0x00 \
 	}
-
-	ssize_t n = recv(sock, buf, sizeof(buf), 0);
-	if (n > 0 && hdr->nlmsg_type == NLMSG_ERROR) {
-		struct nlmsgerr* err = (struct nlmsgerr*)(hdr + 1);
-		if (err->error != 0) {
-			debug("create_device: error %d\n", err->error);
-			return -1;
-		}
-	} else {
-		debug("create_device: did not receive ACK\n");
-		return -1;
+#define SYZ_WIFI_IBSS_BSSID                        \
+	{                                          \
+		0xde, 0xad, 0xbe, 0xef, 0x00, 0x00 \
 	}
-	return 0;
-}
+#define SYZ_WIFI_DEFAULT_FREQUENCY 2412
+#define SYZ_WIFI_DEFAULT_SIGNAL 0
+#define SYZ_WIFI_DEFAULT_RX_RATE 1
 
 #endif
 
@@ -1112,11 +1083,29 @@ error:
 	close(sock);
 }
 
-/* TODO: initialize this only when HWSIM is present */
-/* TODO: switch others to netlink_query_family_id */
-static void initialize_80211hwsim(void)
+static int hwsim80211_create_device(int sock, int hwsim_family, uint8 mac_addr[ETH_ALEN])
 {
-	static uint8 mac_addr[][6] = {{0xaa, 0xaa, 0x08, 0x02, 0x11, 0x00}, {0xaa, 0xaa, 0x08, 0x02, 0x11, 0x01}};
+	struct nlmsg msg;
+	struct genlmsghdr genlhdr;
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = HWSIM_CMD_NEW_RADIO;
+	netlink_init(&msg, hwsim_family, 0, &genlhdr, sizeof(genlhdr));
+	netlink_attr(&msg, HWSIM_ATTR_SUPPORT_P2P_DEVICE, NULL, 0);
+	netlink_attr(&msg, HWSIM_ATTR_PERM_ADDR, mac_addr, ETH_ALEN);
+	int err = netlink_send(&msg, sock);
+	/* TODO: hwsim in case of success hwsim returns index instead of 0 */
+	if (err < 0) {
+		debug("create_device failed: %s\n", strerror(err));
+		return -1;
+	}
+	return 0;
+}
+
+/* TODO: initialize this only when HWSIM is present */
+/* TODO: switch other methods to netlink_query_family_id */
+static void initialize_hwsim80211(void)
+{
+	static uint8 mac_addr[6] = SYZ_WIFI_MAC_BASE;
 	int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
 	if (sock < 0) {
 		debug("initialize_80211hwsim: failed to create socket (%d)\n", errno);
@@ -1124,9 +1113,11 @@ static void initialize_80211hwsim(void)
 	}
 	int hwsim_family_id = netlink_query_family_id(&nlmsg, sock, "MAC80211_HWSIM");
 	int device_id;
-	for (device_id = 0; device_id < 2; device_id++) {
-		create_hwsim_device(sock, hwsim_family_id, mac_addr[device_id]);
+	for (device_id = 0; device_id < SYZ_WIFI_INTIT_DEVICES_COUNT; device_id++) {
+		mac_addr[5] = device_id;
+		hwsim80211_create_device(sock, hwsim_family_id, mac_addr);
 	}
+	close(sock);
 }
 
 // We test in a separate namespace, which does not have any network devices initially (even lo).
@@ -1326,7 +1317,7 @@ static void initialize_netdevices(void)
 		netlink_device_change(&nlmsg, sock, devices[i].name, true, 0, &macaddr, devices[i].macsize, NULL);
 	}
 	close(sock);
-	initialize_80211hwsim();
+	initialize_hwsim80211();
 }
 
 // Same as initialize_netdevices, but called in init net namespace.
@@ -4553,19 +4544,15 @@ static volatile long syz_fuse_handle_req(volatile long a0, // /dev/fuse fd.
 }
 #endif
 
-#if SYZ_EXECUTOR || __NR_syz_hwsim80211_join_ibss || __NR_syz_hwsim80211_inject_frame
+#if SYZ_EXECUTOR || __NR_syz_hwsim80211_join_ibss
 #include <linux/genetlink.h>
 #include <linux/if.h>
 #include <linux/if_ether.h>
 #include <linux/nl80211.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
+#include <stdbool.h>
 #include <sys/ioctl.h>
-
-#define HWSIM_ATTR_RX_RATE 5
-#define HWSIM_ATTR_SIGNAL 6
-#define HWSIM_ATTR_ADDR_RECEIVER 1
-#define HWSIM_ATTR_FRAME 3
 
 static void set_interface_state(const char* interface_name, int on)
 {
@@ -4585,94 +4572,54 @@ static void set_interface_state(const char* interface_name, int on)
 	close(sock);
 }
 
-static int nl80211_set_interface(int fd, int nl80211_family, const char* ifname, int iftype)
+static int nl80211_set_interface(struct nlmsg* nlmsg, int sock, int nl80211_family, const char* ifname, uint32 iftype)
 {
-	char buf[512] = {0};
-	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
-	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
-	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
-	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 2 * sizeof(*attr) + 2 * sizeof(uint32);
-	hdr->nlmsg_type = nl80211_family;
-	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-	genlhdr->cmd = NL80211_CMD_SET_INTERFACE;
-	attr->nla_type = NL80211_ATTR_IFINDEX;
-	attr->nla_len = sizeof(*attr) + sizeof(uint32);
-	*(uint32*)(attr + 1) = if_nametoindex(ifname);
-	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
-	attr->nla_type = NL80211_ATTR_IFTYPE;
-	attr->nla_len = sizeof(*attr) + sizeof(uint32);
-	memcpy(attr + 1, &iftype, sizeof(iftype));
+	struct genlmsghdr genlhdr;
+	uint32 ifindex;
 
-	struct sockaddr_nl addr = {0};
-	addr.nl_family = AF_NETLINK;
-	struct iovec iov = {hdr, hdr->nlmsg_len};
-	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
-	if (sendmsg(fd, &msg, 0) == -1) {
-		debug("nl80211_set_interface: sendmsg failed: %d\n", errno);
-		return -1;
-	}
-
-	ssize_t n = recv(fd, buf, sizeof(buf), 0);
-	if (n >= 0 && hdr->nlmsg_type == NLMSG_ERROR) {
-		struct nlmsgerr* err = (struct nlmsgerr*)(hdr + 1);
-		if (err->error != 0) {
-			debug("nl80211_set_interface: error %d\n", err->error);
-			return -1;
-		}
-	} else {
-		debug("nl80211_set_interface: did not receive ACK\n");
+	ifindex = if_nametoindex(ifname);
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = NL80211_CMD_SET_INTERFACE;
+	netlink_init(nlmsg, nl80211_family, 0, &genlhdr, sizeof(genlhdr));
+	netlink_attr(nlmsg, NL80211_ATTR_IFINDEX, &ifindex, sizeof(uint32));
+	netlink_attr(nlmsg, NL80211_ATTR_IFTYPE, &iftype, sizeof(uint32));
+	int err = netlink_send(nlmsg, sock);
+	if (err < 0) {
+		debug("nl80211_set_interface failed: %s\n", strerror(err));
 		return -1;
 	}
 	return 0;
 }
 
-/* TOOD: put parameters in a struct */
-static int nl80211_join_ibss(int fd, int nl80211_family, const char* ifname, int ssid_len, uint8* ssid, int freq, uint8* bssid)
-{
-	char buf[512] = {0};
-	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
-	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
-	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
-	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 5 * sizeof(*attr) + 2 * sizeof(uint32) + NLMSG_ALIGN(ssid_len) + NLMSG_ALIGN(ETH_ALEN);
-	hdr->nlmsg_type = nl80211_family;
-	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-	genlhdr->cmd = NL80211_CMD_JOIN_IBSS;
-	attr->nla_type = NL80211_ATTR_IFINDEX;
-	attr->nla_len = sizeof(*attr) + sizeof(uint32);
-	*(uint32*)(attr + 1) = if_nametoindex(ifname);
-	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
-	attr->nla_type = NL80211_ATTR_WIPHY_FREQ;
-	attr->nla_len = sizeof(*attr) + sizeof(uint32);
-	*(uint32*)(attr + 1) = freq;
-	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
-	attr->nla_type = NL80211_ATTR_FREQ_FIXED;
-	attr->nla_len = sizeof(*attr);
-	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
-	attr->nla_type = NL80211_ATTR_SSID;
-	attr->nla_len = sizeof(*attr) + ssid_len;
-	memcpy(attr + 1, ssid, ssid_len);
-	attr = (struct nlattr*)((uint8*)attr + NLMSG_ALIGN(attr->nla_len));
-	attr->nla_type = NL80211_ATTR_MAC;
-	attr->nla_len = sizeof(*attr) + ETH_ALEN;
-	memcpy(attr + 1, bssid, ETH_ALEN);
-	struct sockaddr_nl addr = {0};
-	addr.nl_family = AF_NETLINK;
-	struct iovec iov = {hdr, hdr->nlmsg_len};
-	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
-	if (sendmsg(fd, &msg, 0) == -1) {
-		debug("join_ibss: sendmsg failed: %d\n", errno);
-		return -1;
-	}
+struct join_ibss_props {
+	int wiphy_freq;
+	bool wiphy_freq_fixed;
+	uint8* mac;
+	uint8* ssid;
+	int ssid_len;
+};
 
-	ssize_t n = recv(fd, buf, sizeof(buf), 0);
-	if (n >= 0 && hdr->nlmsg_type == NLMSG_ERROR) {
-		struct nlmsgerr* err = (struct nlmsgerr*)(hdr + 1);
-		if (err->error != 0) {
-			debug("join_ibss: error %d\n", err->error);
-			return -1;
-		}
-	} else {
-		debug("join_ibss: did not receive ACK\n");
+static int nl80211_join_ibss(struct nlmsg* nlmsg, int sock, int nl80211_family, const char* ifname, struct join_ibss_props* props)
+{
+	struct genlmsghdr genlhdr;
+	uint32 ifindex;
+
+	ifindex = if_nametoindex(ifname);
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = NL80211_CMD_JOIN_IBSS;
+	netlink_init(nlmsg, nl80211_family, 0, &genlhdr, sizeof(genlhdr));
+	netlink_attr(nlmsg, NL80211_ATTR_IFINDEX, &ifindex, sizeof(uint32));
+	netlink_attr(nlmsg, NL80211_ATTR_SSID, props->ssid, props->ssid_len);
+	netlink_attr(nlmsg, NL80211_ATTR_WIPHY_FREQ, &(props->wiphy_freq), sizeof(uint32));
+	if (props->mac) {
+		netlink_attr(nlmsg, NL80211_ATTR_MAC, props->mac, ETH_ALEN);
+	}
+	if (props->wiphy_freq_fixed) {
+		netlink_attr(nlmsg, NL80211_ATTR_FREQ_FIXED, NULL, 0);
+	}
+	int err = netlink_send(nlmsg, sock);
+	if (err < 0) {
+		debug("join_ibss failed: %s\n", strerror(err));
 		return -1;
 	}
 	return 0;
@@ -4693,7 +4640,7 @@ static int get_ifla_operstate(const char* interface_name)
 
 	int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
 	if (fd == -1) {
-		debug("is_interface_up: socket failed: %d\n", errno);
+		debug("get_ifla_operstate: socket failed: %d\n", errno);
 		return -1;
 	}
 
@@ -4702,7 +4649,7 @@ static int get_ifla_operstate(const char* interface_name)
 	struct iovec iov = {hdr, hdr->nlmsg_len};
 	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
 	if (sendmsg(fd, &msg, 0) == -1) {
-		debug("inject_frame: sendmsg failed: %d\n", errno);
+		debug("get_ifla_operstate: sendmsg failed: %d\n", errno);
 		close(fd);
 		return -1;
 	}
@@ -4711,7 +4658,7 @@ static int get_ifla_operstate(const char* interface_name)
 	close(fd);
 
 	if (n < (ssize_t)sizeof(*hdr) || hdr->nlmsg_type != RTM_NEWLINK) {
-		debug("is_interface_up: bad response\n");
+		debug("get_ifla_operstate: bad response\n");
 		return -1;
 	}
 
@@ -4728,50 +4675,18 @@ static int get_ifla_operstate(const char* interface_name)
 	return -1;
 }
 
-static int hwsim_register_socket(int fd, int hwsim_family)
-{
-	char buf[512] = {0};
-	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
-	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
-	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr);
-	hdr->nlmsg_type = hwsim_family;
-	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-	genlhdr->cmd = HWSIM_CMD_REGISTER;
-
-	struct sockaddr_nl addr = {0};
-	addr.nl_family = AF_NETLINK;
-	struct iovec iov = {hdr, hdr->nlmsg_len};
-	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
-	if (sendmsg(fd, &msg, 0) == -1) {
-		debug("hwsim_register: sendmsg failed: %d\n", errno);
-		return -1;
-	}
-
-	ssize_t n = recv(fd, buf, sizeof(buf), 0);
-	if (n > 0 && hdr->nlmsg_type == NLMSG_ERROR) {
-		struct nlmsgerr* err = (struct nlmsgerr*)(hdr + 1);
-		if (err->error != 0) {
-			debug("hwsim_register: error %d\n", err->error);
-			return -1;
-		}
-	} else {
-		debug("hwsim_register: did not receive ACK\n");
-		return -1;
-	}
-	return 0;
-}
-
 /* TODO: add dependency on total device count */
 /* TODO: add frequency as a parameter */
 /* TODO: add a test */
-static long syz_hwsim80211_join_ibss(volatile long a0, volatile long a1)
+static long syz_hwsim80211_join_ibss(volatile long a0, volatile long a1, volatile long a2)
 {
 	uint8* ssid = (uint8*)a0;
-	uint32 ssid_len = (uint32)a1;
+	int ssid_len = (int)a1;
+	int fix_frequency = (int)a2; /* This parameter essentially determines whether it will perform a scan */
 	struct nlmsg tmp_msg;
-	uint8 bssid[ETH_ALEN] = {0xde, 0xad, 0xbe, 0xef, 0x00, 0x00};
+	uint8 bssid[ETH_ALEN] = SYZ_WIFI_IBSS_BSSID;
 
-	if (ssid_len < 0 || ssid_len > 128) {
+	if (ssid_len < 0 || ssid_len > 64) {
 		/* TODO: move to consts */
 		return -1;
 	}
@@ -4782,104 +4697,106 @@ static long syz_hwsim80211_join_ibss(volatile long a0, volatile long a1)
 		return -1;
 	}
 
-	int hwsim_family_id = netlink_query_family_id(&tmp_msg, sock, "MAC80211_HWSIM");
 	int nl80211_family_id = netlink_query_family_id(&tmp_msg, sock, "nl80211");
 
 	set_interface_state("wlan0", 0);
 	set_interface_state("wlan1", 0);
 
-	nl80211_set_interface(sock, nl80211_family_id, "wlan0", NL80211_IFTYPE_ADHOC);
-	nl80211_set_interface(sock, nl80211_family_id, "wlan1", NL80211_IFTYPE_ADHOC);
+	nl80211_set_interface(&tmp_msg, sock, nl80211_family_id, "wlan0", NL80211_IFTYPE_ADHOC);
+	nl80211_set_interface(&tmp_msg, sock, nl80211_family_id, "wlan1", NL80211_IFTYPE_ADHOC);
 
 	set_interface_state("wlan0", 1);
 	set_interface_state("wlan1", 1);
 
-	nl80211_join_ibss(sock, nl80211_family_id, "wlan0", ssid_len, ssid, 2412, bssid);
-	nl80211_join_ibss(sock, nl80211_family_id, "wlan1", ssid_len, ssid, 2412, bssid);
+	struct join_ibss_props ibss_props = {
+	    .wiphy_freq = SYZ_WIFI_DEFAULT_FREQUENCY, .wiphy_freq_fixed = (fix_frequency > 0), .mac = bssid, .ssid = ssid, .ssid_len = ssid_len};
+	nl80211_join_ibss(&tmp_msg, sock, nl80211_family_id, "wlan0", &ibss_props);
+	nl80211_join_ibss(&tmp_msg, sock, nl80211_family_id, "wlan1", &ibss_props);
 
 	while (get_ifla_operstate("wlan0") != IF_OPER_UP)
 		usleep(1000);
 	while (get_ifla_operstate("wlan1") != IF_OPER_UP)
 		usleep(1000);
 
-	hwsim_register_socket(sock, hwsim_family_id);
-	return sock;
+	close(sock);
+	return 0;
 }
 
-static int hwsim_inject_frame(int sock, int hwsim_family_id, uint8* mac_addr, uint8* data, int len)
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_hwsim80211_inject_frame
+#include <linux/genetlink.h>
+#include <linux/if.h>
+#include <linux/if_ether.h>
+#include <linux/nl80211.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+
+#define HWSIM_ATTR_RX_RATE 5
+#define HWSIM_ATTR_SIGNAL 6
+#define HWSIM_ATTR_ADDR_RECEIVER 1
+#define HWSIM_ATTR_FRAME 3
+
+#define SYZ_HWSIM_MAX_FRAME_LEN 2048
+
+static int hwsim_register_socket(struct nlmsg* nlmsg, int sock, int hwsim_family)
 {
-	char buf[4096] = {0};
-	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
-	struct genlmsghdr* genlhdr = (struct genlmsghdr*)NLMSG_DATA(hdr);
-	struct nlattr* attr = (struct nlattr*)(genlhdr + 1);
-
-	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*genlhdr) + 4 * sizeof(*attr) + 2 * sizeof(uint32) + 8 + NLMSG_ALIGN(len);
-	if (hdr->nlmsg_len >= 4096) {
-		return -1;
-	}
-	hdr->nlmsg_type = hwsim_family_id;
-	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-	genlhdr->cmd = HWSIM_CMD_FRAME;
-	attr->nla_type = HWSIM_ATTR_RX_RATE;
-	attr->nla_len = sizeof(*attr) + sizeof(uint32);
-	*(uint32*)(attr + 1) = 1;
-	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
-	attr->nla_type = HWSIM_ATTR_SIGNAL;
-	attr->nla_len = sizeof(*attr) + sizeof(uint32);
-	*(uint32*)(attr + 1) = 0; /* TODO: add signal as param */
-	attr = (struct nlattr*)((uint8*)attr + attr->nla_len);
-	attr->nla_type = HWSIM_ATTR_ADDR_RECEIVER;
-	attr->nla_len = sizeof(*attr) + ETH_ALEN;
-	memcpy((uint8*)(attr + 1), mac_addr, ETH_ALEN);
-	attr = (struct nlattr*)((uint8*)attr + NLMSG_ALIGN(attr->nla_len));
-	attr->nla_type = HWSIM_ATTR_FRAME;
-	attr->nla_len = sizeof(*attr) + len;
-	memcpy(attr + 1, data, len);
-
-	struct sockaddr_nl addr = {0};
-	addr.nl_family = AF_NETLINK;
-	struct iovec iov = {hdr, hdr->nlmsg_len};
-	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
-	if (sendmsg(sock, &msg, 0) == -1) {
-		debug("hwsim_inject_frame: sendmsg failed: %d\n", errno);
-		return -1;
-	}
-
-	ssize_t n = recv(sock, buf, sizeof(buf), 0);
-	if (n > 0 && hdr->nlmsg_type == NLMSG_ERROR) {
-		struct nlmsgerr* err = (struct nlmsgerr*)(hdr + 1);
-		if (err->error != 0) {
-			debug("inject_frame: error %d\n", err->error);
-			return -1;
-		}
-	} else {
-		debug("hwsim_inject_frame: did not receive ACK\n");
+	struct genlmsghdr genlhdr;
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = HWSIM_CMD_REGISTER;
+	netlink_init(nlmsg, hwsim_family, 0, &genlhdr, sizeof(genlhdr));
+	int n = 0;
+	int err = netlink_send_ext(nlmsg, sock, NLMSG_ERROR, &n);
+	if (err < 0) {
+		debug("hwsim_register_device failed: %s\n", strerror(err));
 		return -1;
 	}
 	return 0;
 }
 
-static long syz_hwsim80211_inject_frame(volatile long a0, volatile long a1, volatile long a2, volatile long a3)
+static int hwsim_inject_frame(struct nlmsg* nlmsg, int sock, int hwsim_family, uint8* mac_addr, uint8* data, int len)
 {
-	uint32 sock = (uint32)a0;
-	uint8* mac_addr = (uint8*)a1;
-	uint8* buf = (uint8*)a2;
-	uint32 buf_len = (uint32)a3;
+	struct genlmsghdr genlhdr;
+	/* TODO: consider fuzzing these parameters as well */
+	uint32 rx_rate = SYZ_WIFI_DEFAULT_RX_RATE;
+	uint32 signal = SYZ_WIFI_DEFAULT_SIGNAL;
+
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = HWSIM_CMD_FRAME;
+	netlink_init(nlmsg, hwsim_family, 0, &genlhdr, sizeof(genlhdr));
+	netlink_attr(nlmsg, HWSIM_ATTR_RX_RATE, &rx_rate, sizeof(uint32));
+	netlink_attr(nlmsg, HWSIM_ATTR_SIGNAL, &signal, sizeof(uint32));
+	netlink_attr(nlmsg, HWSIM_ATTR_ADDR_RECEIVER, mac_addr, ETH_ALEN);
+	netlink_attr(nlmsg, HWSIM_ATTR_FRAME, data, len);
+	int err = netlink_send(nlmsg, sock);
+	if (err < 0) {
+		debug("inject_frame failed: %s\n", strerror(err));
+		return -1;
+	}
+	return 0;
+}
+
+static long syz_hwsim80211_inject_frame(volatile long a0, volatile long a1, volatile long a2)
+{
+	uint8* mac_addr = (uint8*)a0;
+	uint8* buf = (uint8*)a1;
+	uint32 buf_len = (uint32)a2;
 	struct nlmsg tmp_msg;
 
-	if (buf_len < 0 || buf_len > 2000)
+	if (buf_len < 0 || buf_len > SYZ_HWSIM_MAX_FRAME_LEN)
 		return -1;
 
-	/* TODO: avoid re-querying */
-	int tmp_sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+	int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
 	if (sock < 0) {
 		debug("syz_hwsim80211_join_ibss: socket failed: %d\n", errno);
 		return -1;
 	}
 
-	int hwsim_family_id = netlink_query_family_id(&tmp_msg, tmp_sock, "MAC80211_HWSIM");
-	close(tmp_sock);
-	return hwsim_inject_frame(sock, hwsim_family_id, mac_addr, buf, buf_len);
+	int hwsim_family_id = netlink_query_family_id(&tmp_msg, sock, "MAC80211_HWSIM");
+	hwsim_register_socket(&tmp_msg, sock, hwsim_family_id);
+	int ret = hwsim_inject_frame(&tmp_msg, sock, hwsim_family_id, mac_addr, buf, buf_len);
+	close(sock);
+	return ret;
 }
 
 #endif
