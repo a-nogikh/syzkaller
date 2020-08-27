@@ -9278,57 +9278,38 @@ static int nl80211_join_ibss(struct nlmsg* nlmsg, int sock, int nl80211_family, 
 	return 0;
 }
 
-static int get_ifla_operstate(const char* interface_name)
+static int get_ifla_operstate(struct nlmsg* nlmsg, const char* interface_name)
 {
-	char buf[2048] = {0};
-	struct nlmsghdr* hdr = (struct nlmsghdr*)buf;
-	struct ifinfomsg* info = (struct ifinfomsg*)(hdr + 1);
+	struct ifinfomsg info;
+	memset(&info, 0, sizeof(info));
+	info.ifi_family = AF_UNSPEC;
+	info.ifi_index = if_nametoindex(interface_name);
 
-	hdr->nlmsg_len = sizeof(*hdr) + sizeof(*info);
-	hdr->nlmsg_type = RTM_GETLINK;
-	hdr->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-
-	info->ifi_family = AF_UNSPEC;
-	info->ifi_index = if_nametoindex(interface_name);
-
-	int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
-	if (fd == -1) {
+	int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+	if (sock == -1) {
 		debug("get_ifla_operstate: socket failed: %d\n", errno);
 		return -1;
 	}
 
-	struct sockaddr_nl addr = {0};
-	addr.nl_family = AF_NETLINK;
-	struct iovec iov = {hdr, hdr->nlmsg_len};
-	struct msghdr msg = {&addr, sizeof(addr), &iov, 1, NULL, 0, 0};
-	if (sendmsg(fd, &msg, 0) == -1) {
-		debug("get_ifla_operstate: sendmsg failed: %d\n", errno);
-		close(fd);
+	netlink_init(nlmsg, RTM_GETLINK, 0, &info, sizeof(info));
+	int n = 0;
+	int err = netlink_send_ext(nlmsg, sock, RTM_NEWLINK, &n);
+	close(sock);
+	if (err) {
+		debug("get_ifla_operstate: failed to query: %s\n", strerror(err));
 		return -1;
 	}
 
-	ssize_t n = recv(fd, buf, sizeof(buf), 0);
-	close(fd);
-
-	if (n < (ssize_t)sizeof(*hdr) || hdr->nlmsg_type != RTM_NEWLINK) {
-		debug("get_ifla_operstate: bad response\n");
-		return -1;
-	}
-
-	info = (struct ifinfomsg*)NLMSG_DATA(hdr);
-	struct rtattr* attr = IFLA_RTA(info);
-
-	for (; RTA_OK(attr, hdr->nlmsg_len); attr = RTA_NEXT(attr, hdr->nlmsg_len)) {
+	struct rtattr* attr = IFLA_RTA(NLMSG_DATA(nlmsg->buf));
+	for (; RTA_OK(attr, n); attr = RTA_NEXT(attr, n)) {
 		if (attr->rta_type == IFLA_OPERSTATE) {
-			uint32 value = *((uint32*)RTA_DATA(attr));
-			return value;
+			return *((int32_t*)RTA_DATA(attr));
 		}
 	}
 
 	return -1;
 }
 
-/* TODO: add a test */
 static long syz_80211_join_ibss(volatile long a0, volatile long a1, volatile long a2, volatile long a3)
 {
 	uint8* ssid = (uint8*)a0;
@@ -9364,8 +9345,8 @@ static long syz_80211_join_ibss(volatile long a0, volatile long a1, volatile lon
 		nl80211_join_ibss(&tmp_msg, sock, nl80211_family_id, interface, &ibss_props);
 
 		if (await_up) {
-			while (get_ifla_operstate(interface) != IF_OPER_UP)
-				usleep(10000); /* 10 ms */
+			while (get_ifla_operstate(&tmp_msg, interface) != IF_OPER_UP)
+				usleep(1000); /* 1 ms */
 		}
 	}
 
