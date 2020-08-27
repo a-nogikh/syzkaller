@@ -107,7 +107,7 @@ static bool write_file(const char* file, const char* what, ...)
 }
 #endif
 
-#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION || SYZ_DEVLINK_PCI || __NR_syz_hwsim80211_join_ibss || __NR_syz_hwsim80211_inject_frame
+#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION || SYZ_DEVLINK_PCI || __NR_syz_80211_join_ibss || __NR_syz_80211_inject_frame
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -754,18 +754,9 @@ static void initialize_devlink_pci(void)
 #endif
 #endif
 
-#if __NR_syz_hwsim80211_join_ibss || __NR_syz_hwsim80211_inject_frame || SYZ_EXECUTOR || SYZ_NET_DEVICES
+#if __NR_syz_80211_join_ibss || __NR_syz_80211_inject_frame || SYZ_EXECUTOR || SYZ_NET_DEVICES
 
-#define HWSIM_CMD_REGISTER 1
-#define HWSIM_CMD_FRAME 2
-#define HWSIM_CMD_NEW_RADIO 4
-#define HWSIM_CMD_DEL_RADIO 5
-#define HWSIM_CMD_GET_RADIO 6
-
-#define HWSIM_ATTR_SUPPORT_P2P_DEVICE 14
-#define HWSIM_ATTR_PERM_ADDR 22
-
-#define SYZ_WIFI_INTIT_DEVICES_COUNT 2
+#define SYZ_WIFI_INTITIAL_DEVICE_COUNT 2
 #define SYZ_WIFI_MAC_BASE                          \
 	{                                          \
 		0x08, 0x02, 0x11, 0x00, 0x00, 0x00 \
@@ -777,6 +768,15 @@ static void initialize_devlink_pci(void)
 #define SYZ_WIFI_DEFAULT_FREQUENCY 2412
 #define SYZ_WIFI_DEFAULT_SIGNAL 0
 #define SYZ_WIFI_DEFAULT_RX_RATE 1
+
+/* consts from drivers/net/wireless/mac80211_hwsim.h */
+#define HWSIM_CMD_REGISTER 1
+#define HWSIM_CMD_FRAME 2
+#define HWSIM_CMD_NEW_RADIO 4
+#define HWSIM_CMD_DEL_RADIO 5
+#define HWSIM_CMD_GET_RADIO 6
+#define HWSIM_ATTR_SUPPORT_P2P_DEVICE 14
+#define HWSIM_ATTR_PERM_ADDR 22
 
 #endif
 
@@ -1112,8 +1112,7 @@ static void initialize_hwsim80211(void)
 		return;
 	}
 	int hwsim_family_id = netlink_query_family_id(&nlmsg, sock, "MAC80211_HWSIM");
-	int device_id;
-	for (device_id = 0; device_id < SYZ_WIFI_INTIT_DEVICES_COUNT; device_id++) {
+	for (int device_id = 0; device_id < SYZ_WIFI_INTITIAL_DEVICE_COUNT; device_id++) {
 		mac_addr[5] = device_id;
 		hwsim80211_create_device(sock, hwsim_family_id, mac_addr);
 	}
@@ -4544,7 +4543,7 @@ static volatile long syz_fuse_handle_req(volatile long a0, // /dev/fuse fd.
 }
 #endif
 
-#if SYZ_EXECUTOR || __NR_syz_hwsim80211_join_ibss
+#if SYZ_EXECUTOR || __NR_syz_80211_join_ibss
 #include <linux/genetlink.h>
 #include <linux/if.h>
 #include <linux/if_ether.h>
@@ -4553,6 +4552,16 @@ static volatile long syz_fuse_handle_req(volatile long a0, // /dev/fuse fd.
 #include <net/if.h>
 #include <stdbool.h>
 #include <sys/ioctl.h>
+
+#define SYZ_MAX_ACCEPTED_SSID_LEN 64
+
+struct join_ibss_props {
+	int wiphy_freq;
+	bool wiphy_freq_fixed;
+	uint8* mac;
+	uint8* ssid;
+	int ssid_len;
+};
 
 static void set_interface_state(const char* interface_name, int on)
 {
@@ -4590,14 +4599,6 @@ static int nl80211_set_interface(struct nlmsg* nlmsg, int sock, int nl80211_fami
 	}
 	return 0;
 }
-
-struct join_ibss_props {
-	int wiphy_freq;
-	bool wiphy_freq_fixed;
-	uint8* mac;
-	uint8* ssid;
-	int ssid_len;
-};
 
 static int nl80211_join_ibss(struct nlmsg* nlmsg, int sock, int nl80211_family, const char* ifname, struct join_ibss_props* props)
 {
@@ -4675,19 +4676,18 @@ static int get_ifla_operstate(const char* interface_name)
 	return -1;
 }
 
-/* TODO: add dependency on total device count */
-/* TODO: add frequency as a parameter */
 /* TODO: add a test */
-static long syz_hwsim80211_join_ibss(volatile long a0, volatile long a1, volatile long a2)
+static long syz_80211_join_ibss(volatile long a0, volatile long a1, volatile long a2, volatile long a3)
 {
 	uint8* ssid = (uint8*)a0;
 	int ssid_len = (int)a1;
 	int fix_frequency = (int)a2; /* This parameter essentially determines whether it will perform a scan */
+	int await_up = (int)a3;
 	struct nlmsg tmp_msg;
 	uint8 bssid[ETH_ALEN] = SYZ_WIFI_IBSS_BSSID;
 
-	if (ssid_len < 0 || ssid_len > 64) {
-		/* TODO: move to consts */
+	if (ssid_len < 0 || ssid_len > SYZ_MAX_ACCEPTED_SSID_LEN) {
+		/* limiting SSID length in order to avoid unnecessary segfaults on memcpy */
 		return -1;
 	}
 
@@ -4698,25 +4698,24 @@ static long syz_hwsim80211_join_ibss(volatile long a0, volatile long a1, volatil
 	}
 
 	int nl80211_family_id = netlink_query_family_id(&tmp_msg, sock, "nl80211");
-
-	set_interface_state("wlan0", 0);
-	set_interface_state("wlan1", 0);
-
-	nl80211_set_interface(&tmp_msg, sock, nl80211_family_id, "wlan0", NL80211_IFTYPE_ADHOC);
-	nl80211_set_interface(&tmp_msg, sock, nl80211_family_id, "wlan1", NL80211_IFTYPE_ADHOC);
-
-	set_interface_state("wlan0", 1);
-	set_interface_state("wlan1", 1);
-
 	struct join_ibss_props ibss_props = {
 	    .wiphy_freq = SYZ_WIFI_DEFAULT_FREQUENCY, .wiphy_freq_fixed = (fix_frequency > 0), .mac = bssid, .ssid = ssid, .ssid_len = ssid_len};
-	nl80211_join_ibss(&tmp_msg, sock, nl80211_family_id, "wlan0", &ibss_props);
-	nl80211_join_ibss(&tmp_msg, sock, nl80211_family_id, "wlan1", &ibss_props);
 
-	while (get_ifla_operstate("wlan0") != IF_OPER_UP)
-		usleep(1000);
-	while (get_ifla_operstate("wlan1") != IF_OPER_UP)
-		usleep(1000);
+	for (int device_id = 0; device_id < SYZ_WIFI_INTITIAL_DEVICE_COUNT; device_id++) {
+		char interface[6] = {0};
+		memcpy(interface, "wlan0", 5);
+		interface[4] += device_id;
+
+		set_interface_state(interface, 0);
+		nl80211_set_interface(&tmp_msg, sock, nl80211_family_id, interface, NL80211_IFTYPE_ADHOC);
+		set_interface_state(interface, 1);
+		nl80211_join_ibss(&tmp_msg, sock, nl80211_family_id, interface, &ibss_props);
+
+		if (await_up) {
+			while (get_ifla_operstate(interface) != IF_OPER_UP)
+				usleep(10000); /* 10 ms */
+		}
+	}
 
 	close(sock);
 	return 0;
@@ -4724,7 +4723,7 @@ static long syz_hwsim80211_join_ibss(volatile long a0, volatile long a1, volatil
 
 #endif
 
-#if SYZ_EXECUTOR || __NR_syz_hwsim80211_inject_frame
+#if SYZ_EXECUTOR || __NR_syz_80211_inject_frame
 #include <linux/genetlink.h>
 #include <linux/if.h>
 #include <linux/if_ether.h>
@@ -4737,7 +4736,7 @@ static long syz_hwsim80211_join_ibss(volatile long a0, volatile long a1, volatil
 #define HWSIM_ATTR_ADDR_RECEIVER 1
 #define HWSIM_ATTR_FRAME 3
 
-#define SYZ_HWSIM_MAX_FRAME_LEN 2048
+#define SYZ_HWSIM_MAX_ALLOWED_FRAME_LEN 2048
 
 static int hwsim_register_socket(struct nlmsg* nlmsg, int sock, int hwsim_family)
 {
@@ -4757,7 +4756,6 @@ static int hwsim_register_socket(struct nlmsg* nlmsg, int sock, int hwsim_family
 static int hwsim_inject_frame(struct nlmsg* nlmsg, int sock, int hwsim_family, uint8* mac_addr, uint8* data, int len)
 {
 	struct genlmsghdr genlhdr;
-	/* TODO: consider fuzzing these parameters as well */
 	uint32 rx_rate = SYZ_WIFI_DEFAULT_RX_RATE;
 	uint32 signal = SYZ_WIFI_DEFAULT_SIGNAL;
 
@@ -4776,14 +4774,14 @@ static int hwsim_inject_frame(struct nlmsg* nlmsg, int sock, int hwsim_family, u
 	return 0;
 }
 
-static long syz_hwsim80211_inject_frame(volatile long a0, volatile long a1, volatile long a2)
+static long syz_80211_inject_frame(volatile long a0, volatile long a1, volatile long a2)
 {
 	uint8* mac_addr = (uint8*)a0;
 	uint8* buf = (uint8*)a1;
-	uint32 buf_len = (uint32)a2;
+	int buf_len = (int)a2;
 	struct nlmsg tmp_msg;
 
-	if (buf_len < 0 || buf_len > SYZ_HWSIM_MAX_FRAME_LEN)
+	if (buf_len < 0 || buf_len > SYZ_HWSIM_MAX_ALLOWED_FRAME_LEN)
 		return -1;
 
 	int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);

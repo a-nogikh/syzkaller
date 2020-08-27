@@ -33,8 +33,8 @@ sendmsg$HWSIM_CMD_TX_INFO_FRAME(fd sock_nl_generic, msg ptr[in, msghdr_hwsim8021
 sendmsg$HWSIM_CMD_NEW_RADIO(fd sock_nl_generic, msg ptr[in, msghdr_hwsim80211[HWSIM_CMD_NEW_RADIO, hwsim80211_new_radio_policy]], f flags[send_flags])
 sendmsg$HWSIM_CMD_DEL_RADIO(fd sock_nl_generic, msg ptr[in, msghdr_hwsim80211[HWSIM_CMD_DEL_RADIO, hwsim80211_del_radio_policy]], f flags[send_flags])
 sendmsg$HWSIM_CMD_GET_RADIO(fd sock_nl_generic, msg ptr[in, msghdr_hwsim80211[HWSIM_CMD_GET_RADIO, hwsim80211_get_radio_policy]], f flags[send_flags])
-syz_hwsim80211_join_ibss(ssid ptr[in, nl80211_ssid], ssid_len len[ssid], freq_fixed int8[0:1]) (timeout[9500],prog_timeout[11000])
-syz_hwsim80211_inject_frame(mac_addr ptr[in, mac_addr_80211], buf ptr[in, ieee80211_frame], buf_len len[buf])
+syz_80211_join_ibss(ssid ptr[in, nl80211_ssid], ssid_len len[ssid], freq_fixed int8[0:1], await_up int8[0:1]) (timeout[9500], prog_timeout[11000])
+syz_80211_inject_frame(mac_addr ptr[in, mac_addr_80211], buf ptr[in, ieee80211_frame], buf_len len[buf])
 
 hwsim80211_tx_rate {
 	idx	int8

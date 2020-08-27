@@ -288,8 +288,8 @@ var syzkallSupport = map[string]func(*prog.Syscall, *prog.Target, string) (bool,
 	"syz_btf_id_by_name":  isBtfVmlinuxSupported,
 	"syz_fuse_handle_req": isSyzFuseSupported,
 	// TODO: probably these should not be alwaysSupported
-	"syz_hwsim80211_join_ibss":    alwaysSupported,
-	"syz_hwsim80211_inject_frame": alwaysSupported,
+	"syz_80211_join_ibss":    alwaysSupported,
+	"syz_80211_inject_frame": alwaysSupported,
 }
 
 func isSupportedSyzkall(c *prog.Syscall, target *prog.Target, sandbox string) (bool, string) {
