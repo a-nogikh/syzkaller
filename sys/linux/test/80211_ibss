@@ -1,0 +1,9 @@
+# requires: -sandbox=namespace
+
+# Create a network and wait until it's up
+
+syz_80211_join_ibss(&AUTO=@random="aabbccdd001122", 0x7, 0x1, 0x1)
+
+# Inject an arbitrary packet
+
+syz_80211_inject_frame(&AUTO=@device_a, &AUTO="00112233445566778899", 0xa)
