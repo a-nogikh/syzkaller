@@ -2357,8 +2357,6 @@ struct nlmsg {
 	char buf[4096];
 };
 
-static struct nlmsg nlmsg;
-
 static void netlink_init(struct nlmsg* nlmsg, int typ, int flags,
 			 const void* data, int size)
 {
@@ -2694,6 +2692,10 @@ static void netlink_add_neigh(struct nlmsg* nlmsg, int sock, const char* name,
 	(void)err;
 }
 #endif
+#endif
+
+#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION
+static struct nlmsg nlmsg;
 #endif
 
 #if SYZ_EXECUTOR || SYZ_NET_INJECTION
@@ -9336,8 +9338,8 @@ static long syz_80211_join_ibss(volatile long a0, volatile long a1, volatile lon
 	struct nlmsg tmp_msg;
 	uint8 bssid[ETH_ALEN] = SYZ_WIFI_IBSS_BSSID;
 
-	if (ssid_len < 0 || ssid_len > SYZ_MAX_ACCEPTED_SSID_LEN) {
-		/* limiting SSID length in order to avoid unnecessary segfaults on memcpy */
+	if (ssid == NULL || ssid_len < 0 || ssid_len > SYZ_MAX_ACCEPTED_SSID_LEN) {
+		/* restricting SSID in order to avoid unnecessary segfaults on memcpy */
 		return -1;
 	}
 
@@ -9431,7 +9433,7 @@ static long syz_80211_inject_frame(volatile long a0, volatile long a1, volatile 
 	int buf_len = (int)a2;
 	struct nlmsg tmp_msg;
 
-	if (buf_len < 0 || buf_len > SYZ_HWSIM_MAX_ALLOWED_FRAME_LEN)
+	if (buf == NULL || buf_len < 0 || buf_len > SYZ_HWSIM_MAX_ALLOWED_FRAME_LEN)
 		return -1;
 
 	int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
