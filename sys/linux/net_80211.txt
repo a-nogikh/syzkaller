@@ -23,5 +23,11 @@ ieee80211_ssid [
 
 type ieee80211_frame array[int8]
 
+ieee80211_bssid [
+	initial		array[const[0x50, int8], 6]
+	from_mac	ieee80211_mac_addr
+	random		array[int8, 6]
+]
+
 syz_80211_join_ibss(ssid ptr[in, ieee80211_ssid], ssid_len len[ssid], freq_fixed int32[0:1], await_up int32[0:1]) (timeout[9500], prog_timeout[11000])
 syz_80211_inject_frame(mac_addr ptr[in, ieee80211_mac_addr], buf ptr[in, ieee80211_frame], buf_len len[buf])
