@@ -1,0 +1,33 @@
+# Copyright 2020 syzkaller project authors. All rights reserved.
+# Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+type ieee80211_fixed_mac_addr[LAST] {
+	byte0	const[0x8, int8]
+	byte1	const[0x2, int8]
+	byte2	const[0x11, int8]
+	byte3	const[0x0, int8]
+	byte4	const[0x0, int8]
+	byte5	LAST
+} [packed]
+
+ieee80211_mac_addr [
+	device_a	ieee80211_fixed_mac_addr[const[0x0, int8]]
+	device_b	ieee80211_fixed_mac_addr[const[0x1, int8]]
+	broadcast	array[const[0xff, int8], 6]
+]
+
+ieee80211_ssid [
+	random		array[int8, 0:IEEE80211_MAX_SSID_LEN]
+	special1	array[const[0x1, int8], 10]
+] [varlen]
+
+ieee80211_bssid [
+	initial		array[const[0x50, int8], 6]
+	from_mac	ieee80211_mac_addr
+	random		array[int8, 6]
+]
+
+type ieee80211_frame array[int8]
+
+syz_80211_join_ibss(ssid ptr[in, ieee80211_ssid], ssid_len len[ssid], freq_fixed int32[0:1], await_up int32[0:1]) (timeout[9500], prog_timeout[11000])
+syz_80211_inject_frame(mac_addr ptr[in, ieee80211_mac_addr], buf ptr[in, ieee80211_frame], buf_len len[buf])

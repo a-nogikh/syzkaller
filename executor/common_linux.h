@@ -107,7 +107,7 @@ static bool write_file(const char* file, const char* what, ...)
 }
 #endif
 
-#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION || SYZ_DEVLINK_PCI
+#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION || SYZ_DEVLINK_PCI || SYZ_WIFI || __NR_syz_80211_inject_frame || __NR_syz_80211_join_ibss
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -469,7 +469,7 @@ static void netlink_add_neigh(struct nlmsg* nlmsg, int sock, const char* name,
 #endif
 #endif
 
-#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION || SYZ_DEVLINK_PCI
+#if SYZ_EXECUTOR || SYZ_NET_DEVICES || SYZ_NET_INJECTION || SYZ_DEVLINK_PCI || SYZ_WIFI
 static struct nlmsg nlmsg;
 #endif
 
@@ -724,6 +724,75 @@ static void initialize_devlink_pci(void)
 	initialize_devlink_ports("pci", "0000:00:10.0", "netpci");
 }
 #endif
+#endif
+
+#if SYZ_EXECUTOR || SYZ_WIFI || __NR_syz_80211_inject_frame || __NR_syz_80211_join_ibss
+
+#define WIFI_INITIAL_DEVICE_COUNT 2
+#define WIFI_MAC_BASE                              \
+	{                                          \
+		0x08, 0x02, 0x11, 0x00, 0x00, 0x00 \
+	}
+#define WIFI_IBSS_BSSID                            \
+	{                                          \
+		0x50, 0x50, 0x50, 0x50, 0x50, 0x50 \
+	}
+#define WIFI_DEFAULT_FREQUENCY 2412
+#define WIFI_DEFAULT_SIGNAL 0
+#define WIFI_DEFAULT_RX_RATE 1
+
+// consts from drivers/net/wireless/mac80211_hwsim.h
+#define HWSIM_CMD_REGISTER 1
+#define HWSIM_CMD_FRAME 2
+#define HWSIM_CMD_NEW_RADIO 4
+#define HWSIM_ATTR_SUPPORT_P2P_DEVICE 14
+#define HWSIM_ATTR_PERM_ADDR 22
+
+#endif
+
+#if SYZ_EXECUTOR || SYZ_WIFI
+
+static int hwsim80211_create_device(int sock, int hwsim_family, uint8 mac_addr[ETH_ALEN])
+{
+	struct nlmsg msg;
+	struct genlmsghdr genlhdr;
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = HWSIM_CMD_NEW_RADIO;
+	netlink_init(&msg, hwsim_family, 0, &genlhdr, sizeof(genlhdr));
+	netlink_attr(&msg, HWSIM_ATTR_SUPPORT_P2P_DEVICE, NULL, 0);
+	netlink_attr(&msg, HWSIM_ATTR_PERM_ADDR, mac_addr, ETH_ALEN);
+	int err = netlink_send(&msg, sock);
+	// TODO: in case of success, hwsim returns index instead of 0, while netlink_send_ext supposes
+	// that error_code can be either negative or 0, and negates it for convenience. It should probably
+	// return error codes as it is, thus letting its callers to normally perform necessary processing.
+	if (err > 0) {
+		debug("hwsim80211_create_device failed: %s\n", strerror(err));
+		return -1;
+	}
+	return 0;
+}
+
+static void initialize_wifi_devices(void)
+{
+#if SYZ_EXECUTOR
+	if (!flag_wifi)
+		return;
+#endif
+	uint8 mac_addr[6] = WIFI_MAC_BASE;
+	int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+	if (sock < 0) {
+		debug("initialize_wifi_devices: failed to create socket (%d)\n", errno);
+		return;
+	}
+	int hwsim_family_id = netlink_query_family_id(&nlmsg, sock, "MAC80211_HWSIM");
+	for (int device_id = 0; device_id < WIFI_INITIAL_DEVICE_COUNT; device_id++) {
+		mac_addr[5] = device_id;
+		int ret = hwsim80211_create_device(sock, hwsim_family_id, mac_addr);
+		if (ret < 0)
+			fail("initialize_wifi_devices: failed to create device #%d\n", device_id);
+	}
+	close(sock);
+}
 #endif
 
 #if SYZ_EXECUTOR || SYZ_NET_DEVICES
@@ -3414,6 +3483,9 @@ static int do_sandbox_none(void)
 #if SYZ_EXECUTOR || SYZ_NET_DEVICES
 	initialize_netdevices();
 #endif
+#if SYZ_EXECUTOR || SYZ_WIFI
+	initialize_wifi_devices();
+#endif
 	loop();
 	doexit(1);
 }
@@ -3453,6 +3525,9 @@ static int do_sandbox_setuid(void)
 #endif
 #if SYZ_EXECUTOR || SYZ_NET_DEVICES
 	initialize_netdevices();
+#endif
+#if SYZ_EXECUTOR || SYZ_WIFI
+	initialize_wifi_devices();
 #endif
 
 	const int nobody = 65534;
@@ -3513,6 +3588,9 @@ static int namespace_sandbox_proc(void* arg)
 #endif
 #if SYZ_EXECUTOR || SYZ_NET_DEVICES
 	initialize_netdevices();
+#endif
+#if SYZ_EXECUTOR || SYZ_WIFI
+	initialize_wifi_devices();
 #endif
 
 	if (mkdir("./syz-tmp", 0777))
@@ -4534,4 +4612,281 @@ static volatile long syz_fuse_handle_req(volatile long a0, // /dev/fuse fd.
 
 	return fuse_send_response(fd, in_hdr, out_hdr);
 }
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_80211_join_ibss
+#include <linux/genetlink.h>
+#include <linux/if_ether.h>
+#include <linux/nl80211.h>
+#include <linux/rtnetlink.h>
+#include <net/if.h>
+#include <stdbool.h>
+#include <sys/ioctl.h>
+
+#define WIFI_MAX_SSID_LEN 64
+// From linux/if.h, but we cannot include the file as it conflicts with net/if.h
+#define IF_OPER_UP 6
+
+struct join_ibss_props {
+	int wiphy_freq;
+	bool wiphy_freq_fixed;
+	uint8* mac;
+	uint8* ssid;
+	int ssid_len;
+};
+
+static int set_interface_state(const char* interface_name, int on)
+{
+	struct ifreq ifr;
+	int sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		debug("set_interface_state: failed to open socket, errno %d\n", errno);
+		return -1;
+	}
+
+	memset(&ifr, 0, sizeof(ifr));
+	strcpy(ifr.ifr_name, interface_name);
+	int ret = ioctl(sock, SIOCGIFFLAGS, &ifr);
+	if (ret < 0) {
+		debug("set_interface_state: failed to execute SIOCGIFFLAGS, ret %d\n", ret);
+		close(sock);
+		return -1;
+	}
+
+	if (on)
+		ifr.ifr_flags |= IFF_UP;
+	else
+		ifr.ifr_flags &= ~IFF_UP;
+
+	ret = ioctl(sock, SIOCSIFFLAGS, &ifr);
+	close(sock);
+	if (ret < 0) {
+		debug("set_interface_state: failed to execute SIOCSIFFLAGS, ret %d\n", ret);
+		return -1;
+	}
+	return 0;
+}
+
+static int nl80211_set_interface(struct nlmsg* nlmsg, int sock, int nl80211_family, const char* ifname, uint32 iftype)
+{
+	struct genlmsghdr genlhdr;
+
+	uint32 ifindex = if_nametoindex(ifname);
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = NL80211_CMD_SET_INTERFACE;
+	netlink_init(nlmsg, nl80211_family, 0, &genlhdr, sizeof(genlhdr));
+	netlink_attr(nlmsg, NL80211_ATTR_IFINDEX, &ifindex, sizeof(uint32));
+	netlink_attr(nlmsg, NL80211_ATTR_IFTYPE, &iftype, sizeof(uint32));
+	int err = netlink_send(nlmsg, sock);
+	if (err < 0) {
+		debug("nl80211_set_interface failed: %s\n", strerror(err));
+		return -1;
+	}
+	return 0;
+}
+
+static int nl80211_join_ibss(struct nlmsg* nlmsg, int sock, int nl80211_family, const char* ifname, struct join_ibss_props* props)
+{
+	struct genlmsghdr genlhdr;
+
+	uint32 ifindex = if_nametoindex(ifname);
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = NL80211_CMD_JOIN_IBSS;
+	netlink_init(nlmsg, nl80211_family, 0, &genlhdr, sizeof(genlhdr));
+	netlink_attr(nlmsg, NL80211_ATTR_IFINDEX, &ifindex, sizeof(uint32));
+	netlink_attr(nlmsg, NL80211_ATTR_SSID, props->ssid, props->ssid_len);
+	netlink_attr(nlmsg, NL80211_ATTR_WIPHY_FREQ, &(props->wiphy_freq), sizeof(uint32));
+	if (props->mac)
+		netlink_attr(nlmsg, NL80211_ATTR_MAC, props->mac, ETH_ALEN);
+	if (props->wiphy_freq_fixed)
+		netlink_attr(nlmsg, NL80211_ATTR_FREQ_FIXED, NULL, 0);
+	int err = netlink_send(nlmsg, sock);
+	if (err < 0) {
+		debug("join_ibss failed: %s\n", strerror(err));
+		return -1;
+	}
+	return 0;
+}
+
+static int get_ifla_operstate(struct nlmsg* nlmsg, const char* interface_name)
+{
+	struct ifinfomsg info;
+	memset(&info, 0, sizeof(info));
+	info.ifi_family = AF_UNSPEC;
+	info.ifi_index = if_nametoindex(interface_name);
+
+	int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+	if (sock == -1) {
+		debug("get_ifla_operstate: socket failed: %d\n", errno);
+		return -1;
+	}
+
+	netlink_init(nlmsg, RTM_GETLINK, 0, &info, sizeof(info));
+	int n;
+	int err = netlink_send_ext(nlmsg, sock, RTM_NEWLINK, &n);
+	close(sock);
+
+	if (err) {
+		debug("get_ifla_operstate: failed to query: %s\n", strerror(err));
+		return -1;
+	}
+
+	struct rtattr* attr = IFLA_RTA(NLMSG_DATA(nlmsg->buf));
+	for (; RTA_OK(attr, n); attr = RTA_NEXT(attr, n)) {
+		if (attr->rta_type == IFLA_OPERSTATE)
+			return *((int32_t*)RTA_DATA(attr));
+	}
+
+	return -1;
+}
+
+static long syz_80211_join_ibss(volatile long a0, volatile long a1, volatile long a2, volatile long a3)
+{
+	uint8* ssid = (uint8*)a0;
+	int ssid_len = (int)a1;
+	int fix_frequency = (int)a2; // This parameter essentially determines whether it will perform a scan
+	int await_up = (int)a3;
+	struct nlmsg tmp_msg;
+	uint8 bssid[ETH_ALEN] = WIFI_IBSS_BSSID;
+
+	if (ssid == NULL || ssid_len < 0 || ssid_len > WIFI_MAX_SSID_LEN)
+		return -1; // restricting input in order to avoid unnecessary segfaults on memcpy
+
+	int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+	if (sock < 0) {
+		debug("syz_80211_join_ibss: socket creation failed, errno %d\n", errno);
+		return -1;
+	}
+
+	int nl80211_family_id = netlink_query_family_id(&tmp_msg, sock, "nl80211");
+	struct join_ibss_props ibss_props = {
+	    .wiphy_freq = WIFI_DEFAULT_FREQUENCY, .wiphy_freq_fixed = (fix_frequency > 0), .mac = bssid, .ssid = ssid, .ssid_len = ssid_len};
+
+	for (int device_id = 0; device_id < WIFI_INITIAL_DEVICE_COUNT; device_id++) {
+		char interface[6] = {0};
+		memcpy(interface, "wlan0", 5);
+		interface[4] += device_id;
+
+		int ret = nl80211_set_interface(&tmp_msg, sock, nl80211_family_id, interface, NL80211_IFTYPE_ADHOC);
+		if (ret < 0) {
+			debug("syz_80211_join_ibss: nl80211_set_interface failed for #%d, ret %d\n", device_id, ret);
+			goto error;
+		}
+
+		ret = set_interface_state(interface, 1);
+		if (ret < 0) {
+			debug("set_interface_state: set_interface_state failed for #%d, ret %d\n", device_id, ret);
+			goto error;
+		}
+
+		ret = nl80211_join_ibss(&tmp_msg, sock, nl80211_family_id, interface, &ibss_props);
+		if (ret < 0) {
+			debug("syz_80211_join_ibss: nl80211_join_ibss failed for #%d, ret %d\n", device_id, ret);
+			goto error;
+		}
+
+		if (await_up) {
+			do {
+				usleep(1000); // 1 ms
+				ret = get_ifla_operstate(&tmp_msg, interface);
+				if (ret < 0) {
+					debug("syz_80211_join_ibss: get_ifla_operstate failed for #%d, ret %d\n", device_id, ret);
+					goto error;
+				}
+			} while (ret != IF_OPER_UP);
+		}
+	}
+
+	close(sock);
+	return 0;
+error:
+	close(sock);
+	return -1;
+}
+
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_80211_inject_frame
+#include <linux/genetlink.h>
+#include <linux/if_ether.h>
+#include <linux/nl80211.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+
+#define HWSIM_ATTR_RX_RATE 5
+#define HWSIM_ATTR_SIGNAL 6
+#define HWSIM_ATTR_ADDR_RECEIVER 1
+#define HWSIM_ATTR_FRAME 3
+
+#define WIFI_MAX_INJECT_LEN 2048
+
+static int hwsim_register_socket(struct nlmsg* nlmsg, int sock, int hwsim_family)
+{
+	struct genlmsghdr genlhdr;
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = HWSIM_CMD_REGISTER;
+	netlink_init(nlmsg, hwsim_family, 0, &genlhdr, sizeof(genlhdr));
+	int err = netlink_send(nlmsg, sock);
+	if (err < 0) {
+		debug("hwsim_register_device failed: %s\n", strerror(err));
+		return -1;
+	}
+	return 0;
+}
+
+static int hwsim_inject_frame(struct nlmsg* nlmsg, int sock, int hwsim_family, uint8* mac_addr, uint8* data, int len)
+{
+	struct genlmsghdr genlhdr;
+	uint32 rx_rate = WIFI_DEFAULT_RX_RATE;
+	uint32 signal = WIFI_DEFAULT_SIGNAL;
+
+	memset(&genlhdr, 0, sizeof(genlhdr));
+	genlhdr.cmd = HWSIM_CMD_FRAME;
+	netlink_init(nlmsg, hwsim_family, 0, &genlhdr, sizeof(genlhdr));
+	netlink_attr(nlmsg, HWSIM_ATTR_RX_RATE, &rx_rate, sizeof(uint32));
+	netlink_attr(nlmsg, HWSIM_ATTR_SIGNAL, &signal, sizeof(uint32));
+	netlink_attr(nlmsg, HWSIM_ATTR_ADDR_RECEIVER, mac_addr, ETH_ALEN);
+	netlink_attr(nlmsg, HWSIM_ATTR_FRAME, data, len);
+	int err = netlink_send(nlmsg, sock);
+	if (err < 0) {
+		debug("inject_frame failed: %s\n", strerror(err));
+		return -1;
+	}
+	return 0;
+}
+
+static long syz_80211_inject_frame(volatile long a0, volatile long a1, volatile long a2)
+{
+	uint8* mac_addr = (uint8*)a0;
+	uint8* buf = (uint8*)a1;
+	int buf_len = (int)a2;
+	struct nlmsg tmp_msg;
+
+	if (buf == NULL || buf_len < 0 || buf_len > WIFI_MAX_INJECT_LEN)
+		return -1; // restricting input in order to avoid unnecessary segfaults on memcpy
+
+	int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+	if (sock < 0) {
+		debug("syz_80211_join_ibss: socket creation failed, errno %d\n", errno);
+		return -1;
+	}
+
+	int hwsim_family_id = netlink_query_family_id(&tmp_msg, sock, "MAC80211_HWSIM");
+	int ret = hwsim_register_socket(&tmp_msg, sock, hwsim_family_id);
+	if (ret < 0) {
+		debug("syz_80211_inject_frame: failed to register socket, ret %d\n", ret);
+		close(sock);
+		return -1;
+	}
+
+	ret = hwsim_inject_frame(&tmp_msg, sock, hwsim_family_id, mac_addr, buf, buf_len);
+	close(sock);
+	if (ret < 0) {
+		debug("syz_80211_inject_frame: failed to inject message, ret %d\n", ret);
+		return -1;
+	}
+
+	return 0;
+}
+
 #endif
