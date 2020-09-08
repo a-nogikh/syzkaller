@@ -9368,12 +9368,13 @@ static int get_ifla_operstate(struct nlmsg* nlmsg, const char* interface_name)
 	return -1;
 }
 
-static long syz_80211_join_ibss(volatile long a0, volatile long a1, volatile long a2, volatile long a3)
+static long syz_80211_join_ibss(volatile long a0, volatile long a1, volatile long a2, volatile long a3, volatile long a4)
 {
-	uint8* ssid = (uint8*)a0;
-	int ssid_len = (int)a1;
-	int fix_frequency = (int)a2;
-	int await_up = (int)a3;
+	char* interface = (char*)a0;
+	uint8* ssid = (uint8*)a1;
+	int ssid_len = (int)a2;
+	int fix_frequency = (int)a3;
+	int await_up = (int)a4;
 	struct nlmsg tmp_msg;
 	uint8 bssid[ETH_ALEN] = WIFI_IBSS_BSSID;
 
@@ -9390,39 +9391,33 @@ static long syz_80211_join_ibss(volatile long a0, volatile long a1, volatile lon
 	struct join_ibss_props ibss_props = {
 	    .wiphy_freq = WIFI_DEFAULT_FREQUENCY, .wiphy_freq_fixed = (fix_frequency > 0), .mac = bssid, .ssid = ssid, .ssid_len = ssid_len};
 
-	for (int device_id = 0; device_id < WIFI_INITIAL_DEVICE_COUNT; device_id++) {
-		char interface[6] = {0};
-		memcpy(interface, "wlan0", 5);
-		interface[4] += device_id;
+	int ret = nl80211_set_interface(&tmp_msg, sock, nl80211_family_id, interface, NL80211_IFTYPE_ADHOC);
+	if (ret < 0) {
+		debug("syz_80211_join_ibss: nl80211_set_interface failed for %.16s, ret %d\n", interface, ret);
+		goto error;
+	}
 
-		int ret = nl80211_set_interface(&tmp_msg, sock, nl80211_family_id, interface, NL80211_IFTYPE_ADHOC);
-		if (ret < 0) {
-			debug("syz_80211_join_ibss: nl80211_set_interface failed for #%d, ret %d\n", device_id, ret);
-			goto error;
-		}
+	ret = set_interface_state(interface, 1);
+	if (ret < 0) {
+		debug("set_interface_state: set_interface_state failed for %.16s, ret %d\n", interface, ret);
+		goto error;
+	}
 
-		ret = set_interface_state(interface, 1);
-		if (ret < 0) {
-			debug("set_interface_state: set_interface_state failed for #%d, ret %d\n", device_id, ret);
-			goto error;
-		}
+	ret = nl80211_join_ibss(&tmp_msg, sock, nl80211_family_id, interface, &ibss_props);
+	if (ret < 0) {
+		debug("syz_80211_join_ibss: nl80211_join_ibss failed for %.16s, ret %d\n", interface, ret);
+		goto error;
+	}
 
-		ret = nl80211_join_ibss(&tmp_msg, sock, nl80211_family_id, interface, &ibss_props);
-		if (ret < 0) {
-			debug("syz_80211_join_ibss: nl80211_join_ibss failed for #%d, ret %d\n", device_id, ret);
-			goto error;
-		}
-
-		if (await_up) {
-			do {
-				usleep(1000);
-				ret = get_ifla_operstate(&tmp_msg, interface);
-				if (ret < 0) {
-					debug("syz_80211_join_ibss: get_ifla_operstate failed for #%d, ret %d\n", device_id, ret);
-					goto error;
-				}
-			} while (ret != IF_OPER_UP);
-		}
+	if (await_up) {
+		do {
+			usleep(1000);
+			ret = get_ifla_operstate(&tmp_msg, interface);
+			if (ret < 0) {
+				debug("syz_80211_join_ibss: get_ifla_operstate failed for %.16s, ret %d\n", interface, ret);
+				goto error;
+			}
+		} while (ret != IF_OPER_UP);
 	}
 
 	close(sock);
