@@ -177,17 +177,28 @@ ieee80211_capabilities = WLAN_CAPABILITY_ESS, WLAN_CAPABILITY_IBSS, WLAN_CAPABIL
 
 type ieee80211_capability[TYPE] flags[ieee80211_capabilities, TYPE]
 
-ieee80211_qos_control_flags = IEEE80211_QOS_CTL_EOSP, IEEE80211_QOS_CTL_ACK_POLICY_NORMAL, IEEE80211_QOS_CTL_ACK_POLICY_NOACK, IEEE80211_QOS_CTL_ACK_POLICY_NO_EXPL, IEEE80211_QOS_CTL_ACK_POLICY_BLOCKACK, IEEE80211_QOS_CTL_ACK_POLICY_MASK, IEEE80211_QOS_CTL_A_MSDU_PRESENT, IEEE80211_QOS_CTL_MESH_CONTROL_PRESENT, IEEE80211_QOS_CTL_MESH_PS_LEVEL, IEEE80211_QOS_CTL_RSPI
+# QoS Control field is quite complicated (see Table 9-6 of IEEE 802.11-2016), but
+# for fuzzing purposes we don't really care about most of its bits.
+type ieee80211_qos_control[A_MSDU] {
+	tid		int8:4
+	eosp		int8:1
+	ack_policy	int8:2
+	a_msdu		const[A_MSDU, int8:1]
+	rest		int8
+} [packed]
 
-type ieee80211_qos_control[TYPE] flags[ieee80211_qos_control_flags, TYPE]
+type ieee80211_append_qos_control[PAYLOAD, A_MSDU] {
+	payload		PAYLOAD
+	qos_control	ieee80211_qos_control[A_MSDU]
+} [packed]
 
 # Operating Mode field (see sect. 9.4.1.53 of IEEE 802.11-2016)
 ieee80211_operating_mode {
-	channel_width		 int8:2
-	supp_160_80_80		 int8:1
-	no_ldpc				 int8:1
-	rx_nss				 int8:3
-	rx_nss_type			 int8:1
+	channel_width	int8:2
+	supp_160_80_80	int8:1
+	no_ldpc		int8:1
+	rx_nss		int8:3
+	rx_nss_type	int8:1
 } [packed]
 
 # SM Power Control field (see sect. 9.4.1.23 of IEEE 802.11-2016)
@@ -196,7 +207,6 @@ ieee80211_sm_power_control {
 	sm_mode		int8:1
 	reserver	const[0, int8:6]
 } [packed]
-
 
 #############################################
 # Basic 802.11 frame structures
@@ -405,6 +415,135 @@ type ieee80211_ie_mesh_channel_switch ieee80211_generic_ie_const[WLAN_EID_CHAN_S
 # GCR Group Address Information Element (see 9.4.2.126 of IEEE 802.11-2016)
 type ieee80211_ie_gcr_ga ieee80211_generic_ie_const[WLAN_EID_GCR_GROUP_ADDR, ieee80211_mac_addr]
 
+# PREQ Information Element (see 9.4.2.113 of IEEE 802.11.2016)
+type ieee80211_ie_preq ieee80211_generic_ie_const[WLAN_EID_PREQ, ieee80211_ie_preq_payload]
+
+# See Figure 9-478 of IEEE 802.11-2016
+type ieee80211_preq_flags[AE_CONST] {
+	gate_anncement	int8:1
+	addr_mode	int8:1
+	proactive_prep	int8:1
+	reserved	const[0, int8:3]
+	ae		const[AE_CONST, int8:1]
+	reserved_2	const[0, int8:1]
+} [packed]
+
+# See Figure 9-479 of IEEE 802.11-2016
+ieee80211_preq_target_flags {
+	target_only	int8:1
+	reserved	const[0, int8:1]
+	usn		int8:1
+	reserved2	const[0, int8:5]
+} [packed]
+
+ieee80211_preq_target {
+	flags		ieee80211_preq_target_flags
+	target_addr	ieee80211_mac_addr
+	target_sn	int32
+} [packed]
+
+type ieee80211_ie_preq_payload_generic[AE_CONST, ORIGINATOR_TYPE] {
+	flags		ieee80211_preq_flags[AE_CONST]
+	hop_count	int8
+	ttl		int8
+	discovery_id	int32
+	originator	ieee80211_mac_addr
+	originator_sn	int32
+	originator_ext	ORIGINATOR_TYPE
+	lifetime	int32
+	metric		int32
+	target_count	len[targets, int8]
+	targets		array[ieee80211_preq_target]
+} [packed]
+
+ieee80211_ie_preq_payload [
+	ext	ieee80211_ie_preq_payload_generic[1, ieee80211_mac_addr]
+	not_ext	ieee80211_ie_preq_payload_generic[0, void]
+] [varlen]
+
+# PREP Information Element (see 9.4.2.113 of IEEE 802.11.2016)
+type ieee80211_ie_prep ieee80211_generic_ie_const[WLAN_EID_PREP, ieee80211_ie_prep_payload]
+
+# See Figure 9-481 and Figure 9-483 of IEEE 802.11.2016
+type ieee80211_ae_flags[AE_CONST] {
+	reserved	const[0, int8:6]
+	ae		const[AE_CONST, int8:1]
+	reserved2	const[0, int8:1]
+} [packed]
+
+type ieee80211_ie_prep_payload_generic[AE_CONST, TARGET_EXT_TYPE] {
+	flags		ieee80211_ae_flags[AE_CONST]
+	hop_count	int8
+	ttl		int8
+	target_addr	ieee80211_mac_addr
+	target_sn	int32
+	target_ext	TARGET_EXT_TYPE
+	lifetime	int32
+	metric		int32
+	originator	ieee80211_mac_addr
+	originator_sn	int32
+} [packed]
+
+ieee80211_ie_prep_payload [
+	ext	ieee80211_ie_prep_payload_generic[1, ieee80211_mac_addr]
+	not_ext	ieee80211_ie_prep_payload_generic[0, void]
+] [varlen]
+
+# PERR Information Element (see 9.4.2.115 of IEEE 802.11.2016)
+type ieee80211_ie_perr ieee80211_generic_ie_const[WLAN_EID_PERR, ieee80211_ie_perr_payload]
+
+ieee80211_ie_perr_payload {
+	ttl		int8
+	dest_count	len[dest_list, int8]
+	dest_list	array[ieee80211_ie_perr_dest, 0:19]
+} [packed]
+
+type ieee80211_ie_perr_dest_generic[AE_CONST, DEST_EXT_TYPE] {
+	flags		ieee80211_ae_flags[AE_CONST]
+	dest_addr	ieee80211_mac_addr
+	dest_sn		int32
+	dest_ext	DEST_EXT_TYPE
+	reason		ieee80211_reason_code[int16]
+} [packed]
+
+ieee80211_ie_perr_dest [
+	ext	ieee80211_ie_perr_dest_generic[1, ieee80211_mac_addr]
+	not_ext	ieee80211_ie_perr_dest_generic[0, void]
+] [varlen]
+
+# RANN Information Element (see 9.4.2.112 of IEEE 802.11-2016)
+type ieee80211_ie_rann ieee80211_generic_ie_const[WLAN_EID_RANN, ieee80211_ie_rann_payload]
+
+# See Figure 9-476 of IEEE 802.11-2016
+ieee80211_rann_flags {
+	gate_annce	int8:1
+	reserved	int8:7
+} [packed]
+
+ieee80211_ie_rann_payload {
+	flags		ieee80211_rann_flags
+	hop_count	int8
+	ttl		int8
+	root_sta	ieee80211_mac_addr
+	hwmp_seqno	int32
+	interval	int32
+	metric		int32
+} [packed]
+
+# Mesh ID Information Element (see 9.4.2.99 of IEEE 802.11-2016)
+type ieee80211_ie_mesh_id ieee80211_generic_ie_const[WLAN_EID_MESH_ID, ieee80211_mesh_id]
+
+# Mesh Peering Management (see 9.4.2.102 of IEEE 802.11-2016)
+type ieee80211_ie_peer_mgmt ieee80211_generic_ie_const[WLAN_EID_PEER_MGMT, ieee80211_ie_peering_mgmt_payload]
+
+ieee80211_ie_peering_mgmt_payload {
+	proto_id	int16[0:1]
+	local_link_id	int16
+	peer_link_id	optional[int16]
+	reason_code	optional[ieee80211_reason_code[int16]]
+	pmk		optional[array[int8, 16]]
+} [packed]
+
 ieee80211_ie [
 	random	ieee80211_generic_ie[int8, array[int8, 0:253]]
 ] [varlen]
@@ -416,72 +555,66 @@ ieee80211_ie [
 # Specific 802.11 data frame headers determined by to_ds and from_ds values
 # See Table 26 of IEEE 802.11-2016
 
-# TODO: short A-MSDUs??
+type ieee80211_data_gen_hdr[TO, FROM, SUBTYPE, ORDER, ADDR_1, ADDR_2, ADDR_3, ADDR_4] {
+	fc		ieee80211_fc[TO, FROM, const[IEEE80211_DATA_FRAME_TYPE, int8:2], SUBTYPE, ORDER]
+	duration	ieee80211_duration
+	addr_1		ADDR_1
+	addr_2		ADDR_2
+	addr_3		ADDR_3
+	seqno		ieee80211_seq_control
+	addr_4		ADDR_4
+} [packed]
 
+type ieee80211_msdu_header[SUBTYPE, ORDER] [
 # 00: RA = DA, TA = SA, BSSID
-type ieee80211_data_header_00[SUBTYPE, ORDER] {
-	fc		ieee80211_fc[0, 0, const[IEEE80211_DATA_FRAME_TYPE, int8:2], SUBTYPE, ORDER]
-	duration	ieee80211_duration
-	addr_1		ieee80211_mac_addr
-	addr_2		ieee80211_mac_addr
-	addr_3		ieee80211_bssid
-	seqno		ieee80211_seq_control
-} [packed]
-
+	type00	ieee80211_data_gen_hdr[0, 0, SUBTYPE, ORDER, ieee80211_mac_addr, ieee80211_mac_addr, ieee80211_bssid, void]
 # 01: RA = DA, TA = BSSID, SA
-type ieee80211_data_header_01[SUBTYPE, ORDER] {
-	fc		ieee80211_fc[0, 1, const[IEEE80211_DATA_FRAME_TYPE, int8:2], SUBTYPE, ORDER]
-	duration	ieee80211_duration
-	addr_1		ieee80211_mac_addr
-	addr_2		ieee80211_bssid
-	addr_3		ieee80211_mac_addr
-	seqno		ieee80211_seq_control
-} [packed]
-
+	type01	ieee80211_data_gen_hdr[0, 1, SUBTYPE, ORDER, ieee80211_mac_addr, ieee80211_bssid, ieee80211_mac_addr, void]
 # 10: RA = BSSID, TA = SA, DA
-type ieee80211_data_header_10[SUBTYPE, ORDER] {
-	fc		ieee80211_fc[1, 0, const[IEEE80211_DATA_FRAME_TYPE, int8:2], SUBTYPE, ORDER]
-	duration	ieee80211_duration
-	addr_1		ieee80211_bssid
-	addr_2		ieee80211_mac_addr
-	addr_3		ieee80211_mac_addr
-	seqno		ieee80211_seq_control
-} [packed]
-
+	type10	ieee80211_data_gen_hdr[1, 0, SUBTYPE, ORDER, ieee80211_bssid, ieee80211_mac_addr, ieee80211_mac_addr, void]
 # 11: RA, TA, DA, SA
-type ieee80211_data_header_11[SUBTYPE, ORDER] {
-	fc		ieee80211_fc[1, 1, const[IEEE80211_DATA_FRAME_TYPE, int8:2], SUBTYPE, ORDER]
-	duration	ieee80211_duration
-	addr_1		ieee80211_mac_addr
-	addr_2		ieee80211_mac_addr
-	addr_3		ieee80211_mac_addr
-	seqno		ieee80211_seq_control
-	addr_4		ieee80211_mac_addr
-} [packed]
-
-type ieee80211_generic_data_header[SUBTYPE, ORDER] [
-	header00	ieee80211_data_header_00[SUBTYPE, ORDER]
-	header01	ieee80211_data_header_01[SUBTYPE, ORDER]
-	header10	ieee80211_data_header_10[SUBTYPE, ORDER]
-	header11	ieee80211_data_header_11[SUBTYPE, ORDER]
+	type11	ieee80211_data_gen_hdr[1, 1, SUBTYPE, ORDER, ieee80211_mac_addr, ieee80211_mac_addr, ieee80211_mac_addr, ieee80211_mac_addr]
 ]
 
-type ieee80211_data_frame_no_qos_hdr ieee80211_generic_data_header[int8:4[0x0:0x7], int8:1]
+type ieee80211_a_msdu_header[SUBTYPE, ORDER] [
+# 00: RA = DA, TA = SA, BSSID
+	type00	ieee80211_data_gen_hdr[0, 0, SUBTYPE, ORDER, ieee80211_mac_addr, ieee80211_mac_addr, ieee80211_bssid, void]
+# 01: RA = DA, TA = BSSID, BSSID
+	type01	ieee80211_data_gen_hdr[0, 1, SUBTYPE, ORDER, ieee80211_mac_addr, ieee80211_bssid, ieee80211_bssid, void]
+# 10: RA = BSSID, TA = SA, BSSID
+	type10	ieee80211_data_gen_hdr[1, 0, SUBTYPE, ORDER, ieee80211_bssid, ieee80211_mac_addr, ieee80211_bssid, void]
+# 11: RA, TA, BSSID, SA
+	type11	ieee80211_data_gen_hdr[1, 1, SUBTYPE, ORDER, ieee80211_mac_addr, ieee80211_mac_addr, ieee80211_bssid, ieee80211_mac_addr]
+]
+
+type ieee80211_data_frame_no_qos_hdr ieee80211_msdu_header[int8:4[0x0:0x7], int8:1]
 
 type ieee80211_data_frame_qos_hdr[ORDER] {
-	header		ieee80211_generic_data_header[int8:4[0x8:0xf], ORDER]
-	qos_control	ieee80211_qos_control[int16]
+	msdu	ieee80211_append_qos_control[ieee80211_msdu_header[int8:4[0x8:0xf], ORDER], 0x0]
+	a_msdu	ieee80211_append_qos_control[ieee80211_a_msdu_header[int8:4[0x8:0xf], ORDER], 0x1]
 } [packed]
 
 ieee80211_data_frame_hdr [
 	no_qos		ieee80211_data_frame_no_qos_hdr
 	qos_no_ht	ieee80211_data_frame_qos_hdr[const[0, int8:1]]
-	qos_ht		ieee80211_append_ht_control[ieee80211_data_frame_qos_hdr[const[1, int8:1]]]
-]
+	qos_ht		ieee80211_append_ht_control[ieee80211_data_frame_qos_hdr[const[0x1, int8:1]]]
+] [varlen]
+
+ieee80211_a_msdu_subframe {
+	da	ieee80211_mac_addr
+	sa	ieee80211_mac_addr
+	len	len[data, int16]
+	data	array[int8]
+} [packed, align[4]]
+
+ieee80211_data_frame_payload [
+	random	array[int8, 0:IEEE80211_MAX_DATA_LEN]
+	a_msdu	array[ieee80211_a_msdu_subframe]
+] [varlen]
 
 ieee80211_data_frame {
 	header	ieee80211_data_frame_hdr
-	payload	array[int8, 0:IEEE80211_MAX_DATA_LEN]
+	payload	ieee80211_data_frame_payload
 } [packed]
 
 ###############################################
@@ -759,8 +892,45 @@ ieee80211_mgmt_action_tdls_teardown {
 # Notify Channel Width (see sect. 9.6.12.2 of IEEE 802.11-2016)
 type ieee80211_mgmt_action_notify_ch_sw int8[0:1]
 
+# Group ID Management (see sect. 9.6.23.3 of IEEE 802.11-2016)
+ieee80211_mgmt_action_group_id {
+	membership_status	int64
+	user_positions		array[int8, 16]
+} [packed]
+
 # Operating Mode Notification (see sect. 9.6.23.4 of IEEE 802.11-2016)
 type ieee80211_mgmt_action_op_mode_ntf ieee80211_operating_mode
+
+# HWMP Mesh Path Selection (see sect. 9.6.17.3 of IEEE 802.11-2016)
+ieee80211_mgmt_action_hwmp_path_sel {
+	preq	optional[ieee80211_ie_preq]
+	prep	optional[ieee80211_ie_prep]
+	perr	optional[ieee80211_ie_perr]
+	rann	optional[ieee80211_ie_rann]
+} [packed]
+
+# Mesh Peering Open (see sect. 9.6.16.2 of IEEE 802.11-2016)
+ieee80211_mgmt_action_mesh_peering_open {
+	capability	ieee80211_capability[int16]
+	supported_rates	ieee80211_ie_supported_rates
+	mesh_id		optional[ieee80211_ie_mesh_id]
+	ht		optional[ieee80211_ie_ht]
+} [packed]
+
+# Mesh Peering Confirm (see sect. 9.6.16.3 of IEEE 802.11-2016)
+ieee80211_mgmt_action_mesh_peering_confirm {
+	capability	ieee80211_capability[int16]
+	aid		ieee80211_assoc_id
+	supported_rates	ieee80211_ie_supported_rates
+	mesh_id		optional[ieee80211_ie_mesh_id]
+	ht		optional[ieee80211_ie_ht]
+} [packed]
+
+# Mesh Peering Close (see sect. 9.6.16.4 of IEEE 802.11-2016)
+ieee80211_mgmt_action_mesh_peering_close {
+	mesh_id	ieee80211_ie_mesh_id
+	mgmt	ieee80211_ie_peer_mgmt
+} [packed]
 
 ieee80211_mgmt_action_payload [
 	measure_req	ieee80211_mgmt_action_raw[WLAN_CATEGORY_SPECTRUM_MGMT, WLAN_ACTION_SPCT_MSR_REQ, ieee80211_mgmt_action_measure_req]
@@ -780,6 +950,11 @@ ieee80211_mgmt_action_payload [
 	tdls_chsw_resp	ieee80211_mgmt_action_raw[WLAN_CATEGORY_TDLS, WLAN_TDLS_CHANNEL_SWITCH_RESPONSE, ieee80211_mgmt_action_tdls_chsw_resp]
 	tdls_disc_req	ieee80211_mgmt_action_raw[WLAN_CATEGORY_TDLS, WLAN_TDLS_DISCOVERY_REQUEST, ieee80211_mgmt_action_tdls_disc_req]
 	vht_op_mode_ntf	ieee80211_mgmt_action_raw[WLAN_CATEGORY_VHT, WLAN_VHT_ACTION_OPMODE_NOTIF, ieee80211_mgmt_action_op_mode_ntf]
+	vht_group_id	ieee80211_mgmt_action_raw[WLAN_CATEGORY_VHT, WLAN_VHT_ACTION_GROUPID_MGMT, ieee80211_mgmt_action_group_id]
+	mesh_hwmp_psel	ieee80211_mgmt_action_raw[WLAN_CATEGORY_MESH_ACTION, WLAN_MESH_ACTION_HWMP_PATH_SELECTION, ieee80211_mgmt_action_hwmp_path_sel]
+	sp_mp_open	ieee80211_mgmt_action_raw[WLAN_CATEGORY_SELF_PROTECTED, WLAN_SP_MESH_PEERING_OPEN, ieee80211_mgmt_action_mesh_peering_open]
+	sp_mp_confirm	ieee80211_mgmt_action_raw[WLAN_CATEGORY_SELF_PROTECTED, WLAN_SP_MESH_PEERING_CONFIRM, ieee80211_mgmt_action_mesh_peering_confirm]
+	sp_mp_close	ieee80211_mgmt_action_raw[WLAN_CATEGORY_SELF_PROTECTED, WLAN_SP_MESH_PEERING_CLOSE, ieee80211_mgmt_action_mesh_peering_close]
 ] [varlen]
 
 ieee80211_mgmt_action {
@@ -933,6 +1108,5 @@ ieee80211_ctrl_frame [
 	cf_end_cf_ack	ieee80211_ctrl_cf_end_cf_ack
 ] [varlen]
 
-# TODO: complete missing actions
 # TODO: check coverage from these frames
 # TODO: create runtests that combine network situations with injection
