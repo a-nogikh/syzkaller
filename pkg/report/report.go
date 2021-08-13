@@ -168,6 +168,10 @@ type reporterWrapper struct {
 	typ          string
 }
 
+func RunDynamicTotleReplacement(title string) string {
+	return replaceTable(dynamicTitleReplacement, title)
+}
+
 func (wrap *reporterWrapper) Parse(output []byte) *Report {
 	rep := wrap.Reporter.Parse(output)
 	if rep == nil {

@@ -44,6 +44,7 @@ func initHTTPHandlers() {
 		http.Handle("/"+ns+"/invalid", handlerWrapper(handleInvalid))
 	}
 	http.HandleFunc("/cache_update", cacheUpdate)
+	http.HandleFunc("/alt_titles_update", altTitlesUpdate)
 }
 
 type uiMainPage struct {

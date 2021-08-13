@@ -6,11 +6,101 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
+	"github.com/google/syzkaller/pkg/report"
 	"golang.org/x/net/context"
+	"google.golang.org/appengine"
 	db "google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
 )
+
+func updateBugTitle(title string) string {
+	tmpTitle := strings.ReplaceAll(title, ":LINE", ":123")
+	tmpTitle = strings.ReplaceAll(tmpTitle, "NUM", "12345")
+	return normalizeCrashTitle(report.RunDynamicTotleReplacement(tmpTitle))
+}
+
+func getNewAltTitles(w *http.ResponseWriter, bug *Bug, key *db.Key) []string {
+	newAltTitles := bug.AltTitles
+	hasAltTitle := func(key string) bool {
+		for _, val := range newAltTitles {
+			if val == key {
+				return true
+			}
+		}
+		return false
+	}
+
+	debug := []string{}
+
+	// Check the bug's title.
+	newBugTitle := updateBugTitle(bug.Title)
+	if newBugTitle != bug.Title && !hasAltTitle(newBugTitle) {
+		newAltTitles = append(newAltTitles, newBugTitle)
+		debug = append(debug, fmt.Sprintf("Curr title: %s\nTo AltTitles: %s\n", bug.Title, newBugTitle))
+	}
+
+	// Check AltTitles.
+	for i, title := range bug.AltTitles {
+		newTitle := updateBugTitle(title)
+		if newTitle == title || hasAltTitle(newTitle) {
+			continue
+		}
+		newAltTitles = append(newAltTitles, newTitle)
+		debug = append(debug, fmt.Sprintf("AltTitle(%d): %s\nTo AltTitles: %s\n", i, title, newTitle))
+	}
+
+	// Check MergedTitles.
+	for i, title := range bug.MergedTitles {
+		newTitle := updateBugTitle(title)
+		if newTitle == title || hasAltTitle(newTitle) {
+			continue
+		}
+		newAltTitles = append(newAltTitles, newTitle)
+		debug = append(debug, fmt.Sprintf("MergedTitle(%d): %s\nTo AltTitles: %s\n", i, title, newTitle))
+	}
+
+	if w != nil && len(debug) > 0 {
+		fmt.Fprintf(*w, "Key: %s\nNS: %s\n", key, bug.Namespace)
+		fmt.Fprintf(*w, "%s---------\n", strings.Join(debug, ""))
+	}
+	return newAltTitles
+}
+
+func altTitlesUpdate(w http.ResponseWriter, r *http.Request) {
+	c := appengine.NewContext(r)
+	dryRun := true
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	var keys []*db.Key
+	if err := foreachBug(c, nil, func(bug *Bug, key *db.Key) error {
+		canon, err := canonicalBug(c, bug)
+		if err != nil {
+			return nil
+		}
+		if canon.Status != BugStatusOpen {
+			return nil
+		}
+
+		newAltTitles := getNewAltTitles(&w, bug, key)
+		if len(newAltTitles) > len(bug.AltTitles) {
+			keys = append(keys, key)
+		}
+
+		return nil
+	}); err != nil {
+		return
+	}
+
+	if !dryRun {
+		fmt.Fprintf(w, "Updating DB (%d entries)\n", len(keys))
+		updateBugBatch(c, keys, func(bug *Bug) {
+			bug.AltTitles = getNewAltTitles(nil, bug, nil)
+		})
+		fmt.Fprintf(w, "Update complete")
+	}
+}
 
 // dropNamespace drops all entities related to a single namespace.
 // Use with care. There is no undo.
