@@ -59,7 +59,7 @@ func (*freebsd) processFile(arch *Arch, info *compiler.ConstInfo) (map[string]ui
 			args = append(args, "-I"+dir)
 		}
 	}
-	args = append(args, arch.target.CFlags...)
+	args = append(args, arch.target.GenerateCFlags()...)
 	params := &extractParams{
 		AddSource:     "#include <sys/syscall.h>",
 		DeclarePrintf: true,

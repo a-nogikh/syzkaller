@@ -152,7 +152,7 @@ void __sanitizer_cov_trace_pc() { printf("%llu", (long long)__builtin_return_add
 `)); err != nil {
 		t.Fatal(err)
 	}
-	kcovFlags := append([]string{"-c", "-w", "-x", "c", "-o", kcovObj, kcovSrc}, target.CFlags...)
+	kcovFlags := append([]string{"-c", "-w", "-x", "c", "-o", kcovObj, kcovSrc}, target.GenerateCFlags()...)
 	src := filepath.Join(dir, "main.c")
 	bin := filepath.Join(dir, target.KernelObject)
 	if err := osutil.WriteFile(src, []byte(`int main() {}`)); err != nil {
@@ -161,7 +161,7 @@ void __sanitizer_cov_trace_pc() { printf("%llu", (long long)__builtin_return_add
 	if _, err := osutil.RunCmd(time.Hour, "", target.CCompiler, kcovFlags...); err != nil {
 		t.Fatal(err)
 	}
-	flags := append(append([]string{"-w", "-o", bin, src, kcovObj}, target.CFlags...), test.CFlags...)
+	flags := append(append([]string{"-w", "-o", bin, src, kcovObj}, target.GenerateCFlags()...), test.CFlags...)
 	if _, err := osutil.RunCmd(time.Hour, "", target.CCompiler, flags...); err != nil {
 		errText := err.Error()
 		errText = strings.ReplaceAll(errText, "‘", "'")

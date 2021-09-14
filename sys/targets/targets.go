@@ -14,6 +14,46 @@ import (
 	"time"
 )
 
+type CFlagsGenOption int
+
+const (
+	AllowAslr CFlagsGenOption = iota
+)
+
+type CFlagsSet struct {
+	Aslr   *[]string
+	NoAslr *[]string
+	Always []string
+}
+
+func (set *CFlagsSet) Transform(cb func(string) string) {
+	handleSlice := func(input []string) []string {
+		ret := []string{}
+		for _, value := range input {
+			value = cb(value)
+			if value != "" {
+				ret = append(ret, value)
+			}
+		}
+		return ret
+	}
+	set.Always = handleSlice(set.Always)
+	if set.Aslr != nil {
+		*set.Aslr = handleSlice(*set.Aslr)
+	}
+	if set.NoAslr != nil {
+		*set.NoAslr = handleSlice(*set.NoAslr)
+	}
+}
+
+func defaultCFlags(flags ...string) CFlagsSet {
+	return CFlagsSet{
+		Aslr:   &[]string{"-static-pie"},
+		NoAslr: &[]string{"-static"},
+		Always: flags,
+	}
+}
+
 type Target struct {
 	osCommon
 	OS               string
@@ -25,7 +65,8 @@ type Target struct {
 	DataOffset       uint64
 	Int64Alignment   uint64
 	LittleEndian     bool
-	CFlags           []string
+	cFlags           CFlagsSet
+	cCompilerFlags   []string
 	Triple           string
 	CCompiler        string
 	Objdump          string // name of objdump executable
@@ -169,7 +210,10 @@ var List = map[string]map[string]*Target{
 			PtrSize:  8,
 			PageSize: 4 << 10,
 			// Compile with -no-pie due to issues with ASan + ASLR on ppc64le.
-			CFlags: []string{"-m64", "-fsanitize=address", "-no-pie"},
+			cFlags: CFlagsSet{
+				Always: []string{"-m64", "-fsanitize=address"},
+				NoAslr: &[]string{"-no-pie"},
+			},
 			osCommon: osCommon{
 				SyscallNumbers:         true,
 				SyscallPrefix:          "SYS_",
@@ -181,7 +225,10 @@ var List = map[string]map[string]*Target{
 			PtrSize:  8,
 			PageSize: 8 << 10,
 			// Compile with -no-pie due to issues with ASan + ASLR on ppc64le.
-			CFlags: []string{"-m64", "-fsanitize=address", "-no-pie"},
+			cFlags: CFlagsSet{
+				Always: []string{"-m64", "-fsanitize=address"},
+				NoAslr: &[]string{"-no-pie"},
+			},
 			osCommon: osCommon{
 				SyscallNumbers:         true,
 				SyscallPrefix:          "SYS_",
@@ -193,7 +240,7 @@ var List = map[string]map[string]*Target{
 			PtrSize:        4,
 			PageSize:       8 << 10,
 			Int64Alignment: 4,
-			CFlags:         []string{"-m32", "-static"},
+			cFlags:         defaultCFlags("-m32"),
 			osCommon: osCommon{
 				SyscallNumbers:         true,
 				Int64SyscallArgs:       true,
@@ -205,7 +252,7 @@ var List = map[string]map[string]*Target{
 		TestArch32ForkShmem: {
 			PtrSize:  4,
 			PageSize: 4 << 10,
-			CFlags:   []string{"-m32", "-static"},
+			cFlags:   defaultCFlags("-m32"),
 			osCommon: osCommon{
 				SyscallNumbers:         true,
 				Int64SyscallArgs:       true,
@@ -221,7 +268,7 @@ var List = map[string]map[string]*Target{
 			PtrSize:          8,
 			PageSize:         4 << 10,
 			LittleEndian:     true,
-			CFlags:           []string{"-m64"},
+			cFlags:           defaultCFlags("-m64"),
 			Triple:           "x86_64-linux-gnu",
 			KernelArch:       "x86_64",
 			KernelHeaderArch: "x86",
@@ -237,7 +284,7 @@ var List = map[string]map[string]*Target{
 			PageSize:         4 << 10,
 			Int64Alignment:   4,
 			LittleEndian:     true,
-			CFlags:           []string{"-m32"},
+			cFlags:           defaultCFlags("-m32"),
 			Triple:           "x86_64-linux-gnu",
 			KernelArch:       "i386",
 			KernelHeaderArch: "x86",
@@ -246,6 +293,7 @@ var List = map[string]map[string]*Target{
 			PtrSize:          8,
 			PageSize:         4 << 10,
 			LittleEndian:     true,
+			cFlags:           defaultCFlags(),
 			Triple:           "aarch64-linux-gnu",
 			KernelArch:       "arm64",
 			KernelHeaderArch: "arm64",
@@ -255,7 +303,7 @@ var List = map[string]map[string]*Target{
 			PtrSize:          4,
 			PageSize:         4 << 10,
 			LittleEndian:     true,
-			CFlags:           []string{"-D__LINUX_ARM_ARCH__=6", "-march=armv6"},
+			cFlags:           defaultCFlags("-D__LINUX_ARM_ARCH__=6", "-march=armv6"),
 			Triple:           "arm-linux-gnueabi",
 			KernelArch:       "arm",
 			KernelHeaderArch: "arm",
@@ -264,7 +312,7 @@ var List = map[string]map[string]*Target{
 			PtrSize:          8,
 			PageSize:         4 << 10,
 			LittleEndian:     true,
-			CFlags:           []string{"-march=mips64r2", "-mabi=64", "-EL"},
+			cFlags:           defaultCFlags("-march=mips64r2", "-mabi=64", "-EL"),
 			Triple:           "mips64el-linux-gnuabi64",
 			KernelArch:       "mips",
 			KernelHeaderArch: "mips",
@@ -273,7 +321,7 @@ var List = map[string]map[string]*Target{
 			PtrSize:          8,
 			PageSize:         64 << 10,
 			LittleEndian:     true,
-			CFlags:           []string{"-D__powerpc64__"},
+			cFlags:           defaultCFlags("-D__powerpc64__"),
 			Triple:           "powerpc64le-linux-gnu",
 			KernelArch:       "powerpc",
 			KernelHeaderArch: "powerpc",
@@ -286,6 +334,7 @@ var List = map[string]map[string]*Target{
 			Triple:           "s390x-linux-gnu",
 			KernelArch:       "s390",
 			KernelHeaderArch: "s390",
+			cFlags:           defaultCFlags(),
 			SyscallTrampolines: map[string]string{
 				// The s390x Linux syscall ABI allows for upto 5 input parameters passed in registers, and this is not enough
 				// for the mmap syscall. Therefore, all input parameters for the mmap syscall are packed into a struct
@@ -298,6 +347,7 @@ var List = map[string]map[string]*Target{
 			PtrSize:          8,
 			PageSize:         4 << 10,
 			LittleEndian:     true,
+			cFlags:           defaultCFlags(),
 			Triple:           "riscv64-linux-gnu",
 			KernelArch:       "riscv",
 			KernelHeaderArch: "riscv",
@@ -309,9 +359,9 @@ var List = map[string]map[string]*Target{
 			PageSize:     4 << 10,
 			LittleEndian: true,
 			CCompiler:    "clang",
-			CFlags:       []string{"-m64"},
+			cFlags:       defaultCFlags("-m64"),
 			NeedSyscallDefine: func(nr uint64) bool {
-				// freebsd_12_shm_open, shm_open2, shm_rename, __realpathat, close_range, copy_file_range
+				// freebsd_12_shm_open, shm_open2, shm_rename, __realpathat, close_range, copyv_file_range
 				return nr == 482 || nr >= 569
 			},
 		},
@@ -325,7 +375,7 @@ var List = map[string]map[string]*Target{
 			Int64Alignment: 4,
 			LittleEndian:   true,
 			CCompiler:      "clang",
-			CFlags:         []string{"-m32"},
+			cFlags:         defaultCFlags("-m32"),
 			NeedSyscallDefine: func(nr uint64) bool {
 				// freebsd_12_shm_open, shm_open2, shm_rename, __realpathat, close_range, copy_file_range
 				return nr == 482 || nr >= 569
@@ -339,12 +389,12 @@ var List = map[string]map[string]*Target{
 			DataOffset:   512 << 24,
 			LittleEndian: true,
 			CCompiler:    "clang",
-			CFlags: []string{
+			cFlags: defaultCFlags(
 				"-m64",
-				"-I", sourceDirVar + "/san",
+				"-I", sourceDirVar+"/san",
 				// FIXME(HerrSpace): syscall was marked as deprecated on macos
 				"-Wno-deprecated-declarations",
-			},
+			),
 			NeedSyscallDefine: dontNeedSyscallDefine,
 		},
 	},
@@ -353,11 +403,8 @@ var List = map[string]map[string]*Target{
 			PtrSize:      8,
 			PageSize:     4 << 10,
 			LittleEndian: true,
-			CFlags: []string{
-				"-m64",
-				"-static",
-				"--sysroot", sourceDirVar + "/dest/",
-			},
+			cFlags: defaultCFlags("-m64",
+				"--sysroot", sourceDirVar+"/dest/"),
 			CCompiler: sourceDirVar + "/tools/bin/x86_64--netbsd-g++",
 		},
 	},
@@ -367,7 +414,7 @@ var List = map[string]map[string]*Target{
 			PageSize:     4 << 10,
 			LittleEndian: true,
 			CCompiler:    "c++",
-			CFlags:       []string{"-m64", "-static", "-lutil"},
+			cFlags:       defaultCFlags("-m64", "-lutil"),
 			NeedSyscallDefine: func(nr uint64) bool {
 				switch nr {
 				case 8: // SYS___tfork
@@ -403,7 +450,7 @@ var List = map[string]map[string]*Target{
 			KernelHeaderArch: "x64",
 			CCompiler:        sourceDirVar + "/prebuilt/third_party/clang/linux-x64/bin/clang",
 			Objdump:          sourceDirVar + "/prebuilt/third_party/clang/linux-x64/bin/llvm-objdump",
-			CFlags:           fuchsiaCFlags("x64", "x86_64"),
+			cFlags:           fuchsiaCFlags("x64", "x86_64"),
 		},
 		ARM64: {
 			PtrSize:          8,
@@ -412,7 +459,7 @@ var List = map[string]map[string]*Target{
 			KernelHeaderArch: ARM64,
 			CCompiler:        sourceDirVar + "/prebuilt/third_party/clang/linux-x64/bin/clang",
 			Objdump:          sourceDirVar + "/prebuilt/third_party/clang/linux-x64/bin/llvm-objdump",
-			CFlags:           fuchsiaCFlags(ARM64, "aarch64"),
+			cFlags:           fuchsiaCFlags(ARM64, "aarch64"),
 		},
 	},
 	Windows: {
@@ -420,6 +467,7 @@ var List = map[string]map[string]*Target{
 			PtrSize: 8,
 			// TODO(dvyukov): what should we do about 4k vs 64k?
 			PageSize:     4 << 10,
+			cFlags:       defaultCFlags(),
 			LittleEndian: true,
 		},
 	},
@@ -431,9 +479,7 @@ var List = map[string]map[string]*Target{
 			KernelHeaderArch:  "x86",
 			NeedSyscallDefine: dontNeedSyscallDefine,
 			CCompiler:         sourceDirVar + "/toolchain/x86_64-ucb-akaros-gcc/bin/x86_64-ucb-akaros-g++",
-			CFlags: []string{
-				"-static",
-			},
+			cFlags:            defaultCFlags(),
 		},
 	},
 	Trusty: {
@@ -453,7 +499,6 @@ var oses = map[string]osCommon{
 		ExecutorUsesShmem:      true,
 		ExecutorUsesForkServer: true,
 		KernelObject:           "vmlinux",
-		cflags:                 []string{"-static"},
 	},
 	FreeBSD: {
 		SyscallNumbers:         true,
@@ -463,7 +508,7 @@ var oses = map[string]osCommon{
 		ExecutorUsesForkServer: true,
 		KernelObject:           "kernel.full",
 		CPP:                    "g++",
-		cflags:                 []string{"-static", "-lc++"},
+		cflags:                 []string{"-lc++"},
 	},
 	Darwin: {
 		SyscallNumbers:    true,
@@ -545,31 +590,32 @@ var (
 	}
 	optionalCFlags = map[string]bool{
 		"-static":                 true, // some distributions don't have static libraries
+		"-static-pie":             true, // not all compiler versions support this flag
 		"-Wunused-const-variable": true, // gcc 5 does not support this flag
 		"-fsanitize=address":      true, // some OSes don't have ASAN
 	}
 )
 
-func fuchsiaCFlags(arch, clangArch string) []string {
+func fuchsiaCFlags(arch, clangArch string) CFlagsSet {
 	out := sourceDirVar + "/out/" + arch
-	return []string{
+	return defaultCFlags(
 		"-Wno-deprecated",
-		"-target", clangArch + "-fuchsia",
+		"-target", clangArch+"-fuchsia",
 		"-ldriver",
 		"-lfdio",
 		"-lzircon",
-		"--sysroot", out + "/zircon_toolchain/obj/zircon/public/sysroot/sysroot",
-		"-I", sourceDirVar + "/sdk/lib/fdio/include",
-		"-I", sourceDirVar + "/zircon/system/ulib/fidl/include",
-		"-I", sourceDirVar + "/src/lib/ddk/include",
-		"-I", out + "/fidling/gen/sdk/fidl/fuchsia.device",
-		"-I", out + "/fidling/gen/sdk/fidl/fuchsia.device.manager",
-		"-I", out + "/fidling/gen/sdk/fidl/fuchsia.hardware.nand",
-		"-I", out + "/fidling/gen/sdk/fidl/fuchsia.hardware.power.statecontrol",
-		"-I", out + "/fidling/gen/sdk/fidl/fuchsia.hardware.usb.peripheral",
-		"-I", out + "/fidling/gen/zircon/vdso/zx",
-		"-L", out + "/" + arch + "-shared",
-	}
+		"--sysroot", out+"/zircon_toolchain/obj/zircon/public/sysroot/sysroot",
+		"-I", sourceDirVar+"/sdk/lib/fdio/include",
+		"-I", sourceDirVar+"/zircon/system/ulib/fidl/include",
+		"-I", sourceDirVar+"/src/lib/ddk/include",
+		"-I", out+"/fidling/gen/sdk/fidl/fuchsia.device",
+		"-I", out+"/fidling/gen/sdk/fidl/fuchsia.device.manager",
+		"-I", out+"/fidling/gen/sdk/fidl/fuchsia.hardware.nand",
+		"-I", out+"/fidling/gen/sdk/fidl/fuchsia.hardware.power.statecontrol",
+		"-I", out+"/fidling/gen/sdk/fidl/fuchsia.hardware.usb.peripheral",
+		"-I", out+"/fidling/gen/zircon/vdso/zx",
+		"-L", out+"/"+arch+"-shared",
+	)
 }
 
 func init() {
@@ -592,18 +638,19 @@ func init() {
 					// For some configurations -no-pie is passed to the compiler,
 					// which is not used by clang.
 					// Ensure clang does not complain about it.
-					target.CFlags = append(target.CFlags, "-Wno-unused-command-line-argument")
-					// When building executor for the test OS, clang needs
+					// Also, when building executor for the test OS, clang needs
 					// to link against the libc++ library.
-					target.CFlags = append(target.CFlags, "-lc++")
+					target.cFlags.Always = append(target.cFlags.Always,
+						"-Wno-unused-command-line-argument",
+						"-lc++")
 				}
 				// In ESA/390 mode, the CPU is able to address only 31bit of memory but
 				// arithmetic operations are still 32bit
 				// Fix cflags by replacing compiler's -m32 option with -m31
 				if goarch == S390x {
-					for i := range target.CFlags {
-						target.CFlags[i] = strings.Replace(target.CFlags[i], "-m32", "-m31", -1)
-					}
+					target.cFlags.Transform(func(input string) string {
+						return strings.Replace(input, "-m32", "-m31", -1)
+					})
 				}
 			}
 			if target.PtrSize == 4 && goos == FreeBSD && goarch == AMD64 {
@@ -645,9 +692,11 @@ func initTarget(target *Target, OS, arch string) {
 	}
 	target.replaceSourceDir(&target.CCompiler, sourceDir)
 	target.replaceSourceDir(&target.Objdump, sourceDir)
-	for i := range target.CFlags {
-		target.replaceSourceDir(&target.CFlags[i], sourceDir)
-	}
+	target.cFlags.Transform(func(flag string) string {
+		target.replaceSourceDir(&flag, sourceDir)
+		return flag
+	})
+
 	if OS == Linux && arch == runtime.GOARCH {
 		// Don't use cross-compiler for native compilation, there are cases when this does not work:
 		// https://github.com/google/syzkaller/pull/619
@@ -676,7 +725,7 @@ func initTarget(target *Target, OS, arch string) {
 		target.CPP = target.CCompiler
 	}
 	for _, flags := range [][]string{commonCFlags, target.osCommon.cflags} {
-		target.CFlags = append(target.CFlags, flags...)
+		target.cFlags.Always = append(target.cFlags.Always, flags...)
 	}
 	if OS == TestOS {
 		if runtime.GOARCH != S390x {
@@ -732,26 +781,16 @@ func (target *Target) Timeouts(slowdown int) Timeouts {
 }
 
 func (target *Target) setCompiler(clang bool) {
-	// setCompiler may be called effectively twice for target.other,
-	// so first we remove flags the previous call may have added.
-	pos := 0
-	for _, flag := range target.CFlags {
-		if flag == "-ferror-limit=0" ||
-			strings.HasPrefix(flag, "--target=") {
-			continue
-		}
-		target.CFlags[pos] = flag
-		pos++
-	}
-	target.CFlags = target.CFlags[:pos]
+	target.cCompilerFlags = []string{}
 	if clang {
 		target.CCompiler = "clang"
 		target.KernelCompiler = "clang"
 		target.KernelLinker = "ld.lld"
 		if target.Triple != "" {
-			target.CFlags = append(target.CFlags, "--target="+target.Triple)
+			target.cCompilerFlags = append(target.cCompilerFlags,
+				"--target="+target.Triple)
 		}
-		target.CFlags = append(target.CFlags, "-ferror-limit=0")
+		target.cCompilerFlags = append(target.cCompilerFlags, "-ferror-limit=0")
 	} else {
 		target.CCompiler = "gcc"
 		target.KernelCompiler = ""
@@ -788,9 +827,9 @@ func (target *Target) lazyInit() {
 	}
 	flags := make(map[string]*bool)
 	var wg sync.WaitGroup
-	for _, flag := range target.CFlags {
+	target.cFlags.Transform(func(flag string) string {
 		if !optionalCFlags[flag] {
-			continue
+			return flag
 		}
 		res := new(bool)
 		flags[flag] = res
@@ -799,15 +838,16 @@ func (target *Target) lazyInit() {
 			defer wg.Done()
 			*res = checkFlagSupported(target, flag)
 		}(flag)
-	}
+		return flag
+	})
 	wg.Wait()
-	for i := 0; i < len(target.CFlags); i++ {
-		if res := flags[target.CFlags[i]]; res != nil && !*res {
-			copy(target.CFlags[i:], target.CFlags[i+1:])
-			target.CFlags = target.CFlags[:len(target.CFlags)-1]
-			i--
+	target.cFlags.Transform(func(flag string) string {
+		if res := flags[flag]; res == nil || *res {
+			return flag
 		}
-	}
+		return ""
+	})
+
 	// Check that the compiler is actually functioning. It may be present, but still broken.
 	// Common for Linux distros, over time we've seen:
 	//	Error: alignment too large: 15 assumed
@@ -818,13 +858,35 @@ func (target *Target) lazyInit() {
 		return // On CI all compilers are expected to work, so we don't do the following check.
 	}
 	args := []string{"-x", "c++", "-", "-o", "/dev/null"}
-	args = append(args, target.CFlags...)
+	args = append(args, target.GenerateCFlags()...)
 	cmd := exec.Command(target.CCompiler, args...)
 	cmd.Stdin = strings.NewReader(simpleProg)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		target.BrokenCompiler = string(out)
 		return
 	}
+}
+
+func (target *Target) GenerateCFlags(genOptions ...CFlagsGenOption) []string {
+	flags := append([]string{}, target.cFlags.Always...)
+	aslrEnabled := false
+	for _, option := range genOptions {
+		switch option {
+		case AllowAslr:
+			if target.cFlags.Aslr != nil {
+				flags = append(flags, *target.cFlags.Aslr...)
+				aslrEnabled = true
+			} else {
+				aslrEnabled = false
+			}
+		default:
+			panic(fmt.Sprintf("unsupported c flags generation option: %v", option))
+		}
+	}
+	if !aslrEnabled && target.cFlags.NoAslr != nil {
+		flags = append(flags, *target.cFlags.NoAslr...)
+	}
+	return append(flags, target.cCompilerFlags...)
 }
 
 func checkFlagSupported(target *Target, flag string) bool {

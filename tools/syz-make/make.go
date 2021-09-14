@@ -68,7 +68,7 @@ func impl() ([]Var, error) {
 		{"TARGETARCH", targetArch},
 		{"TARGETVMARCH", targetVMArch},
 		{"CC", target.CCompiler},
-		{"ADDCFLAGS", strings.Join(target.CFlags, " ")},
+		{"ADDCFLAGS", strings.Join(target.GenerateCFlags(targets.AllowAslr), " ")},
 		{"NCORES", strconv.Itoa(parallelism)},
 		{"EXE", target.ExeExtension},
 		{"NATIVEBUILDOS", target.BuildOS},
