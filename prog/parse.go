@@ -62,7 +62,8 @@ func (target *Target) ParseLog(data []byte) []*LogEntry {
 		}
 
 		if faultCall >= 0 && faultCall < len(p.Calls) {
-			p.Calls[faultCall].Props.FailNth = faultNth
+			// We add 1 because now the property is 1-based.
+			p.Calls[faultCall].Props.FailNth = faultNth + 1
 		}
 
 		cur = tmp

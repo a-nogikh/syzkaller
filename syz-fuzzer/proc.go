@@ -217,7 +217,7 @@ func (proc *Proc) smashInput(item *WorkSmash) {
 }
 
 func (proc *Proc) failCall(p *prog.Prog, call int) {
-	for nth := 0; nth < 100; nth++ {
+	for nth := 1; nth <= 100; nth++ {
 		log.Logf(1, "#%v: injecting fault into call %v/%v", proc.pid, call, nth)
 		newProg := p.Clone()
 		newProg.Calls[call].Props.FailNth = nth

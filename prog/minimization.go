@@ -82,9 +82,9 @@ func minimizeCallProps(p0 *Prog, callIndex, callIndex0 int, pred func(*Prog, int
 	props := p0.Calls[callIndex].Props
 
 	// Try to drop fault injection.
-	if props.FailNth >= 0 {
+	if props.FailNth > 0 {
 		p := p0.Clone()
-		p.Calls[callIndex].Props.FailNth = -1
+		p.Calls[callIndex].Props.FailNth = 0
 		if pred(p, callIndex0) {
 			p0 = p
 		}

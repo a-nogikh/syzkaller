@@ -125,11 +125,12 @@ getpid()
 	ent := entries[0]
 	faultCall := ent.P.Calls[1]
 	normalCall := ent.P.Calls[0]
-	if faultCall.Props.FailNth != 55 {
-		t.Fatalf("fault nth on the 2nd call: got %v, want 55", faultCall.Props.FailNth)
+	if faultCall.Props.FailNth != 56 {
+		// We want 56 (not 55!) because the number is now not 0-based.
+		t.Fatalf("fault nth on the 2nd call: got %v, want 56", faultCall.Props.FailNth)
 	}
-	if normalCall.Props.FailNth != -1 {
-		t.Fatalf("fault nth on the 1st call: got %v, want -1", normalCall.Props.FailNth)
+	if normalCall.Props.FailNth != 0 {
+		t.Fatalf("fault nth on the 1st call: got %v, want 0", normalCall.Props.FailNth)
 	}
 	want := "gettid-getpid"
 	got := ent.P.String()

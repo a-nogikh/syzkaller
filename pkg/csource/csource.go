@@ -203,7 +203,7 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace bool) ([]string, []uint
 			ctx.copyin(w, &csumSeq, copyin)
 		}
 
-		if call.Props.FailNth >= 0 {
+		if call.Props.FailNth > 0 {
 			fmt.Fprintf(w, "\tinject_fault(%v);\n", call.Props.FailNth)
 		}
 		// Call itself.

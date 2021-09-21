@@ -178,7 +178,7 @@ func RequiredFeatures(p *Prog) (bitmasks, csums bool) {
 
 func (p *Prog) HasFaultInjection() bool {
 	for _, call := range p.Calls {
-		if call.Props.FailNth >= 0 {
+		if call.Props.FailNth > 0 {
 			return true
 		}
 	}

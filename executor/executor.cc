@@ -165,6 +165,7 @@ const int kMaxCommands = 1000; // prog package knows about this constant (prog.e
 const uint64 instr_eof = -1;
 const uint64 instr_copyin = -2;
 const uint64 instr_copyout = -3;
+const uint64 instr_setprops = -4;
 
 const uint64 arg_const = 0;
 const uint64 arg_result = 1;
@@ -664,7 +665,7 @@ retry:
 	uint64 prog_extra_timeout = 0;
 	uint64 prog_extra_cover_timeout = 0;
 	bool has_fault_injection = false;
-	call_props_t call_props;
+	call_props_t call_props = {};
 
 	for (;;) {
 		uint64 call_num = read_input(&input_pos);
@@ -755,11 +756,13 @@ retry:
 			// The copyout will happen when/if the call completes.
 			continue;
 		}
+		if (call_num == instr_setprops) {
+			read_call_props_t(call_props, read_input(&input_pos, false));
+		}
 
 		// Normal syscall.
 		if (call_num >= ARRAY_SIZE(syscalls))
 			failmsg("invalid syscall number", "call_num=%llu", call_num);
-		read_call_props_t(call_props, read_input(&input_pos, false));
 		const call_t* call = &syscalls[call_num];
 		if (call->attrs.disabled)
 			failmsg("executing disabled syscall", "syscall=%s", call->name);
@@ -838,6 +841,7 @@ retry:
 				}
 			}
 		}
+		call_props = {};
 	}
 
 #if SYZ_HAVE_CLOSE_FDS
