@@ -174,6 +174,9 @@ func main() {
 		gitRevision:    prog.GitRevision,
 		targetRevision: target.Revision,
 	}
+	if checkArgs.ipcConfig.Flags&ipc.FlagSignal != 0 {
+		checkArgs.ipcExecOpts.Flags |= ipc.FlagCollectSignal
+	}
 	if *flagTest {
 		testImage(*flagManager, checkArgs)
 		return

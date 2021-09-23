@@ -37,6 +37,8 @@ var (
 	flagHints     = flag.Bool("hints", false, "do a hints-generation run")
 	flagEnable    = flag.String("enable", "none", "enable only listed additional features")
 	flagDisable   = flag.String("disable", "none", "enable all additional features except listed")
+	// The following flag is only kept to let syzkaller remain compatible with older execprog versions.
+	flagCollide = flag.Bool("collide", false, "(DEPRECATED) collide syscalls to provoke data races")
 )
 
 func main() {
@@ -71,6 +73,9 @@ func main() {
 		for _, feat := range features.Supported() {
 			log.Logf(0, "%-24v: %v", feat.Name, feat.Reason)
 		}
+	}
+	if *flagCollide {
+		log.Fatalf("setting -collide to true is deprecated now")
 	}
 	config, execOpts := createConfig(target, features, featuresFlags)
 	if err = host.Setup(target, features, featuresFlags, config.Executor); err != nil {

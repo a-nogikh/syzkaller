@@ -24,14 +24,14 @@ import (
 
 // Proc represents a single fuzzing process (executor).
 type Proc struct {
-	fuzzer            *Fuzzer
-	pid               int
-	env               *ipc.Env
-	rnd               *rand.Rand
-	execOpts          *ipc.ExecOpts
-	execOptsCover     *ipc.ExecOpts
-	execOptsComps     *ipc.ExecOpts
-	execOptsNoCollide *ipc.ExecOpts
+	fuzzer          *Fuzzer
+	pid             int
+	env             *ipc.Env
+	rnd             *rand.Rand
+	execOpts        *ipc.ExecOpts
+	execOptsCollide *ipc.ExecOpts
+	execOptsCover   *ipc.ExecOpts
+	execOptsComps   *ipc.ExecOpts
 }
 
 func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
@@ -40,21 +40,23 @@ func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
 		return nil, err
 	}
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano() + int64(pid)*1e12))
-	execOptsNoCollide := *fuzzer.execOpts
-	execOptsNoCollide.Flags &= ^ipc.FlagCollide
-	execOptsCover := execOptsNoCollide
+	baseOpts := *fuzzer.execOpts
+	execOpts := baseOpts
+	// TODO: make the flag default and unmask it here.
+	execOpts.Flags |= ipc.FlagCollectSignal
+	execOptsCover := baseOpts
 	execOptsCover.Flags |= ipc.FlagCollectCover
-	execOptsComps := execOptsNoCollide
+	execOptsComps := baseOpts
 	execOptsComps.Flags |= ipc.FlagCollectComps
 	proc := &Proc{
-		fuzzer:            fuzzer,
-		pid:               pid,
-		env:               env,
-		rnd:               rnd,
-		execOpts:          fuzzer.execOpts,
-		execOptsCover:     &execOptsCover,
-		execOptsComps:     &execOptsComps,
-		execOptsNoCollide: &execOptsNoCollide,
+		fuzzer:          fuzzer,
+		pid:             pid,
+		env:             env,
+		rnd:             rnd,
+		execOpts:        fuzzer.execOpts,
+		execOptsCollide: &execOpts,
+		execOptsCover:   &execOptsCover,
+		execOptsComps:   &execOptsComps,
 	}
 	return proc, nil
 }
@@ -145,7 +147,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 		item.p, item.call = prog.Minimize(item.p, item.call, false,
 			func(p1 *prog.Prog, call1 int) bool {
 				for i := 0; i < minimizeAttempts; i++ {
-					info := proc.execute(proc.execOptsNoCollide, p1, ProgNormal, StatMinimize)
+					info := proc.executeNoCollide(proc.execOpts, p1, ProgNormal, StatMinimize)
 					if !reexecutionSuccess(info, &item.info, call1) {
 						// The call was not executed or failed.
 						continue
@@ -231,7 +233,7 @@ func (proc *Proc) failCall(p *prog.Prog, call int) {
 func (proc *Proc) executeHintSeed(p *prog.Prog, call int) {
 	log.Logf(1, "#%v: collecting comparisons", proc.pid)
 	// First execute the original program to dump comparisons from KCOV.
-	info := proc.execute(proc.execOptsComps, p, ProgNormal, StatSeed)
+	info := proc.executeNoCollide(proc.execOptsComps, p, ProgNormal, StatSeed)
 	if info == nil {
 		return
 	}
@@ -245,7 +247,7 @@ func (proc *Proc) executeHintSeed(p *prog.Prog, call int) {
 	})
 }
 
-func (proc *Proc) execute(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) *ipc.ProgInfo {
+func (proc *Proc) executeNoCollide(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) *ipc.ProgInfo {
 	info := proc.executeRaw(execOpts, p, stat)
 	if info == nil {
 		return nil
@@ -272,6 +274,24 @@ func (proc *Proc) enqueueCallTriage(p *prog.Prog, flags ProgTypes, callIndex int
 		info:  info,
 		flags: flags,
 	})
+}
+
+func (proc *Proc) execute(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) *ipc.ProgInfo {
+	info := proc.executeNoCollide(execOpts, p, flags, stat)
+
+	if execOpts.Flags&ipc.FlagThreaded == 0 {
+		// We cannot collide syscalls without being in the threaded mode.
+		return info
+	}
+	const collideIterations = 1
+	for i := 0; i < collideIterations; i++ {
+		proc.executeRaw(proc.execOptsCollide, proc.randomCollide(p), stat)
+	}
+	return info
+}
+
+func (proc *Proc) randomCollide(origP *prog.Prog) *prog.Prog {
+	return prog.AssignRandomDetached(origP, proc.rnd)
 }
 
 func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog, stat Stat) *ipc.ProgInfo {

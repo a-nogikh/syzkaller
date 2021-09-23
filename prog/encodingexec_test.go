@@ -463,9 +463,9 @@ func TestSerializeForExec(t *testing.T) {
 			nil,
 		},
 		{
-			"test() (fail_nth: 3)",
+			"test() (fail_nth: 3, detached)",
 			[]uint64{
-				execInstrSetProps, 3,
+				execInstrSetProps, 3, 1,
 				callID("test"), ExecNoCopyout, 0,
 				execInstrEOF,
 			},
@@ -474,7 +474,7 @@ func TestSerializeForExec(t *testing.T) {
 					{
 						Meta:  target.SyscallMap["test"],
 						Index: ExecNoCopyout,
-						Props: CallProps{3},
+						Props: CallProps{3, true},
 					},
 				},
 			},

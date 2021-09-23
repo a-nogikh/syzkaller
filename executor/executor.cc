@@ -145,8 +145,8 @@ static bool flag_wifi;
 static bool flag_collect_cover;
 static bool flag_dedup_cover;
 static bool flag_threaded;
-static bool flag_collide;
 static bool flag_coverage_filter;
+static bool flag_collect_signal;
 
 // If true, then executor should write the comparisons data to fuzzer.
 static bool flag_comparisons;
@@ -181,7 +181,6 @@ const uint64 binary_format_stroct = 4;
 const uint64 no_copyout = -1;
 
 static int running;
-static bool collide;
 uint32 completed;
 bool is_kernel_64_bit = true;
 
@@ -231,7 +230,6 @@ struct thread_t {
 	event_t done;
 	uint64* copyout_pos;
 	uint64 copyout_index;
-	bool colliding;
 	bool executing;
 	int call_index;
 	int call_num;
@@ -336,7 +334,7 @@ struct feature_t {
 	void (*setup)();
 };
 
-static thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 copyout_index, uint64 num_args, uint64* args, uint64* pos, call_props_t call_props);
+static thread_t* schedule_call(int call_index, int call_num, uint64 copyout_index, uint64 num_args, uint64* args, uint64* pos, call_props_t call_props);
 static void handle_completion(thread_t* th);
 static void copyout_call_results(thread_t* th);
 static void write_call_output(thread_t* th, bool finished);
@@ -590,14 +588,12 @@ void receive_execute()
 	flag_dedup_cover = req.exec_flags & (1 << 1);
 	flag_comparisons = req.exec_flags & (1 << 2);
 	flag_threaded = req.exec_flags & (1 << 3);
-	flag_collide = req.exec_flags & (1 << 4);
-	flag_coverage_filter = req.exec_flags & (1 << 5);
-	if (!flag_threaded)
-		flag_collide = false;
-	debug("[%llums] exec opts: procid=%llu threaded=%d collide=%d cover=%d comps=%d dedup=%d"
+	flag_coverage_filter = req.exec_flags & (1 << 4);
+	flag_collect_signal = req.exec_flags & (1 << 5);
+	debug("[%llums] exec opts: procid=%llu threaded=%d cover=%d comps=%d dedup=%d signal=%d"
 	      " timeouts=%llu/%llu/%llu prog=%llu filter=%d\n",
-	      current_time_ms() - start_time_ms, procid, flag_threaded, flag_collide,
-	      flag_collect_cover, flag_comparisons, flag_dedup_cover, syscall_timeout_ms,
+	      current_time_ms() - start_time_ms, procid, flag_threaded, flag_collect_cover,
+	      flag_comparisons, flag_dedup_cover, flag_collect_signal, syscall_timeout_ms,
 	      program_timeout_ms, slowdown_scale, req.prog_size, flag_coverage_filter);
 	if (syscall_timeout_ms == 0 || program_timeout_ms <= syscall_timeout_ms || slowdown_scale == 0)
 		failmsg("bad timeouts", "syscall=%llu, program=%llu, scale=%llu",
@@ -620,6 +616,11 @@ void receive_execute()
 	}
 	if (pos != req.prog_size)
 		failmsg("bad input size", "size=%lld, want=%lld", pos, req.prog_size);
+}
+
+bool cover_collection_required()
+{
+	return flag_coverage && (flag_collect_signal || flag_collect_cover || flag_comparisons);
 }
 
 #if GOOS_akaros
@@ -646,20 +647,14 @@ void reply_execute(int status)
 // execute_one executes program stored in input_data.
 void execute_one()
 {
-	// Duplicate global collide variable on stack.
-	// Fuzzer once come up with ioctl(fd, FIONREAD, 0x920000),
-	// where 0x920000 was exactly collide address, so every iteration reset collide to 0.
-	bool colliding = false;
 #if SYZ_EXECUTOR_USES_SHMEM
 	output_pos = output_data;
 	write_output(0); // Number of executed syscalls (updated later).
 #endif
 	uint64 start = current_time_ms();
-
-retry:
 	uint64* input_pos = (uint64*)input_data;
 
-	if (flag_coverage && !colliding) {
+	if (cover_collection_required()) {
 		if (!flag_threaded)
 			cover_enable(&threads[0].cov, flag_comparisons, false);
 		if (flag_extra_coverage)
@@ -789,12 +784,13 @@ retry:
 			args[i] = read_arg(&input_pos);
 		for (uint64 i = num_args; i < kMaxArgs; i++)
 			args[i] = 0;
-		thread_t* th = schedule_call(call_index++, call_num, colliding, copyout_index,
+		thread_t* th = schedule_call(call_index++, call_num, copyout_index,
 					     num_args, args, input_pos, call_props);
 
-		if (colliding && (call_index % 2) == 0) {
-			// Don't wait for every other call.
-			// We already have results from the previous execution.
+		if (call_props.detached) {
+			if (!flag_threaded)
+				fail("SYZFAIL: unable to detach a call in a non-threaded mode");
+			// Don't wait for a detached call to finish. We'll wait at the end.
 		} else if (flag_threaded) {
 			// Wait for call completion.
 			uint64 timeout_ms = syscall_timeout_ms + call->attrs.timeout * slowdown_scale;
@@ -823,7 +819,7 @@ retry:
 		memset(&call_props, 0, sizeof(call_props));
 	}
 
-	if (!colliding && !collide && running > 0) {
+	if (running > 0) {
 		// Give unfinished syscalls some additional time.
 		last_scheduled = 0;
 		uint64 wait_start = current_time_ms();
@@ -843,7 +839,7 @@ retry:
 			for (int i = 0; i < kMaxThreads; i++) {
 				thread_t* th = &threads[i];
 				if (th->executing) {
-					if (flag_coverage)
+					if (cover_collection_required())
 						cover_collect(&th->cov);
 					write_call_output(th, false);
 				}
@@ -855,26 +851,18 @@ retry:
 	close_fds();
 #endif
 
-	if (!colliding && !collide) {
+	write_extra_output();
+	// Check for new extra coverage in small intervals to avoid situation
+	// that we were killed on timeout before we write any.
+	// Check for extra coverage is very cheap, effectively a memory load.
+	const uint64 kSleepMs = 100;
+	for (uint64 i = 0; i < prog_extra_cover_timeout / kSleepMs; i++) {
+		sleep_ms(kSleepMs);
 		write_extra_output();
-		// Check for new extra coverage in small intervals to avoid situation
-		// that we were killed on timeout before we write any.
-		// Check for extra coverage is very cheap, effectively a memory load.
-		const uint64 kSleepMs = 100;
-		for (uint64 i = 0; i < prog_extra_cover_timeout / kSleepMs; i++) {
-			sleep_ms(kSleepMs);
-			write_extra_output();
-		}
-	}
-
-	if (flag_collide && !colliding && !has_fault_injection && !collide) {
-		debug("enabling collider\n");
-		collide = colliding = true;
-		goto retry;
 	}
 }
 
-thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 copyout_index, uint64 num_args, uint64* args, uint64* pos, call_props_t call_props)
+thread_t* schedule_call(int call_index, int call_num, uint64 copyout_index, uint64 num_args, uint64* args, uint64* pos, call_props_t call_props)
 {
 	// Find a spare thread to execute the call.
 	int i = 0;
@@ -895,7 +883,6 @@ thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 cop
 		failmsg("bad thread state in schedule", "ready=%d done=%d executing=%d",
 			event_isset(&th->ready), event_isset(&th->done), th->executing);
 	last_scheduled = th;
-	th->colliding = colliding;
 	th->copyout_pos = pos;
 	th->copyout_index = copyout_index;
 	event_reset(&th->done);
@@ -966,21 +953,20 @@ void handle_completion(thread_t* th)
 			event_isset(&th->ready), event_isset(&th->done), th->executing);
 	if (th->res != (intptr_t)-1)
 		copyout_call_results(th);
-	if (!collide && !th->colliding) {
-		write_call_output(th, true);
-		write_extra_output();
-	}
+
+	write_call_output(th, true);
+	write_extra_output();
 	th->executing = false;
 	running--;
 	if (running < 0) {
 		// This fires periodically for the past 2 years (see issue #502).
-		fprintf(stderr, "running=%d collide=%d completed=%d flag_threaded=%d flag_collide=%d current=%d\n",
-			running, collide, completed, flag_threaded, flag_collide, th->id);
+		fprintf(stderr, "running=%d completed=%d flag_threaded=%d current=%d\n",
+			running, completed, flag_threaded, th->id);
 		for (int i = 0; i < kMaxThreads; i++) {
 			thread_t* th1 = &threads[i];
-			fprintf(stderr, "th #%2d: created=%d executing=%d colliding=%d"
+			fprintf(stderr, "th #%2d: created=%d executing=%d"
 					" ready=%d done=%d call_index=%d res=%lld reserrno=%d\n",
-				i, th1->created, th1->executing, th1->colliding,
+				i, th1->created, th1->executing,
 				event_isset(&th1->ready), event_isset(&th1->done),
 				th1->call_index, (uint64)th1->res, th1->reserrno);
 		}
@@ -1059,7 +1045,7 @@ void write_call_output(thread_t* th, bool finished)
 		}
 		// Write out number of comparisons.
 		*comps_count_pos = comps_size;
-	} else if (flag_coverage) {
+	} else if (flag_collect_signal) {
 		if (is_kernel_64_bit)
 			write_coverage_signal<uint64>(&th->cov, signal_count_pos, cover_count_pos);
 		else
@@ -1092,7 +1078,7 @@ void write_call_output(thread_t* th, bool finished)
 void write_extra_output()
 {
 #if SYZ_EXECUTOR_USES_SHMEM
-	if (!flag_coverage || !flag_extra_coverage || flag_comparisons)
+	if (!flag_coverage || !flag_collect_cover || !flag_extra_coverage || flag_comparisons)
 		return;
 	cover_collect(&extra_cov);
 	if (!extra_cov.size)
@@ -1131,7 +1117,7 @@ void* worker_thread(void* arg)
 {
 	thread_t* th = (thread_t*)arg;
 	current_thread = th;
-	if (flag_coverage)
+	if (cover_collection_required())
 		cover_enable(&th->cov, flag_comparisons, false);
 	for (;;) {
 		event_wait(&th->ready);
@@ -1157,8 +1143,6 @@ void execute_call(thread_t* th)
 	int fail_fd = -1;
 	th->soft_fail_state = false;
 	if (th->call_props.fail_nth > 0) {
-		if (collide)
-			fail("both collide and fault injection are enabled");
 		fail_fd = inject_fault(th->call_props.fail_nth);
 		th->soft_fail_state = true;
 	}

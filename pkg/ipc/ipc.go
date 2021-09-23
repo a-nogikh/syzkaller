@@ -52,8 +52,8 @@ const (
 	FlagDedupCover                                 // deduplicate coverage in executor
 	FlagCollectComps                               // collect KCOV comparisons
 	FlagThreaded                                   // use multiple threads to mitigate blocked syscalls
-	FlagCollide                                    // collide syscalls to provoke data races
 	FlagEnableCoverageFilter                       // setup and use bitmap to do coverage filter
+	FlagCollectSignal
 )
 
 type ExecOpts struct {

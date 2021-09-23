@@ -185,6 +185,15 @@ func (p *Prog) HasFaultInjection() bool {
 	return false
 }
 
+func (p *Prog) HasDetached() bool {
+	for _, call := range p.Calls {
+		if call.Props.Detached {
+			return true
+		}
+	}
+	return false
+}
+
 type CallFlags int
 
 const (

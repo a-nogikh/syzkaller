@@ -560,6 +560,8 @@ func (jp *JobProcessor) testPatch(job *Job, mgrcfg *mgrconfig.Config) error {
 		}
 	}
 	log.Logf(0, "job: testing...")
+	// TODO: now that there's no separate collide mode, we should probably consider transforming
+	// the reproducer into numerous mutated reproducers with detached flags.
 	results, err := env.Test(3, req.ReproSyz, req.ReproOpts, req.ReproC)
 	if err != nil {
 		return err

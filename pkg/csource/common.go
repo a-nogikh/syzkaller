@@ -103,7 +103,7 @@ func commonDefines(p *prog.Prog, opts Options) map[string]bool {
 		"SYZ_SANDBOX_NAMESPACE":         opts.Sandbox == sandboxNamespace,
 		"SYZ_SANDBOX_ANDROID":           opts.Sandbox == sandboxAndroid,
 		"SYZ_THREADED":                  opts.Threaded,
-		"SYZ_COLLIDE":                   opts.Collide,
+		"SYZ_DETACHED":                  p.HasDetached(),
 		"SYZ_REPEAT":                    opts.Repeat,
 		"SYZ_REPEAT_TIMES":              opts.RepeatTimes > 1,
 		"SYZ_MULTI_PROC":                opts.Procs > 1,
