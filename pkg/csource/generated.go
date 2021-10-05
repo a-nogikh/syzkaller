@@ -10430,8 +10430,8 @@ static void loop(void)
 			th->call = call;
 			__atomic_fetch_add(&running, 1, __ATOMIC_RELAXED);
 			event_set(&th->ready);
-#if SYZ_DETACHED
-			if (/*{{{DETACHED_CONDITIONS}}}*/)
+#if SYZ_ASYNC
+			if (/*{{{ASYNC_CONDITIONS}}}*/)
 				break;
 #endif
 			event_timedwait(&th->done, /*{{{CALL_TIMEOUT_MS}}}*/);

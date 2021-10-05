@@ -81,6 +81,7 @@ const (
 	StatSmash
 	StatHint
 	StatSeed
+	StatCollide
 	StatCount
 )
 
@@ -93,6 +94,7 @@ var statNames = [StatCount]string{
 	StatSmash:     "exec smash",
 	StatHint:      "exec hints",
 	StatSeed:      "exec seeds",
+	StatCollide:   "exec collide",
 }
 
 type OutputType int
@@ -173,9 +175,6 @@ func main() {
 		ipcExecOpts:    execOpts,
 		gitRevision:    prog.GitRevision,
 		targetRevision: target.Revision,
-	}
-	if checkArgs.ipcConfig.Flags&ipc.FlagSignal != 0 {
-		checkArgs.ipcExecOpts.Flags |= ipc.FlagCollectSignal
 	}
 	if *flagTest {
 		testImage(*flagManager, checkArgs)

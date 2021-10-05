@@ -185,9 +185,9 @@ func (p *Prog) HasFaultInjection() bool {
 	return false
 }
 
-func (p *Prog) HasDetached() bool {
+func (p *Prog) HasAsync() bool {
 	for _, call := range p.Calls {
-		if call.Props.Detached {
+		if call.Props.Async {
 			return true
 		}
 	}

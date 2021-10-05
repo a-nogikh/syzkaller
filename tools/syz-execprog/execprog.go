@@ -38,6 +38,17 @@ var (
 	flagEnable    = flag.String("enable", "none", "enable only listed additional features")
 	flagDisable   = flag.String("disable", "none", "enable all additional features except listed")
 	// The following flag is only kept to let syzkaller remain compatible with older execprog versions.
+	// In order to test incoming patches or perform bug bisection, syz-ci must use the exact syzkaller
+	// version that detected the bug (as descriptions and syntax could've already been changed), and
+	// therefore it must be able to invoke older versions of syz-execprog.
+	// Unfortunately there's no clean way to drop that flag from newer versions of syz-execprog. If it
+	// were false by default, it would be easy - we could modify `instance.ExecprogCmd` only to pass it
+	// when it's true - which would never be the case in the newer versions (this is how we got rid of
+	// fault injection args). But the collide flag was true by default, so it must be passed by value
+	// (-collide=%v). The least kludgy solution is to silently accept this flag also in the newer versions
+	// of syzkaller, but do not process it, as there's no such functionality anymore.
+	// Note, however, that we do not have to do the same for `syz-prog2c`, as `collide` was there false
+	// by default.
 	flagCollide = flag.Bool("collide", false, "(DEPRECATED) collide syscalls to provoke data races")
 )
 

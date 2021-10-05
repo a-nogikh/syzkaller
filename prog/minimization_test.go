@@ -171,10 +171,10 @@ func TestMinimize(t *testing.T) {
 			"pipe2(0x0, 0x0) (fail_nth: 5)\n",
 			-1,
 		},
-		// Clear unneeded detached flag.
+		// Clear unneeded async flag.
 		{
 			"linux", "amd64",
-			"pipe2(0x0, 0x0) (detached)\n",
+			"pipe2(0x0, 0x0) (async)\n",
 			-1,
 			func(p *Prog, callIndex int) bool {
 				return len(p.Calls) == 1 && p.Calls[0].Meta.Name == "pipe2"
@@ -182,15 +182,15 @@ func TestMinimize(t *testing.T) {
 			"pipe2(0x0, 0x0)\n",
 			-1,
 		},
-		// Keep important detached flag.
+		// Keep important async flag.
 		{
 			"linux", "amd64",
-			"pipe2(0x0, 0x0) (detached)\n",
+			"pipe2(0x0, 0x0) (async)\n",
 			-1,
 			func(p *Prog, callIndex int) bool {
-				return len(p.Calls) == 1 && p.Calls[0].Meta.Name == "pipe2" && p.Calls[0].Props.Detached
+				return len(p.Calls) == 1 && p.Calls[0].Meta.Name == "pipe2" && p.Calls[0].Props.Async
 			},
-			"pipe2(0x0, 0x0) (detached)\n",
+			"pipe2(0x0, 0x0) (async)\n",
 			-1,
 		},
 	}

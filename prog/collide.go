@@ -9,12 +9,12 @@ import "math/rand"
 
 // TODO: add tests once the contents is more or less finalized.
 
-// Ensures that, if a detached call produces a resource, then
+// Ensures that, if an async call produces a resource, then
 // it is [distanced] from a call consuming the resource at least
-// by one non-detached call.
-// This does not give 100% guarantee that the detached call finishes
+// by one non-async call.
+// This does not give 100% guarantee that the async call finishes
 // by that time, but hopefully this is enough for most cases.
-func AssignRandomDetached(origProg *Prog, rand *rand.Rand) *Prog {
+func AssignRandomAsync(origProg *Prog, rand *rand.Rand) *Prog {
 	prog := origProg.Clone()
 	unassigned := make(map[*ResultArg]bool)
 	for idx, call := range prog.Calls {
@@ -33,19 +33,19 @@ func AssignRandomDetached(origProg *Prog, rand *rand.Rand) *Prog {
 			}
 
 			if res.Dir() != DirIn {
-				// If we make this call detached, these resources won't be immediately available.
+				// If we make this call async, these resources won't be immediately available.
 				produces[res] = true
 			}
 		})
 
 		if undoPrev {
-			prog.Calls[idx-1].Props.Detached = false
+			prog.Calls[idx-1].Props.Async = false
 			unassigned = make(map[*ResultArg]bool)
 		}
-		// Assign detached with 50% probability.
+		// Assign async with 50% probability.
 
-		call.Props.Detached = rand.Intn(2) == 0
-		if call.Props.Detached {
+		call.Props.Async = rand.Intn(2) == 0
+		if call.Props.Async {
 			for res := range produces {
 				unassigned[res] = true
 			}
@@ -54,15 +54,18 @@ func AssignRandomDetached(origProg *Prog, rand *rand.Rand) *Prog {
 		}
 	}
 
-	// An extra pass - limiting the total number of detached calls.
-	const maxDetachedCnt = 6
-	detachedCnt := 0
-	for _, call := range prog.Calls {
-		if call.Props.Detached {
-			detachedCnt++
+	// An extra pass - limiting the total number of async calls.
+	// It seems more reasonable to preserve async class towards the end of the program, as
+	// the first one usually only do simple initialization.
+	const maxAsyncCnt = 6
+	asyncCnt := 0
+	for i := len(prog.Calls) - 1; i >= 0; i-- {
+		call := prog.Calls[i]
+		if call.Props.Async {
+			asyncCnt++
 		}
-		if detachedCnt > maxDetachedCnt {
-			call.Props.Detached = false
+		if asyncCnt > maxAsyncCnt {
+			call.Props.Async = false
 		}
 	}
 	return prog

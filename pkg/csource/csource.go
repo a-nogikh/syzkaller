@@ -104,15 +104,15 @@ func Write(p *prog.Prog, opts Options) ([]byte, error) {
 		}
 	}
 	replacements["CALL_TIMEOUT_MS"] = timeoutExpr
-	if p.HasDetached() {
+	if p.HasAsync() {
 		conditions := []string{}
 		for idx, call := range p.Calls {
-			if !call.Props.Detached {
+			if !call.Props.Async {
 				continue
 			}
 			conditions = append(conditions, fmt.Sprintf("call == %v", idx))
 		}
-		replacements["DETACHED_CONDITIONS"] = strings.Join(conditions, " || ")
+		replacements["ASYNC_CONDITIONS"] = strings.Join(conditions, " || ")
 	}
 
 	result, err := createCommonHeader(p, mmapProg, replacements, opts)

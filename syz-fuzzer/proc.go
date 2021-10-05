@@ -40,13 +40,11 @@ func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
 		return nil, err
 	}
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano() + int64(pid)*1e12))
-	baseOpts := *fuzzer.execOpts
-	execOpts := baseOpts
-	// TODO: make the flag default and unmask it here.
-	execOpts.Flags |= ipc.FlagCollectSignal
-	execOptsCover := baseOpts
+	execOptsCollide := *fuzzer.execOpts
+	execOptsCollide.Flags &= ^ipc.FlagCollectSignal
+	execOptsCover := *fuzzer.execOpts
 	execOptsCover.Flags |= ipc.FlagCollectCover
-	execOptsComps := baseOpts
+	execOptsComps := *fuzzer.execOpts
 	execOptsComps.Flags |= ipc.FlagCollectComps
 	proc := &Proc{
 		fuzzer:          fuzzer,
@@ -54,7 +52,7 @@ func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
 		env:             env,
 		rnd:             rnd,
 		execOpts:        fuzzer.execOpts,
-		execOptsCollide: &execOpts,
+		execOptsCollide: &execOptsCollide,
 		execOptsCover:   &execOptsCover,
 		execOptsComps:   &execOptsComps,
 	}
@@ -75,7 +73,7 @@ func (proc *Proc) loop() {
 			case *WorkTriage:
 				proc.triageInput(item)
 			case *WorkCandidate:
-				proc.execute(proc.execOpts, item.p, item.flags, StatCandidate)
+				proc.executeAndCollide(proc.execOpts, item.p, item.flags, StatCandidate)
 			case *WorkSmash:
 				proc.smashInput(item)
 			default:
@@ -90,13 +88,13 @@ func (proc *Proc) loop() {
 			// Generate a new prog.
 			p := proc.fuzzer.target.Generate(proc.rnd, prog.RecommendedCalls, ct)
 			log.Logf(1, "#%v: generated", proc.pid)
-			proc.execute(proc.execOpts, p, ProgNormal, StatGenerate)
+			proc.executeAndCollide(proc.execOpts, p, ProgNormal, StatGenerate)
 		} else {
 			// Mutate an existing prog.
 			p := fuzzerSnapshot.chooseProgram(proc.rnd).Clone()
 			p.Mutate(proc.rnd, prog.RecommendedCalls, ct, fuzzerSnapshot.corpus)
 			log.Logf(1, "#%v: mutated", proc.pid)
-			proc.execute(proc.execOpts, p, ProgNormal, StatFuzz)
+			proc.executeAndCollide(proc.execOpts, p, ProgNormal, StatFuzz)
 		}
 	}
 }
@@ -147,7 +145,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 		item.p, item.call = prog.Minimize(item.p, item.call, false,
 			func(p1 *prog.Prog, call1 int) bool {
 				for i := 0; i < minimizeAttempts; i++ {
-					info := proc.executeNoCollide(proc.execOpts, p1, ProgNormal, StatMinimize)
+					info := proc.execute(proc.execOpts, p1, ProgNormal, StatMinimize)
 					if !reexecutionSuccess(info, &item.info, call1) {
 						// The call was not executed or failed.
 						continue
@@ -214,7 +212,7 @@ func (proc *Proc) smashInput(item *WorkSmash) {
 		p := item.p.Clone()
 		p.Mutate(proc.rnd, prog.RecommendedCalls, proc.fuzzer.choiceTable, fuzzerSnapshot.corpus)
 		log.Logf(1, "#%v: smash mutated", proc.pid)
-		proc.execute(proc.execOpts, p, ProgNormal, StatSmash)
+		proc.executeAndCollide(proc.execOpts, p, ProgNormal, StatSmash)
 	}
 }
 
@@ -233,7 +231,7 @@ func (proc *Proc) failCall(p *prog.Prog, call int) {
 func (proc *Proc) executeHintSeed(p *prog.Prog, call int) {
 	log.Logf(1, "#%v: collecting comparisons", proc.pid)
 	// First execute the original program to dump comparisons from KCOV.
-	info := proc.executeNoCollide(proc.execOptsComps, p, ProgNormal, StatSeed)
+	info := proc.execute(proc.execOptsComps, p, ProgNormal, StatSeed)
 	if info == nil {
 		return
 	}
@@ -247,7 +245,7 @@ func (proc *Proc) executeHintSeed(p *prog.Prog, call int) {
 	})
 }
 
-func (proc *Proc) executeNoCollide(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) *ipc.ProgInfo {
+func (proc *Proc) execute(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) *ipc.ProgInfo {
 	info := proc.executeRaw(execOpts, p, stat)
 	if info == nil {
 		return nil
@@ -276,22 +274,21 @@ func (proc *Proc) enqueueCallTriage(p *prog.Prog, flags ProgTypes, callIndex int
 	})
 }
 
-func (proc *Proc) execute(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) *ipc.ProgInfo {
-	info := proc.executeNoCollide(execOpts, p, flags, stat)
+func (proc *Proc) executeAndCollide(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) {
+	proc.execute(execOpts, p, flags, stat)
 
-	if execOpts.Flags&ipc.FlagThreaded == 0 {
+	if proc.execOptsCollide.Flags&ipc.FlagThreaded == 0 {
 		// We cannot collide syscalls without being in the threaded mode.
-		return info
+		return
 	}
-	const collideIterations = 1
+	const collideIterations = 2
 	for i := 0; i < collideIterations; i++ {
-		proc.executeRaw(proc.execOptsCollide, proc.randomCollide(p), stat)
+		proc.executeRaw(proc.execOptsCollide, proc.randomCollide(p), StatCollide)
 	}
-	return info
 }
 
 func (proc *Proc) randomCollide(origP *prog.Prog) *prog.Prog {
-	return prog.AssignRandomDetached(origP, proc.rnd)
+	return prog.AssignRandomAsync(origP, proc.rnd)
 }
 
 func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog, stat Stat) *ipc.ProgInfo {

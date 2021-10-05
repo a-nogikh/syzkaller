@@ -111,10 +111,10 @@ func minimizeCallProps(p0 *Prog, callIndex, callIndex0 int, pred func(*Prog, int
 		}
 	}
 
-	// Try to drop detached.
-	if props.Detached {
+	// Try to drop async.
+	if props.Async {
 		p := p0.Clone()
-		p.Calls[callIndex].Props.Detached = false
+		p.Calls[callIndex].Props.Async = false
 		if pred(p, callIndex0) {
 			p0 = p
 		}

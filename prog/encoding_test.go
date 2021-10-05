@@ -432,7 +432,7 @@ func TestSerializeCallProps(t *testing.T) {
 			nil,
 		},
 		{
-			"serialize0(0x0) (detached)\n",
+			"serialize0(0x0) (async)\n",
 			[]CallProps{{0, true}},
 		},
 	}

@@ -143,10 +143,10 @@ static bool flag_vhci_injection;
 static bool flag_wifi;
 
 static bool flag_collect_cover;
+static bool flag_collect_signal;
 static bool flag_dedup_cover;
 static bool flag_threaded;
 static bool flag_coverage_filter;
-static bool flag_collect_signal;
 
 // If true, then executor should write the comparisons data to fuzzer.
 static bool flag_comparisons;
@@ -584,12 +584,13 @@ void receive_execute()
 	syscall_timeout_ms = req.syscall_timeout_ms;
 	program_timeout_ms = req.program_timeout_ms;
 	slowdown_scale = req.slowdown_scale;
-	flag_collect_cover = req.exec_flags & (1 << 0);
-	flag_dedup_cover = req.exec_flags & (1 << 1);
-	flag_comparisons = req.exec_flags & (1 << 2);
-	flag_threaded = req.exec_flags & (1 << 3);
-	flag_coverage_filter = req.exec_flags & (1 << 4);
-	flag_collect_signal = req.exec_flags & (1 << 5);
+	flag_collect_signal = req.exec_flags & (1 << 0);
+	flag_collect_cover = req.exec_flags & (1 << 1);
+	flag_dedup_cover = req.exec_flags & (1 << 2);
+	flag_comparisons = req.exec_flags & (1 << 3);
+	flag_threaded = req.exec_flags & (1 << 4);
+	flag_coverage_filter = req.exec_flags & (1 << 5);
+
 	debug("[%llums] exec opts: procid=%llu threaded=%d cover=%d comps=%d dedup=%d signal=%d"
 	      " timeouts=%llu/%llu/%llu prog=%llu filter=%d\n",
 	      current_time_ms() - start_time_ms, procid, flag_threaded, flag_collect_cover,
@@ -664,7 +665,6 @@ void execute_one()
 	int call_index = 0;
 	uint64 prog_extra_timeout = 0;
 	uint64 prog_extra_cover_timeout = 0;
-	bool has_fault_injection = false;
 	call_props_t call_props;
 	memset(&call_props, 0, sizeof(call_props));
 
@@ -774,7 +774,6 @@ void execute_one()
 			prog_extra_cover_timeout = std::max(prog_extra_cover_timeout, 500 * slowdown_scale);
 		if (strncmp(syscalls[call_num].name, "syz_80211_inject_frame", strlen("syz_80211_inject_frame")) == 0)
 			prog_extra_cover_timeout = std::max(prog_extra_cover_timeout, 300 * slowdown_scale);
-		has_fault_injection |= (call_props.fail_nth > 0);
 		uint64 copyout_index = read_input(&input_pos);
 		uint64 num_args = read_input(&input_pos);
 		if (num_args > kMaxArgs)
@@ -787,10 +786,10 @@ void execute_one()
 		thread_t* th = schedule_call(call_index++, call_num, copyout_index,
 					     num_args, args, input_pos, call_props);
 
-		if (call_props.detached) {
+		if (call_props.async) {
 			if (!flag_threaded)
-				fail("SYZFAIL: unable to detach a call in a non-threaded mode");
-			// Don't wait for a detached call to finish. We'll wait at the end.
+				fail("SYZFAIL: unable to do an async call in a non-threaded mode");
+			// Don't wait for an async call to finish. We'll wait at the end.
 		} else if (flag_threaded) {
 			// Wait for call completion.
 			uint64 timeout_ms = syscall_timeout_ms + call->attrs.timeout * slowdown_scale;

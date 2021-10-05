@@ -402,7 +402,6 @@ func (ctx *Context) createSyzTest(p *prog.Prog, sandbox string, threaded, cov bo
 		return nil, err
 	}
 	cfg.Flags |= sandboxFlags
-	opts.Flags |= ipc.FlagCollectSignal
 	if threaded {
 		opts.Flags |= ipc.FlagThreaded
 	}

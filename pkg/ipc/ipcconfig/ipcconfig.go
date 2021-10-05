@@ -45,6 +45,9 @@ func Default(target *prog.Target) (*ipc.Config, *ipc.ExecOpts, error) {
 	if *flagThreaded {
 		opts.Flags |= ipc.FlagThreaded
 	}
+	if *flagSignal {
+		opts.Flags |= ipc.FlagCollectSignal
+	}
 
 	return c, opts, nil
 }

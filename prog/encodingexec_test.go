@@ -463,7 +463,7 @@ func TestSerializeForExec(t *testing.T) {
 			nil,
 		},
 		{
-			"test() (fail_nth: 3, detached)",
+			"test() (fail_nth: 3, async)",
 			[]uint64{
 				execInstrSetProps, 3, 1,
 				callID("test"), ExecNoCopyout, 0,
