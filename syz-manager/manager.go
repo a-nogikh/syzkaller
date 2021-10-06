@@ -285,10 +285,9 @@ type ReproResult struct {
 func (mgr *Manager) vmLoop() {
 	log.Logf(0, "booting test machines...")
 	log.Logf(0, "wait for the connection from test machine...")
-	instancesPerRepro := 4
 	vmCount := mgr.vmPool.Count()
-	if instancesPerRepro > vmCount {
-		instancesPerRepro = vmCount
+	if mgr.cfg.VMsPerRepro > vmCount {
+		mgr.cfg.VMsPerRepro = vmCount
 	}
 	bootInstance := make(chan int)
 	go func() {
@@ -329,19 +328,19 @@ func (mgr *Manager) vmLoop() {
 			len(pendingRepro), len(reproducing), len(reproQueue))
 
 		canRepro := func() bool {
-			return phase >= phaseTriagedHub &&
-				len(reproQueue) != 0 && reproInstances+instancesPerRepro <= vmCount
+			return phase >= phaseTriagedHub && len(reproQueue) != 0 &&
+				reproInstances+mgr.cfg.VMsPerRepro <= vmCount-mgr.cfg.NoReproVMs
 		}
 
 		if shutdown != nil {
-			for canRepro() && len(instances) >= instancesPerRepro {
+			for canRepro() && len(instances) >= mgr.cfg.VMsPerRepro {
 				last := len(reproQueue) - 1
 				crash := reproQueue[last]
 				reproQueue[last] = nil
 				reproQueue = reproQueue[:last]
-				vmIndexes := append([]int{}, instances[len(instances)-instancesPerRepro:]...)
-				instances = instances[:len(instances)-instancesPerRepro]
-				reproInstances += instancesPerRepro
+				vmIndexes := append([]int{}, instances[len(instances)-mgr.cfg.VMsPerRepro:]...)
+				instances = instances[:len(instances)-mgr.cfg.VMsPerRepro]
+				reproInstances += mgr.cfg.VMsPerRepro
 				atomic.AddUint32(&mgr.numReproducing, 1)
 				log.Logf(1, "loop: starting repro of '%v' on instances %+v", crash.Title, vmIndexes)
 				go func() {
@@ -412,7 +411,7 @@ func (mgr *Manager) vmLoop() {
 			}
 			delete(reproducing, res.report0.Title)
 			instances = append(instances, res.instances...)
-			reproInstances -= instancesPerRepro
+			reproInstances -= mgr.cfg.VMsPerRepro
 			if res.res == nil {
 				if !res.hub {
 					mgr.saveFailedRepro(res.report0, res.stats)
