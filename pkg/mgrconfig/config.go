@@ -135,6 +135,17 @@ type Config struct {
 	// Reproduce, localize and minimize crashers (default: true).
 	Reproduce bool `json:"reproduce"`
 
+	// The number of VMs that are used to reproduce each individual bug (default: 4).
+	// The value must be greater than 0. If it is bigger than the total number of VMs,
+	// syzkaller will use that value instead.
+	VMsPerRepro int `json:"vms_per_repro"`
+
+	// The lower bound of the number of VMs that are never used to reproduce bugs.
+	// Can be helpful e.g. to ensure that the pool of fuzzing VMs is never exhaused and
+	// syzkaller continues fuzzing no matter how many new bugs are encountered.
+	// By default it is 0, i.e. all available VMs could be reserved for reproduction.
+	NoReproVMs int `json:"no_repro_vms,omitempty"`
+
 	// List of syscalls to test (optional). For example:
 	//	"enable_syscalls": [ "mmap", "openat$ashmem", "ioctl$ASHMEM*" ]
 	EnabledSyscalls []string `json:"enable_syscalls,omitempty"`

@@ -81,6 +81,7 @@ func defaultValues() *Config {
 		SSHUser:      "root",
 		Cover:        true,
 		Reproduce:    true,
+		VMsPerRepro:  4,
 		Sandbox:      "none",
 		RPC:          ":0",
 		MaxCrashLogs: 100,
@@ -167,6 +168,13 @@ func Complete(cfg *Config) error {
 			return err
 		}
 	}
+	if cfg.VMsPerRepro <= 0 {
+		return fmt.Errorf("vms_per_repro cannot be less than or equal to 0")
+	}
+	if cfg.NoReproVMs < 0 {
+		return fmt.Errorf("no_repro_vms cannot be less than 0")
+	}
+
 	var err error
 	cfg.Syscalls, err = ParseEnabledSyscalls(cfg.Target, cfg.EnabledSyscalls, cfg.DisabledSyscalls)
 	if err != nil {
