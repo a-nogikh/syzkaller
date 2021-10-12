@@ -51,7 +51,7 @@ func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
 		pid:               pid,
 		env:               env,
 		rnd:               rnd,
-		execOpts:          fuzzer.execOpts,
+		execOpts:          &execOptsNoCollide,
 		execOptsCover:     &execOptsCover,
 		execOptsComps:     &execOptsComps,
 		execOptsNoCollide: &execOptsNoCollide,

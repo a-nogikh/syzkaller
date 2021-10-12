@@ -158,7 +158,7 @@ func (opts Options) checkLinuxOnly(OS string) error {
 func DefaultOpts(cfg *mgrconfig.Config) Options {
 	opts := Options{
 		Threaded:   true,
-		Collide:    true,
+		Collide:    false,
 		Repeat:     true,
 		Procs:      cfg.Procs,
 		Slowdown:   cfg.Timeouts.Slowdown,
