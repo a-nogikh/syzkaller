@@ -281,7 +281,7 @@ func (proc *Proc) executeAndCollide(execOpts *ipc.ExecOpts, p *prog.Prog, flags 
 		// We cannot collide syscalls without being in the threaded mode.
 		return
 	}
-	const collideIterations = 2
+	const collideIterations = 1
 	for i := 0; i < collideIterations; i++ {
 		proc.executeRaw(proc.execOptsCollide, proc.randomCollide(p), StatCollide)
 	}
