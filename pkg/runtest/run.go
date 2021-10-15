@@ -444,7 +444,6 @@ func (ctx *Context) createSyzTest(p *prog.Prog, sandbox string, threaded, cov bo
 func (ctx *Context) createCTest(p *prog.Prog, sandbox string, threaded bool, times int) (*RunRequest, error) {
 	opts := csource.Options{
 		Threaded:    threaded,
-		Collide:     false,
 		Repeat:      times > 1,
 		RepeatTimes: times,
 		Procs:       1,
