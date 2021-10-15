@@ -403,7 +403,7 @@ func (ctx *Context) createSyzTest(p *prog.Prog, sandbox string, threaded, cov bo
 	}
 	cfg.Flags |= sandboxFlags
 	if threaded {
-		opts.Flags |= ipc.FlagThreaded | ipc.FlagCollide
+		opts.Flags |= ipc.FlagThreaded
 	}
 	if cov {
 		cfg.Flags |= ipc.FlagSignal
@@ -481,7 +481,7 @@ func (ctx *Context) createCTest(p *prog.Prog, sandbox string, threaded bool, tim
 	}
 	var ipcFlags ipc.ExecFlags
 	if threaded {
-		ipcFlags |= ipc.FlagThreaded | ipc.FlagCollide
+		ipcFlags |= ipc.FlagThreaded
 	}
 	req := &RunRequest{
 		P:   p,
