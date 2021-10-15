@@ -181,7 +181,6 @@ const uint64 binary_format_stroct = 4;
 const uint64 no_copyout = -1;
 
 static int running;
-static bool collide;
 uint32 completed;
 bool is_kernel_64_bit = true;
 
@@ -646,20 +645,14 @@ void reply_execute(int status)
 // execute_one executes program stored in input_data.
 void execute_one()
 {
-	// Duplicate global collide variable on stack.
-	// Fuzzer once come up with ioctl(fd, FIONREAD, 0x920000),
-	// where 0x920000 was exactly collide address, so every iteration reset collide to 0.
-	bool colliding = false;
 #if SYZ_EXECUTOR_USES_SHMEM
 	output_pos = output_data;
 	write_output(0); // Number of executed syscalls (updated later).
 #endif
 	uint64 start = current_time_ms();
-
-retry:
 	uint64* input_pos = (uint64*)input_data;
 
-	if (flag_coverage && !colliding) {
+	if (flag_coverage) {
 		if (!flag_threaded)
 			cover_enable(&threads[0].cov, flag_comparisons, false);
 		if (flag_extra_coverage)
@@ -789,13 +782,10 @@ retry:
 			args[i] = read_arg(&input_pos);
 		for (uint64 i = num_args; i < kMaxArgs; i++)
 			args[i] = 0;
-		thread_t* th = schedule_call(call_index++, call_num, colliding, copyout_index,
+		thread_t* th = schedule_call(call_index++, call_num, false, copyout_index,
 					     num_args, args, input_pos, call_props);
 
-		if (colliding && (call_index % 2) == 0) {
-			// Don't wait for every other call.
-			// We already have results from the previous execution.
-		} else if (flag_threaded) {
+		if (flag_threaded) {
 			// Wait for call completion.
 			uint64 timeout_ms = syscall_timeout_ms + call->attrs.timeout * slowdown_scale;
 			// This is because of printing pre/post call. Ideally we print everything in the main thread
@@ -823,7 +813,7 @@ retry:
 		memset(&call_props, 0, sizeof(call_props));
 	}
 
-	if (!colliding && !collide && running > 0) {
+	if (running > 0) {
 		// Give unfinished syscalls some additional time.
 		last_scheduled = 0;
 		uint64 wait_start = current_time_ms();
@@ -855,22 +845,14 @@ retry:
 	close_fds();
 #endif
 
-	if (!colliding && !collide) {
+	write_extra_output();
+	// Check for new extra coverage in small intervals to avoid situation
+	// that we were killed on timeout before we write any.
+	// Check for extra coverage is very cheap, effectively a memory load.
+	const uint64 kSleepMs = 100;
+	for (uint64 i = 0; i < prog_extra_cover_timeout / kSleepMs; i++) {
+		sleep_ms(kSleepMs);
 		write_extra_output();
-		// Check for new extra coverage in small intervals to avoid situation
-		// that we were killed on timeout before we write any.
-		// Check for extra coverage is very cheap, effectively a memory load.
-		const uint64 kSleepMs = 100;
-		for (uint64 i = 0; i < prog_extra_cover_timeout / kSleepMs; i++) {
-			sleep_ms(kSleepMs);
-			write_extra_output();
-		}
-	}
-
-	if (flag_collide && !colliding && !has_fault_injection && !collide) {
-		debug("enabling collider\n");
-		collide = colliding = true;
-		goto retry;
 	}
 }
 
@@ -966,16 +948,14 @@ void handle_completion(thread_t* th)
 			event_isset(&th->ready), event_isset(&th->done), th->executing);
 	if (th->res != (intptr_t)-1)
 		copyout_call_results(th);
-	if (!collide && !th->colliding) {
-		write_call_output(th, true);
-		write_extra_output();
-	}
+	write_call_output(th, true);
+	write_extra_output();
 	th->executing = false;
 	running--;
 	if (running < 0) {
 		// This fires periodically for the past 2 years (see issue #502).
 		fprintf(stderr, "running=%d collide=%d completed=%d flag_threaded=%d flag_collide=%d current=%d\n",
-			running, collide, completed, flag_threaded, flag_collide, th->id);
+			running, false, completed, flag_threaded, flag_collide, th->id);
 		for (int i = 0; i < kMaxThreads; i++) {
 			thread_t* th1 = &threads[i];
 			fprintf(stderr, "th #%2d: created=%d executing=%d colliding=%d"
@@ -1157,8 +1137,6 @@ void execute_call(thread_t* th)
 	int fail_fd = -1;
 	th->soft_fail_state = false;
 	if (th->call_props.fail_nth > 0) {
-		if (collide)
-			fail("both collide and fault injection are enabled");
 		fail_fd = inject_fault(th->call_props.fail_nth);
 		th->soft_fail_state = true;
 	}
