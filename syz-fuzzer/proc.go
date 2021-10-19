@@ -309,6 +309,13 @@ func (proc *Proc) assignRandomRerun(p *prog.Prog) {
 }
 
 func (proc *Proc) randomCollide(origP *prog.Prog) *prog.Prog {
+	// Use old-style colliding with a 50% probability.
+	if proc.rnd.Intn(2) != 0 {
+		p, err := prog.OldStyleCollide(origP, proc.rnd)
+		if err == nil {
+			return p
+		}
+	}
 	return prog.AssignRandomAsync(origP, proc.rnd)
 }
 
