@@ -111,17 +111,17 @@ func (serv *RPCServer) Connect(a *rpctype.ConnectArgs, r *rpctype.ConnectRes) er
 	r.EnabledCalls = serv.cfg.Syscalls
 	r.GitRevision = prog.GitRevision
 	r.TargetRevision = serv.cfg.Target.Revision
-	if serv.mgr.rotateCorpus() && serv.rnd.Intn(5) == 0 {
-		// We do rotation every other time because there are no objective
-		// proofs regarding its efficiency either way.
-		// Also, rotation gives significantly skewed syscall selection
-		// (run prog.TestRotationCoverage), it may or may not be OK.
-		r.CheckResult = serv.rotateCorpus(f, corpus)
-	} else {
-		r.CheckResult = serv.checkResult
-		f.inputs = corpus
-		f.newMaxSignal = serv.maxSignal.Copy()
-	}
+	//	if serv.mgr.rotateCorpus() && serv.rnd.Intn(5) == 0 {
+	// We do rotation every other time because there are no objective
+	// proofs regarding its efficiency either way.
+	// Also, rotation gives significantly skewed syscall selection
+	// (run prog.TestRotationCoverage), it may or may not be OK.
+	//		r.CheckResult = serv.rotateCorpus(f, corpus)
+	//} else {
+	r.CheckResult = serv.checkResult
+	f.inputs = corpus
+	f.newMaxSignal = serv.maxSignal.Copy()
+	//}
 	return nil
 }
 
