@@ -1145,35 +1145,37 @@ void execute_call(thread_t* th)
 
 	int fail_fd = -1;
 	th->soft_fail_state = false;
-	if (th->call_props.fail_nth > 0) {
-		fail_fd = inject_fault(th->call_props.fail_nth);
-		th->soft_fail_state = true;
+	for (int i = 0; i <= th->call_props.rerun; i++) {
+		if (th->call_props.fail_nth > 0) {
+			fail_fd = inject_fault(th->call_props.fail_nth);
+			th->soft_fail_state = true;
+		}
+
+		if (cover_collection_required())
+			cover_reset(&th->cov);
+		// For pseudo-syscalls and user-space functions NONFAILING can abort before assigning to th->res.
+		// Arrange for res = -1 and errno = EFAULT result for such case.
+		th->res = -1;
+		errno = EFAULT;
+		NONFAILING(th->res = execute_syscall(call, th->args));
+
+		th->reserrno = errno;
+		// Our pseudo-syscalls may misbehave.
+		if ((th->res == -1 && th->reserrno == 0) || call->attrs.ignore_return)
+			th->reserrno = EINVAL;
+		// Reset the flag before the first possible fail().
+		th->soft_fail_state = false;
+
+		if (cover_collection_required()) {
+			cover_collect(&th->cov);
+			if (th->cov.size >= kCoverSize)
+				failmsg("too much cover", "thr=%d, cov=%u", th->id, th->cov.size);
+		}
+		th->fault_injected = false;
+
+		if (th->call_props.fail_nth > 0)
+			th->fault_injected = fault_injected(fail_fd);
 	}
-
-	if (flag_coverage)
-		cover_reset(&th->cov);
-	// For pseudo-syscalls and user-space functions NONFAILING can abort before assigning to th->res.
-	// Arrange for res = -1 and errno = EFAULT result for such case.
-	th->res = -1;
-	errno = EFAULT;
-	NONFAILING(th->res = execute_syscall(call, th->args));
-	th->reserrno = errno;
-	// Our pseudo-syscalls may misbehave.
-	if ((th->res == -1 && th->reserrno == 0) || call->attrs.ignore_return)
-		th->reserrno = EINVAL;
-	// Reset the flag before the first possible fail().
-	th->soft_fail_state = false;
-
-	if (flag_coverage) {
-		cover_collect(&th->cov);
-		if (th->cov.size >= kCoverSize)
-			failmsg("too much cover", "thr=%d, cov=%u", th->id, th->cov.size);
-	}
-	th->fault_injected = false;
-
-	if (th->call_props.fail_nth > 0)
-		th->fault_injected = fault_injected(fail_fd);
-
 	debug("#%d [%llums] <- %s=0x%llx errno=%d ",
 	      th->id, current_time_ms() - start_time_ms, call->name, (uint64)th->res, th->reserrno);
 	if (flag_coverage)
