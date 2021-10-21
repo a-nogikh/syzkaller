@@ -42,6 +42,8 @@ func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano() + int64(pid)*1e12))
 	execOptsCollide := *fuzzer.execOpts
 	execOptsCollide.Flags &= ^ipc.FlagCollectSignal
+	// We make some calls async, so it's reasonable to also decrease the overall timeout.
+	execOptsCollide.ProgTimeout = execOptsCollide.ProgTimeout * 2 / 3
 	execOptsCover := *fuzzer.execOpts
 	execOptsCover.Flags |= ipc.FlagCollectCover
 	execOptsComps := *fuzzer.execOpts
