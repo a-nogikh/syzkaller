@@ -851,14 +851,16 @@ void execute_one()
 	close_fds();
 #endif
 
-	write_extra_output();
-	// Check for new extra coverage in small intervals to avoid situation
-	// that we were killed on timeout before we write any.
-	// Check for extra coverage is very cheap, effectively a memory load.
-	const uint64 kSleepMs = 100;
-	for (uint64 i = 0; i < prog_extra_cover_timeout / kSleepMs; i++) {
-		sleep_ms(kSleepMs);
+	if (cover_collection_required() && flag_extra_coverage) {
 		write_extra_output();
+		// Check for new extra coverage in small intervals to avoid situation
+		// that we were killed on timeout before we write any.
+		// Check for extra coverage is very cheap, effectively a memory load.
+		const uint64 kSleepMs = 100;
+		for (uint64 i = 0; i < prog_extra_cover_timeout / kSleepMs; i++) {
+			sleep_ms(kSleepMs);
+			write_extra_output();
+		}
 	}
 }
 

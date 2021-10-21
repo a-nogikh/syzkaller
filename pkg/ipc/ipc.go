@@ -57,7 +57,8 @@ const (
 )
 
 type ExecOpts struct {
-	Flags ExecFlags
+	Flags       ExecFlags
+	ProgTimeout time.Duration
 }
 
 // Config is the configuration for Env.
@@ -723,13 +724,17 @@ func (c *command) wait() error {
 }
 
 func (c *command) exec(opts *ExecOpts, progData []byte) (output []byte, hanged bool, err0 error) {
+	progTimeout := opts.ProgTimeout
+	if progTimeout == 0 {
+		progTimeout = c.config.Timeouts.Program
+	}
 	req := &executeReq{
 		magic:            inMagic,
 		envFlags:         uint64(c.config.Flags),
 		execFlags:        uint64(opts.Flags),
 		pid:              uint64(c.pid),
 		syscallTimeoutMS: uint64(c.config.Timeouts.Syscall / time.Millisecond),
-		programTimeoutMS: uint64(c.config.Timeouts.Program / time.Millisecond),
+		programTimeoutMS: uint64(progTimeout / time.Millisecond),
 		slowdownScale:    uint64(c.config.Timeouts.Scale),
 		progSize:         uint64(len(progData)),
 	}
