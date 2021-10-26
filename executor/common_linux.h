@@ -3719,6 +3719,16 @@ static void sandbox_common()
 	unsigned i;
 	for (i = 0; i < sizeof(sysctls) / sizeof(sysctls[0]); i++)
 		write_file(sysctls[i].name, sysctls[i].value);
+
+	// Bind an instance of binderfs specific just to this executor - it will
+	// only be visible in its mount namespace and will help isolate binder
+	// devices during fuzzing.
+	// These commands will just silently fail if binderfs is not supported.
+	// Ideally it should have been added as a separate feature (with lots of
+	// minor changes throughout the code base), but it seems to be an overkill
+	// for just 2 simple lines of code.
+	mkdir("/dev/binderfs", 0700);
+	mount("binder", "/dev/binderfs", "binder", 0, NULL);
 }
 #endif
 

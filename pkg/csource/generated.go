@@ -8333,6 +8333,8 @@ static void sandbox_common()
 	unsigned i;
 	for (i = 0; i < sizeof(sysctls) / sizeof(sysctls[0]); i++)
 		write_file(sysctls[i].name, sysctls[i].value);
+	mkdir("/dev/binderfs", 0700);
+	mount("binder", "/dev/binderfs", "binder", 0, NULL);
 }
 #endif
 
