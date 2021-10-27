@@ -22,6 +22,9 @@ import (
 )
 
 func isSupported(c *prog.Syscall, target *prog.Target, sandbox string) (bool, string) {
+	if c.Attrs.AlwaysSupported {
+		return true, ""
+	}
 	if strings.HasPrefix(c.CallName, "syz_") {
 		return isSupportedSyzkall(c, target, sandbox)
 	}

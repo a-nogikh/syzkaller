@@ -36,5 +36,5 @@ binderfs_device {
 }
 
 resource fd_binderfs_ctrl[fd]
-openat$binderfs_ctrl(fd const[AT_FDCWD], file ptr[in, string[binderfs_ctrlpath]], flags flags[binder_open_flags], mode const[0]) fd_binderfs_ctrl
+openat$binderfs_ctrl(fd const[AT_FDCWD], file ptr[in, string[binderfs_ctrlpath]], flags flags[binder_open_flags], mode const[0]) fd_binderfs_ctrl (always_supported)
 ioctl$BINDER_CTL_ADD(fd fd_binderfs_ctrl, cmd const[BINDER_CTL_ADD], arg ptr[inout, binderfs_device])

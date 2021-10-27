@@ -20,7 +20,7 @@ type binder_handle int32[0:3]
 type binder_cookie const[0, int64]
 
 openat$binder(fd const[AT_FDCWD], file ptr[in, string["/dev/binder"]], flags flags[binder_open_flags], mode const[0]) fd_binder
-openat$binderfs(fd const[AT_FDCWD], file ptr[in, string[binderfs_devpath]], flags flags[binder_open_flags], mode const[0]) fd_binder
+openat$binderfs(fd const[AT_FDCWD], file ptr[in, string[binderfs_devpath]], flags flags[binder_open_flags], mode const[0]) fd_binder (always_supported)
 openat$hwbinder(fd const[AT_FDCWD], file ptr[in, string["/dev/hwbinder"]], flags flags[binder_open_flags], mode const[0]) fd_binder
 openat$vndbinder(fd const[AT_FDCWD], file ptr[in, string["/dev/vndbinder"]], flags flags[binder_open_flags], mode const[0]) fd_binder
 
