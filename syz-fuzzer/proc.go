@@ -207,6 +207,12 @@ func (proc *Proc) smashInput(item *WorkSmash) {
 	if proc.fuzzer.comparisonTracingEnabled && item.call != -1 {
 		proc.executeHintSeed(item.p, item.call)
 	}
+
+	progDup, err := prog.OldStyleMutate(item.p, proc.rnd)
+	if err == nil {
+		proc.executeRaw(proc.execOptsNoCollide, progDup, StatSmash)
+	}
+
 	fuzzerSnapshot := proc.fuzzer.snapshot()
 	for i := 0; i < 100; i++ {
 		p := item.p.Clone()

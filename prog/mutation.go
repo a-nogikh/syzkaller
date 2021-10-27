@@ -14,6 +14,38 @@ import (
 // Maximum length of generated binary blobs inserted into the program.
 const maxBlobLen = uint64(100 << 10)
 
+// We append prog to itself, but let the second part only reference resource from the first one.
+func OldStyleMutate(origProg *Prog, rand *rand.Rand) (*Prog, error) {
+	if len(origProg.Calls)*2 > MaxCalls {
+		return nil, fmt.Errorf("the prog is too big for the OldStyleMutate transformation")
+	}
+	p := origProg.Clone()
+
+	oldToNew := make(map[*ResultArg]*ResultArg)
+	dupCalls := cloneCalls(p.Calls, oldToNew)
+	newToOld := make(map[*ResultArg]*ResultArg)
+	for key, value := range oldToNew {
+		newToOld[value] = key
+	}
+	for _, c := range dupCalls {
+		ForeachArg(c, func(arg Arg, _ *ArgCtx) {
+			resArg, ok := arg.(*ResultArg)
+			if !ok || resArg.Res == nil {
+				return
+			}
+			delete(resArg.Res.uses, resArg)
+			newRes := newToOld[resArg.Res]
+			if newRes == nil {
+				panic("failed to map a cloned resource to the original one")
+			}
+			newRes.uses[resArg] = true
+			resArg.Res = newRes
+		})
+	}
+	p.Calls = append(p.Calls, dupCalls...)
+	return p, nil
+}
+
 // Mutate program p.
 //
 // p:       The program to mutate.
