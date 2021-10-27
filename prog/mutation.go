@@ -14,6 +14,38 @@ import (
 // Maximum length of generated binary blobs inserted into the program.
 const maxBlobLen = uint64(100 << 10)
 
+// We append prog to itself, but let the second part only reference resource from the first one.
+func OldStyleMutate(origProg *Prog) (*Prog, error) {
+	if len(origProg.Calls)*2 > MaxCalls {
+		return nil, fmt.Errorf("the prog is too big for the OldStyleMutate transformation")
+	}
+	p := origProg.Clone()
+
+	oldToNew := make(map[*ResultArg]*ResultArg)
+	dupCalls := cloneCalls(p.Calls, oldToNew)
+	newToOld := make(map[*ResultArg]*ResultArg)
+	for key, value := range oldToNew {
+		newToOld[value] = key
+	}
+	for _, c := range dupCalls {
+		ForeachArg(c, func(arg Arg, _ *ArgCtx) {
+			resArg, ok := arg.(*ResultArg)
+			if !ok || resArg.Res == nil {
+				return
+			}
+			delete(resArg.Res.uses, resArg)
+			newRes := newToOld[resArg.Res]
+			if newRes == nil {
+				panic("failed to map a cloned resource to the original one")
+			}
+			newRes.uses[resArg] = true
+			resArg.Res = newRes
+		})
+	}
+	p.Calls = append(p.Calls, dupCalls...)
+	return p, nil
+}
+
 // Mutate program p.
 //
 // p:       The program to mutate.
@@ -36,6 +68,8 @@ func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, corpus []*Pro
 	for stop, ok := false, false; !stop; stop = ok && len(p.Calls) != 0 && r.oneOf(3) {
 		switch {
 		case r.oneOf(5):
+			ok = ctx.oldStyle()
+		case r.oneOf(5):
 			// Not all calls have anything squashable,
 			// so this has lower priority in reality.
 			ok = ctx.squashAny()
@@ -51,8 +85,8 @@ func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, corpus []*Pro
 	}
 	p.sanitizeFix()
 	p.debugValidate()
-	if got := len(p.Calls); got < 1 || got > ncalls {
-		panic(fmt.Sprintf("bad number of calls after mutation: %v, want [1, %v]", got, ncalls))
+	if got := len(p.Calls); got < 1 || got > MaxCalls {
+		panic(fmt.Sprintf("bad number of calls after mutation: %v, want [1, %v]", got, MaxCalls))
 	}
 }
 
@@ -154,6 +188,24 @@ func (ctx *mutator) removeCall() bool {
 	}
 	idx := r.Intn(len(p.Calls))
 	p.RemoveCall(idx)
+	return true
+}
+
+// Removes a random call from program.
+func (ctx *mutator) oldStyle() bool {
+	if len(ctx.p.Calls) == 0 || len(ctx.p.Calls) == MaxCalls {
+		return false
+	}
+	p0, err := OldStyleMutate(ctx.p)
+	if err != nil {
+		return false
+	}
+
+	for i := len(p0.Calls) - 1; i >= MaxCalls; i-- {
+		p0.RemoveCall(i)
+	}
+	ctx.p = p0
+	ctx.ncalls = len(p0.Calls)
 	return true
 }
 
