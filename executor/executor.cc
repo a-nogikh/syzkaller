@@ -792,10 +792,7 @@ retry:
 		thread_t* th = schedule_call(call_index++, call_num, colliding, copyout_index,
 					     num_args, args, input_pos, call_props);
 
-		if (colliding && (call_index % 2) == 0) {
-			// Don't wait for every other call.
-			// We already have results from the previous execution.
-		} else if (flag_threaded) {
+		if (flag_threaded) {
 			// Wait for call completion.
 			uint64 timeout_ms = syscall_timeout_ms + call->attrs.timeout * slowdown_scale;
 			// This is because of printing pre/post call. Ideally we print everything in the main thread
