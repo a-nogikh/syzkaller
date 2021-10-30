@@ -66,7 +66,7 @@ typedef unsigned char uint8;
 // Note: zircon max fd is 256.
 // Some common_OS.h files know about this constant for RLIMIT_NOFILE.
 const int kMaxFd = 250;
-const int kMaxThreads = 16;
+const int kMaxThreads = 64;
 const int kInPipeFd = kMaxFd - 1; // remapped from stdin
 const int kOutPipeFd = kMaxFd - 2; // remapped from stdout
 const int kCoverFd = kOutPipeFd - kMaxThreads;
@@ -791,8 +791,7 @@ retry:
 			args[i] = 0;
 		thread_t* th = schedule_call(call_index++, call_num, colliding, copyout_index,
 					     num_args, args, input_pos, call_props);
-
-		if (colliding && (call_index % 2) == 0) {
+		if (colliding) {
 			// Don't wait for every other call.
 			// We already have results from the previous execution.
 		} else if (flag_threaded) {
@@ -823,13 +822,15 @@ retry:
 		memset(&call_props, 0, sizeof(call_props));
 	}
 
-	if (!colliding && !collide && running > 0) {
+	if (running > 0) {
 		// Give unfinished syscalls some additional time.
 		last_scheduled = 0;
 		uint64 wait_start = current_time_ms();
 		uint64 wait_end = wait_start + 2 * syscall_timeout_ms;
 		wait_end = std::max(wait_end, start + program_timeout_ms / 6);
-		wait_end = std::max(wait_end, wait_start + prog_extra_timeout);
+		if (!colliding && !collide) {
+			wait_end = std::max(wait_end, wait_start + prog_extra_timeout);
+		}
 		while (running > 0 && current_time_ms() <= wait_end) {
 			sleep_ms(1 * slowdown_scale);
 			for (int i = 0; i < kMaxThreads; i++) {
@@ -839,7 +840,7 @@ retry:
 			}
 		}
 		// Write output coverage for unfinished calls.
-		if (running > 0) {
+		if (!colliding && !collide && running > 0) {
 			for (int i = 0; i < kMaxThreads; i++) {
 				thread_t* th = &threads[i];
 				if (th->executing) {
