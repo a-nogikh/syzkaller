@@ -66,7 +66,7 @@ typedef unsigned char uint8;
 // Note: zircon max fd is 256.
 // Some common_OS.h files know about this constant for RLIMIT_NOFILE.
 const int kMaxFd = 250;
-const int kMaxThreads = 16;
+const int kMaxThreads = 90;
 const int kInPipeFd = kMaxFd - 1; // remapped from stdin
 const int kOutPipeFd = kMaxFd - 2; // remapped from stdout
 const int kCoverFd = kOutPipeFd - kMaxThreads;
@@ -792,7 +792,7 @@ retry:
 		thread_t* th = schedule_call(call_index++, call_num, colliding, copyout_index,
 					     num_args, args, input_pos, call_props);
 
-		if (colliding && (call_index % 2) == 0) {
+		if (colliding) {
 			// Don't wait for every other call.
 			// We already have results from the previous execution.
 		} else if (flag_threaded) {
