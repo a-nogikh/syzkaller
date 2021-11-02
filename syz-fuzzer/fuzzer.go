@@ -41,6 +41,8 @@ type Fuzzer struct {
 	needPoll          chan struct{}
 	choiceTable       *prog.ChoiceTable
 	stats             [StatCount]uint64
+	executorSum       [ExecStatCount]uint64
+	executorCount     [ExecStatCount]uint64
 	manager           *rpctype.RPCClient
 	target            *prog.Target
 	triagedCandidates uint32
@@ -93,6 +95,38 @@ var statNames = [StatCount]string{
 	StatSmash:     "exec smash",
 	StatHint:      "exec hints",
 	StatSeed:      "exec seeds",
+}
+
+const ExecStatCount = 27
+
+var execStatNames = [ExecStatCount]string{
+	"schedule call",
+	"thread create",
+	"first exec",
+	"second exec",
+	"before wait",
+	"wait",
+	"extra wait",
+	"fork lifetime",
+	"out of threads",
+	"second execs",
+	"first <= 1s",
+	"first <= 2s",
+	"first <= 3s",
+	"first <= 4s",
+	"first <= 5s",
+	"second <= 1s",
+	"second <= 2s",
+	"second <= 3s",
+	"second <= 4s",
+	"second <= 5s",
+	"forked: before",
+	"forked: after",
+	"forked: total",
+	"forker: self-exit",
+	"forker: killed1",
+	"forker: killed2",
+	"fork length",
 }
 
 type OutputType int
@@ -385,6 +419,12 @@ func (fuzzer *Fuzzer) pollLoop() {
 				v := atomic.SwapUint64(&fuzzer.stats[stat], 0)
 				stats[statNames[stat]] = v
 				execTotal += v
+			}
+			for stat := Stat(0); stat < ExecStatCount; stat++ {
+				c := atomic.SwapUint64(&fuzzer.executorCount[stat], 0)
+				s := atomic.SwapUint64(&fuzzer.executorSum[stat], 0)
+				stats["c_"+execStatNames[stat]] = c
+				stats["s_"+execStatNames[stat]] = s
 			}
 			if !fuzzer.poll(needCandidates, stats) {
 				lastPoll = time.Now()

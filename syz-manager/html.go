@@ -145,6 +145,45 @@ func (mgr *Manager) collectStats() []UIStat {
 	delete(rawStats, "signal")
 	delete(rawStats, "coverage")
 	delete(rawStats, "filtered coverage")
+
+	toDel := []string{}
+	execStat := []string{}
+	for key, _ := range rawStats {
+		if strings.HasPrefix(key, "c_") {
+			execStat = append(execStat, key[2:])
+		}
+		if strings.HasPrefix(key, "c_") || strings.HasPrefix(key, "s_") {
+			toDel = append(toDel, key)
+		}
+	}
+
+	execStats := []UIStat{}
+	for _, key := range execStat {
+		name := key
+		sum := rawStats["s_"+name]
+		count := rawStats["c_"+name]
+		avg := uint64(0)
+		if count > 0 {
+			avg = sum / count
+		}
+		execStats = append(execStats, UIStat{
+			Name:  name,
+			Value: fmt.Sprintf("%d/%d", count, sum),
+		})
+		execStats = append(execStats, UIStat{
+			Name:  name + "(avg)",
+			Value: fmt.Sprintf("%d", avg),
+		})
+	}
+	sort.Slice(execStats, func(i, j int) bool {
+		return execStats[i].Name < execStats[j].Name
+	})
+	stats = append(stats, execStats...)
+
+	for _, key := range toDel {
+		delete(rawStats, key)
+	}
+
 	if mgr.checkResult != nil {
 		stats = append(stats, UIStat{
 			Name:  "syscalls",

@@ -303,6 +303,12 @@ func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog, stat Stat) *ipc.P
 			time.Sleep(time.Second)
 			continue
 		}
+		if len(info.Calls) > 0 && len(info.Calls[0].StatSums) > 0 {
+			for i := 0; i < ExecStatCount; i++ {
+				atomic.AddUint64(&proc.fuzzer.executorSum[i], info.Calls[0].StatSums[i])
+				atomic.AddUint64(&proc.fuzzer.executorCount[i], info.Calls[0].StatCounts[i])
+			}
+		}
 		log.Logf(2, "result hanged=%v: %s", hanged, output)
 		return info
 	}
