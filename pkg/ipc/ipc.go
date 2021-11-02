@@ -4,6 +4,7 @@
 package ipc
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -88,8 +89,10 @@ type CallInfo struct {
 	Signal []uint32 // feedback signal, filled if FlagSignal is set
 	Cover  []uint32 // per-call coverage, filled if FlagSignal is set and cover == true,
 	// if dedup == false, then cov effectively contains a trace, otherwise duplicates are removed
-	Comps prog.CompMap // per-call comparison operands
-	Errno int          // call errno (0 if the call was successful)
+	Comps      prog.CompMap // per-call comparison operands
+	Errno      int          // call errno (0 if the call was successful)
+	StatSums   []uint64
+	StatCounts []uint64
 }
 
 type ProgInfo struct {
@@ -339,10 +342,10 @@ func (env *Env) parseOutput(p *prog.Prog) (*ProgInfo, error) {
 		var inf *CallInfo
 		if reply.index != extraReplyIndex {
 			if int(reply.index) >= len(info.Calls) {
-				return nil, fmt.Errorf("bad call %v index %v/%v", i, reply.index, len(info.Calls))
+				return nil, fmt.Errorf("bad call %v index %v/%v %v", i, reply.index, len(info.Calls), reply)
 			}
 			if num := p.Calls[reply.index].Meta.ID; int(reply.num) != num {
-				return nil, fmt.Errorf("wrong call %v num %v/%v", i, reply.num, num)
+				return nil, fmt.Errorf("wrong call %v num %v/%v %v", i, reply.num, num, reply)
 			}
 			inf = &info.Calls[reply.index]
 			if inf.Flags != 0 || inf.Signal != nil {
@@ -350,10 +353,23 @@ func (env *Env) parseOutput(p *prog.Prog) (*ProgInfo, error) {
 			}
 			inf.Errno = int(reply.errno)
 			inf.Flags = CallFlags(reply.flags)
+
+			if len(out) > 64*8 {
+				sums := out[0 : 32*8]
+				counts := out[32*8 : 64*8]
+				out = out[64*8:]
+				for i := 0; i < 32; i++ {
+					inf.StatSums = append(inf.StatSums, binary.LittleEndian.Uint64(sums[i*8:(i+1)*8]))
+				}
+				for i := 0; i < 32; i++ {
+					inf.StatCounts = append(inf.StatCounts, binary.LittleEndian.Uint64(counts[i*8:(i+1)*8]))
+				}
+			}
 		} else {
 			extraParts = append(extraParts, CallInfo{})
 			inf = &extraParts[len(extraParts)-1]
 		}
+
 		if inf.Signal, ok = readUint32Array(&out, reply.signalSize); !ok {
 			return nil, fmt.Errorf("call %v/%v/%v: signal overflow: %v/%v",
 				i, reply.index, reply.num, reply.signalSize, len(out))

@@ -10547,10 +10547,13 @@ static void loop(void)
 #if SYZ_EXECUTOR
 		receive_execute();
 #endif
+		uint64 forkstart = current_time_ms();
 		int pid = fork();
 		if (pid < 0)
 			fail("clone failed");
 		if (pid == 0) {
+			uint64 start = current_time_ms();
+			submit_stat(STAT_PROG_FORKTIME, start - forkstart);
 #if SYZ_EXECUTOR || SYZ_USE_TMP_DIR
 			if (chdir(cwdbuf))
 				fail("failed to chdir");
@@ -10573,10 +10576,13 @@ static void loop(void)
 #if SYZ_EXECUTOR && SYZ_EXECUTOR_USES_SHMEM
 			close(kOutPipeFd);
 #endif
+			submit_stat(STAT_PROG_BEFORE, current_time_ms() - start);
 			execute_one();
+			submit_stat(STAT_PROG_AFTER, current_time_ms() - start);
 #if SYZ_HAVE_CLOSE_FDS && !SYZ_THREADED
 			close_fds();
 #endif
+			submit_stat(STAT_PROG_PREEXIT, current_time_ms() - start);
 			doexit(0);
 #endif
 		}
@@ -10592,8 +10598,10 @@ static void loop(void)
 		uint32 executed_calls = __atomic_load_n(output_data, __ATOMIC_RELAXED);
 #endif
 		for (;;) {
-			if (waitpid(-1, &status, WNOHANG | WAIT_FLAGS) == pid)
+			if (waitpid(-1, &status, WNOHANG | WAIT_FLAGS) == pid) {
+				submit_stat(STAT_PROG_SELFEXIT, current_time_ms() - start);
 				break;
+			}
 			sleep_ms(1);
 #if SYZ_EXECUTOR
 #if SYZ_EXECUTOR_USES_SHMEM
@@ -10617,9 +10625,12 @@ static void loop(void)
 				continue;
 #endif
 			debug("killing hanging pid %d\n", pid);
+			submit_stat(STAT_PROG_KILLED1, current_time_ms() - start);
 			kill_and_wait(pid, &status);
+			submit_stat(STAT_PROG_KILLED2, current_time_ms() - start);
 			break;
 		}
+		submit_stat(STAT_PROG_FORKLIFETIME, current_time_ms() - start);
 #if SYZ_EXECUTOR
 		if (WEXITSTATUS(status) == kFailStatus) {
 			errno = 0;
