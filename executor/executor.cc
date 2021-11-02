@@ -157,6 +157,39 @@ static uint64 program_timeout_ms;
 static uint64 slowdown_scale;
 
 #define SYZ_EXECUTOR 1
+
+enum {
+	STAT_PROG_SCHEDULE_CALL = 0,
+	STAT_PROG_THREAD_CREATE,
+	STAT_PROG_FIRSTEXEC,
+	STAT_PROG_SECONDEXEC,
+	STAT_PROG_BEFOREWAIT,
+	STAT_PROG_WAIT,
+	STAT_PROG_EXTRAWAIT,
+	STAT_PROG_FORKLIFETIME,
+	STAT_PROG_OUT_OF_THREADS,
+	STAT_PROG_SECOND_EXEC_ATTEMPTS,
+	STAT_PROG_FIRST_1,
+	STAT_PROG_FIRST_2,
+	STAT_PROG_FIRST_3,
+	STAT_PROG_FIRST_4,
+	STAT_PROG_FIRST_5,
+	STAT_PROG_SECOND_1,
+	STAT_PROG_SECOND_2,
+	STAT_PROG_SECOND_3,
+	STAT_PROG_SECOND_4,
+	STAT_PROG_SECOND_5,
+	STAT_PROG_BEFORE,
+	STAT_PROG_AFTER,
+	STAT_PROG_PREEXIT,
+	STAT_PROG_SELFEXIT,
+	STAT_PROG_KILLED1,
+	STAT_PROG_KILLED2,
+	STAT_PROG_FORKTIME,
+	STAT_TOTAL
+};
+
+void submit_stat(int type, uint64 value);
 #include "common.h"
 
 const int kMaxInput = 4 << 20; // keep in sync with prog.ExecBufferSize
@@ -295,7 +328,7 @@ const uint32 call_flag_finished = 1 << 1;
 const uint32 call_flag_blocked = 1 << 2;
 const uint32 call_flag_fault_injected = 1 << 3;
 
-struct call_reply {
+struct __attribute__((__packed__)) call_reply {
 	execute_reply header;
 	uint32 call_index;
 	uint32 call_num;
@@ -304,6 +337,8 @@ struct call_reply {
 	uint32 signal_size;
 	uint32 cover_size;
 	uint32 comps_size;
+	uint64 stat_sums[32];
+	uint64 stat_counts[32];
 	// signal/cover/comps follow
 };
 
@@ -315,6 +350,36 @@ enum {
 	KCOV_CMP_SIZE8 = 6,
 	KCOV_CMP_SIZE_MASK = 6,
 };
+
+// TODO: make it pointer.
+uint64 *stat_sums, *stat_counts;
+
+void submit_stat(int type, uint64 value)
+{
+	stat_sums[type] += value;
+	stat_counts[type]++;
+}
+
+void _print_stat(const char* name, int type)
+{
+	uint64 avg = 0;
+	if (stat_counts[type] > 0)
+		avg = stat_sums[type] / stat_counts[type];
+	debug("stat [%s]: cnt %lld, sum %lld, avg %lld\n", name, stat_counts[type], stat_sums[type], avg);
+}
+
+void print_stat()
+{
+	//	_print_stat("exec one", STAT_PROG_EXEC_ONE);
+	_print_stat("schedule call", STAT_PROG_SCHEDULE_CALL);
+	_print_stat("thread_create", STAT_PROG_THREAD_CREATE);
+	_print_stat("non-collide exec", STAT_PROG_FIRSTEXEC);
+	_print_stat("collide exec", STAT_PROG_SECONDEXEC);
+	_print_stat("before wait", STAT_PROG_BEFOREWAIT);
+	_print_stat("wait", STAT_PROG_WAIT);
+	_print_stat("extra wait", STAT_PROG_EXTRAWAIT);
+	_print_stat("fork lifetime", STAT_PROG_FORKLIFETIME);
+}
 
 struct kcov_comparison_t {
 	// Note: comparisons are always 64-bits regardless of kernel bitness.
@@ -432,6 +497,8 @@ int main(int argc, char** argv)
 	if (output_data != preferred)
 		fail("mmap of output file failed");
 
+	stat_sums = (uint64*)mmap(NULL, STAT_TOTAL * sizeof(uint64), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	stat_counts = (uint64*)mmap(NULL, STAT_TOTAL * sizeof(uint64), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
 	// Prevent test programs to mess with these fds.
 	// Due to races in collider mode, a program can e.g. ftruncate one of these fds,
 	// which will cause fuzzer to crash.
@@ -538,6 +605,7 @@ void parse_env_flags(uint64 flags)
 	else
 		flag_sandbox_none = true;
 	flag_extra_coverage = flags & (1 << 5);
+	flag_extra_coverage = false;
 	flag_net_injection = flags & (1 << 6);
 	flag_net_devices = flags & (1 << 7);
 	flag_net_reset = flags & (1 << 8);
@@ -655,9 +723,13 @@ void execute_one()
 	write_output(0); // Number of executed syscalls (updated later).
 #endif
 	uint64 start = current_time_ms();
-
 retry:
+	uint64 substart = current_time_ms();
 	uint64* input_pos = (uint64*)input_data;
+
+	if (colliding) {
+		submit_stat(STAT_PROG_SECOND_EXEC_ATTEMPTS, 1);
+	}
 
 	if (flag_coverage && !colliding) {
 		if (!flag_threaded)
@@ -823,13 +895,18 @@ retry:
 		memset(&call_props, 0, sizeof(call_props));
 	}
 
+	if (!colliding && !collide)
+		submit_stat(STAT_PROG_BEFOREWAIT, current_time_ms() - substart);
+
+	uint64 wt = current_time_ms();
 	if (!colliding && !collide && running > 0) {
 		// Give unfinished syscalls some additional time.
 		last_scheduled = 0;
 		uint64 wait_start = current_time_ms();
 		uint64 wait_end = wait_start + 2 * syscall_timeout_ms;
 		wait_end = std::max(wait_end, start + program_timeout_ms / 6);
-		wait_end = std::max(wait_end, wait_start + prog_extra_timeout);
+		if (!colliding && !collide)
+			wait_end = std::max(wait_end, wait_start + prog_extra_timeout);
 		while (running > 0 && current_time_ms() <= wait_end) {
 			sleep_ms(1 * slowdown_scale);
 			for (int i = 0; i < kMaxThreads; i++) {
@@ -839,7 +916,7 @@ retry:
 			}
 		}
 		// Write output coverage for unfinished calls.
-		if (running > 0) {
+		if (!colliding && !collide && running > 0) {
 			for (int i = 0; i < kMaxThreads; i++) {
 				thread_t* th = &threads[i];
 				if (th->executing) {
@@ -850,11 +927,13 @@ retry:
 			}
 		}
 	}
+	submit_stat(STAT_PROG_WAIT, current_time_ms() - wt);
 
 #if SYZ_HAVE_CLOSE_FDS
 	close_fds();
 #endif
 
+	uint64 ews = current_time_ms();
 	if (!colliding && !collide) {
 		write_extra_output();
 		// Check for new extra coverage in small intervals to avoid situation
@@ -865,6 +944,34 @@ retry:
 			sleep_ms(kSleepMs);
 			write_extra_output();
 		}
+		submit_stat(STAT_PROG_EXTRAWAIT, current_time_ms() - ews);
+	}
+
+	uint64 diff = current_time_ms() - substart;
+	if (!collide && !colliding) {
+		submit_stat(STAT_PROG_FIRSTEXEC, diff);
+		if (diff < 1000)
+			submit_stat(STAT_PROG_FIRST_1, diff);
+		else if (diff < 2000)
+			submit_stat(STAT_PROG_FIRST_2, diff);
+		else if (diff < 3000)
+			submit_stat(STAT_PROG_FIRST_3, diff);
+		else if (diff < 4000)
+			submit_stat(STAT_PROG_FIRST_4, diff);
+		else if (diff <= 5000)
+			submit_stat(STAT_PROG_FIRST_5, diff);
+	} else {
+		submit_stat(STAT_PROG_SECONDEXEC, current_time_ms() - substart);
+		if (diff < 1000)
+			submit_stat(STAT_PROG_SECOND_1, diff);
+		else if (diff < 2000)
+			submit_stat(STAT_PROG_SECOND_2, diff);
+		else if (diff < 3000)
+			submit_stat(STAT_PROG_SECOND_3, diff);
+		else if (diff < 4000)
+			submit_stat(STAT_PROG_SECOND_4, diff);
+		else if (diff <= 5000)
+			submit_stat(STAT_PROG_SECOND_5, diff);
 	}
 
 	if (flag_collide && !colliding && !has_fault_injection && !collide) {
@@ -876,6 +983,7 @@ retry:
 
 thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 copyout_index, uint64 num_args, uint64* args, uint64* pos, call_props_t call_props)
 {
+	uint64 start = current_time_ms();
 	// Find a spare thread to execute the call.
 	int i = 0;
 	for (; i < kMaxThreads; i++) {
@@ -888,8 +996,10 @@ thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 cop
 			break;
 		}
 	}
-	if (i == kMaxThreads)
+	if (i == kMaxThreads) {
+		submit_stat(STAT_PROG_OUT_OF_THREADS, 1);
 		exitf("out of threads");
+	}
 	thread_t* th = &threads[i];
 	if (event_isset(&th->ready) || !event_isset(&th->done) || th->executing)
 		failmsg("bad thread state in schedule", "ready=%d done=%d executing=%d",
@@ -908,6 +1018,8 @@ thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 cop
 		th->args[i] = args[i];
 	event_set(&th->ready);
 	running++;
+
+	submit_stat(STAT_PROG_SCHEDULE_CALL, current_time_ms() - start);
 	return th;
 }
 
@@ -1039,6 +1151,23 @@ void write_call_output(thread_t* th, bool finished)
 	uint32* cover_count_pos = write_output(0); // filled in later
 	uint32* comps_count_pos = write_output(0); // filled in later
 
+	for (int j = 0; j < 32; j++) {
+		uint64 val = 0;
+		if (th->call_index == 0 && j < STAT_TOTAL) {
+			val = stat_sums[j];
+			stat_sums[j] = 0;
+		}
+		write_output_64(val);
+	}
+	for (int j = 0; j < 32; j++) {
+		uint64 val = 0;
+		if (th->call_index == 0 && j < STAT_TOTAL) {
+			val = stat_counts[j];
+			stat_counts[j] = 0;
+		}
+		write_output_64(val);
+	}
+
 	if (flag_comparisons) {
 		// Collect only the comparisons
 		uint32 ncomps = th->cov.size;
@@ -1082,8 +1211,9 @@ void write_call_output(thread_t* th, bool finished)
 	reply.signal_size = 0;
 	reply.cover_size = 0;
 	reply.comps_size = 0;
-	if (write(kOutPipeFd, &reply, sizeof(reply)) != sizeof(reply))
-		fail("control pipe call write failed");
+
+	fail("broken") if (write(kOutPipeFd, &reply, sizeof(reply)) != sizeof(reply))
+	    fail("control pipe call write failed");
 	debug_verbose("out: index=%u num=%u errno=%d finished=%d blocked=%d\n",
 		      th->call_index, th->call_num, reserrno, finished, blocked);
 #endif
@@ -1117,6 +1247,7 @@ void write_extra_output()
 
 void thread_create(thread_t* th, int id)
 {
+	uint64 start = current_time_ms();
 	th->created = true;
 	th->id = id;
 	th->executing = false;
@@ -1125,6 +1256,7 @@ void thread_create(thread_t* th, int id)
 	event_set(&th->done);
 	if (flag_threaded)
 		thread_start(worker_thread, th);
+	submit_stat(STAT_PROG_THREAD_CREATE, current_time_ms() - start);
 }
 
 void* worker_thread(void* arg)

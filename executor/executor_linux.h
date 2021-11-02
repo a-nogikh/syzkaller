@@ -213,6 +213,7 @@ NORETURN void doexit(int status)
 	volatile unsigned i;
 	syscall(__NR_exit_group, status);
 	for (i = 0;; i++) {
+		usleep(1000);
 	}
 }
 
