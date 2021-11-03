@@ -605,7 +605,6 @@ void parse_env_flags(uint64 flags)
 	else
 		flag_sandbox_none = true;
 	flag_extra_coverage = flags & (1 << 5);
-	flag_extra_coverage = false;
 	flag_net_injection = flags & (1 << 6);
 	flag_net_devices = flags & (1 << 7);
 	flag_net_reset = flags & (1 << 8);
