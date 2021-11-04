@@ -71,7 +71,7 @@ const int kInPipeFd = kMaxFd - 1; // remapped from stdin
 const int kOutPipeFd = kMaxFd - 2; // remapped from stdout
 const int kCoverFd = kOutPipeFd - kMaxThreads;
 const int kMaxArgs = 9;
-const int kCoverSize = 256 << 10;
+const int kCoverSize = 512 << 10;
 const int kFailStatus = 67;
 
 // Logical error (e.g. invalid input program), use as an assert() alternative.
