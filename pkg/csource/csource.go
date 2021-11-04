@@ -244,6 +244,10 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace bool) ([]string, []uint
 			ctx.copyin(w, &csumSeq, copyin)
 		}
 
+		if call.Props.Rerun > 0 {
+			fmt.Fprintf(w, "\tfor(int i = 0; i <= %v; i++) {\n", call.Props.Rerun)
+		}
+
 		if call.Props.FailNth > 0 {
 			fmt.Fprintf(w, "\tinject_fault(%v);\n", call.Props.FailNth)
 		}
@@ -252,6 +256,10 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace bool) ([]string, []uint
 		argCopyout := len(call.Copyout) != 0
 
 		ctx.emitCall(w, call, ci, resCopyout || argCopyout, trace)
+
+		if call.Props.Rerun > 0 {
+			fmt.Fprintf(w, "\t}\n")
+		}
 
 		// Copyout.
 		if resCopyout || argCopyout {
