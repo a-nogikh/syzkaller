@@ -193,6 +193,28 @@ func TestMinimize(t *testing.T) {
 			"pipe2(0x0, 0x0) (async)\n",
 			-1,
 		},
+		// Clear unneeded rerun.
+		{
+			"linux", "amd64",
+			"pipe2(0x0, 0x0) (rerun: 100)\n",
+			-1,
+			func(p *Prog, callIndex int) bool {
+				return len(p.Calls) == 1 && p.Calls[0].Meta.Name == "pipe2"
+			},
+			"pipe2(0x0, 0x0)\n",
+			-1,
+		},
+		// Keep important rerun.
+		{
+			"linux", "amd64",
+			"pipe2(0x0, 0x0) (rerun: 100)\n",
+			-1,
+			func(p *Prog, callIndex int) bool {
+				return len(p.Calls) == 1 && p.Calls[0].Meta.Name == "pipe2" && p.Calls[0].Props.Rerun >= 100
+			},
+			"pipe2(0x0, 0x0) (rerun: 100)\n",
+			-1,
+		},
 	}
 	t.Parallel()
 	for ti, test := range tests {
