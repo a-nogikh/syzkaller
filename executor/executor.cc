@@ -66,7 +66,7 @@ typedef unsigned char uint8;
 // Note: zircon max fd is 256.
 // Some common_OS.h files know about this constant for RLIMIT_NOFILE.
 const int kMaxFd = 250;
-const int kMaxCoverThreads = 8; // for how many threads a kcov handle will be created.
+const int kMaxCoverThreads = 4; // for how many threads a kcov handle will be created.
 const int kMaxThreads = 16; // the total number of threads
 const int kInPipeFd = kMaxFd - 1; // remapped from stdin
 const int kOutPipeFd = kMaxFd - 2; // remapped from stdout
@@ -113,7 +113,7 @@ static void reply_handshake();
 #endif
 
 #if SYZ_EXECUTOR_USES_SHMEM
-const int kMaxOutput = 16 << 20;
+const int kMaxOutput = 8 << 20;
 const int kInFd = 3;
 const int kOutFd = 4;
 static uint32* output_data;
