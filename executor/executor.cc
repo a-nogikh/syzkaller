@@ -495,6 +495,9 @@ int main(int argc, char** argv)
 	// The address chosen must also work on 32-bit kernels with 1GB user address space.
 	void* preferred = (void*)(0x1b2bc20000ull + (1 << 20) * (getpid() % 128));
 	output_data = (uint32*)mmap(preferred, kMaxOutput,
+				    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED | MAP_HUGETLB, kOutFd, 0);
+        if (output_data == MAP_FAILED)
+          output_data = (uint32*)mmap(preferred, kMaxOutput,
 				    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, kOutFd, 0);
 	if (output_data != preferred)
 		fail("mmap of output file failed");
