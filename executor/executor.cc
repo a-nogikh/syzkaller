@@ -113,7 +113,7 @@ static void reply_handshake();
 #endif
 
 #if SYZ_EXECUTOR_USES_SHMEM
-const int kMaxOutput = 16 << 20;
+const int kMaxOutput = 8 << 20;
 const int kInFd = 3;
 const int kOutFd = 4;
 static uint32* output_data;
