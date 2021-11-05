@@ -66,7 +66,8 @@ typedef unsigned char uint8;
 // Note: zircon max fd is 256.
 // Some common_OS.h files know about this constant for RLIMIT_NOFILE.
 const int kMaxFd = 250;
-const int kMaxThreads = 16;
+const int kMaxCoverThreads = 8; // for how many threads a kcov handle will be created.
+const int kMaxThreads = 16; // the total number of threads
 const int kInPipeFd = kMaxFd - 1; // remapped from stdin
 const int kOutPipeFd = kMaxFd - 2; // remapped from stdout
 const int kCoverFd = kOutPipeFd - kMaxThreads;
@@ -515,7 +516,7 @@ int main(int argc, char** argv)
 	receive_execute();
 #endif
 	if (flag_coverage) {
-		for (int i = 0; i < kMaxThreads; i++) {
+		for (int i = 0; i < kMaxCoverThreads; i++) {
 			threads[i].cov.fd = kCoverFd + i;
 			cover_open(&threads[i].cov, false);
 			cover_protect(&threads[i].cov);
@@ -988,6 +989,10 @@ thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 cop
 	int i = 0;
 	for (; i < kMaxThreads; i++) {
 		thread_t* th = &threads[i];
+                if (flag_coverage && !colliding && th->cov.fd == 0) {
+                  // We need a thread with coverage support.
+                  continue;
+                }
 		if (!th->created)
 			thread_create(th, i);
 		if (event_isset(&th->done)) {
@@ -1263,7 +1268,7 @@ void* worker_thread(void* arg)
 {
 	thread_t* th = (thread_t*)arg;
 	current_thread = th;
-	if (flag_coverage)
+	if (flag_coverage && th->cov.fd > 0)
 		cover_enable(&th->cov, flag_comparisons, false);
 	for (;;) {
 		event_wait(&th->ready);
