@@ -97,7 +97,7 @@ var statNames = [StatCount]string{
 	StatSeed:      "exec seeds",
 }
 
-const ExecStatCount = 27
+const ExecStatCount = 28
 
 var execStatNames = [ExecStatCount]string{
 	"schedule call",
@@ -127,6 +127,7 @@ var execStatNames = [ExecStatCount]string{
 	"forker: killed1",
 	"forker: killed2",
 	"fork length",
+	"out exceeded half",
 }
 
 type OutputType int

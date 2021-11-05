@@ -187,6 +187,7 @@ enum {
 	STAT_PROG_KILLED1,
 	STAT_PROG_KILLED2,
 	STAT_PROG_FORKTIME,
+        STAT_OUT_BUF_SECOND_HALF,
 	STAT_TOTAL
 };
 
@@ -980,6 +981,8 @@ retry:
 		collide = colliding = true;
 		goto retry;
 	}
+        if (output_pos - output_data > kMaxOutput/2)
+          submit_stat(STAT_OUT_BUF_SECOND_HALF, 1);
 }
 
 thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 copyout_index, uint64 num_args, uint64* args, uint64* pos, call_props_t call_props)
