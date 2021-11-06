@@ -485,7 +485,10 @@ int main(int argc, char** argv)
 	current_thread = &threads[0];
 
 #if SYZ_EXECUTOR_USES_SHMEM
-	if (mmap(&input_data[0], kMaxInput, PROT_READ, MAP_PRIVATE | MAP_FIXED, kInFd, 0) != &input_data[0])
+        void  *mmapped = mmap(&input_data[0], kMaxInput, PROT_READ, MAP_PRIVATE | MAP_FIXED | MAP_HUGETLB, kInFd, 0);
+        if (mmapped == MAP_FAILED)
+          mmapped = mmap(&input_data[0], kMaxInput, PROT_READ, MAP_PRIVATE | MAP_FIXED, kInFd, 0);
+	if (mmapped != &input_data[0])
 		fail("mmap of input file failed");
 	// The output region is the only thing in executor process for which consistency matters.
 	// If it is corrupted ipc package will fail to parse its contents and panic.
