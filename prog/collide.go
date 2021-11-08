@@ -11,7 +11,7 @@ import "math/rand"
 // that timed out. If we just ignore that limit, we could end up generating programs that
 // would force the executor to fail and thus stall the fuzzing process.
 // As an educated guess, let's dedicate no more than 50% of threads to async calls.
-const maxAsyncPerProg = 8
+const maxAsyncPerProg = 24
 
 // Ensures that if an async call produces a resource, then
 // it is distanced from a call consuming the resource at least
