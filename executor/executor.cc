@@ -870,7 +870,7 @@ thread_t* schedule_call(int call_index, int call_num, uint64 copyout_index, uint
 	int i = 0;
 	for (; i < kMaxThreads; i++) {
 		thread_t* th = &threads[i];
-		if (flag_coverage && !colliding && th->cov.fd == 0) {
+		if (cover_collection_required() && th->cov.fd == 0) {
 			// We need a thread with coverage support.
 			continue;
 		}
