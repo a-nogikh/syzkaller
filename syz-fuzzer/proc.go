@@ -290,8 +290,8 @@ func (proc *Proc) executeAndCollide(execOpts *ipc.ExecOpts, p *prog.Prog, flags 
 }
 
 func (proc *Proc) randomCollide(origP *prog.Prog) *prog.Prog {
-	// Use old-style colliding with a 50% probability.
-	if proc.rnd.Intn(2) != 0 {
+	// Use old-style colliding with a 75% probability.
+	if proc.rnd.Intn(4) != 0 {
 		p, err := prog.OldStyleCollide(origP, proc.rnd)
 		if err == nil {
 			return p
