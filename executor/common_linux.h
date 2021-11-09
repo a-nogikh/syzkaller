@@ -4741,6 +4741,7 @@ static void setup_sysctl()
 		// For context see: https://groups.google.com/g/syzkaller-bugs/c/WqOY4TiRnFg/m/6P9u8lWZAQAJ
 		{"/proc/sys/kernel/ctrl-alt-del", "0"},
 		{"/proc/sys/kernel/cad_pid", mypid},
+		{"/proc/sys/vm/nr_hugepages", "128"}
 	};
 	for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
 		if (!write_file(files[i].name, files[i].data))

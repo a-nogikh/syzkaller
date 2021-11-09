@@ -8302,7 +8302,7 @@ static void sandbox_common()
 	struct rlimit rlim;
 #if SYZ_EXECUTOR
 	rlim.rlim_cur = rlim.rlim_max = (200 << 20) +
-					(kMaxThreads * kCoverSize + kExtraCoverSize) * sizeof(void*);
+					(kMaxCoverThreads * kCoverSize + kExtraCoverSize) * sizeof(void*);
 #else
 	rlim.rlim_cur = rlim.rlim_max = (200 << 20);
 #endif
@@ -9735,6 +9735,7 @@ static void setup_sysctl()
 		{"/proc/sys/vm/oom_kill_allocating_task", "1"},
 		{"/proc/sys/kernel/ctrl-alt-del", "0"},
 		{"/proc/sys/kernel/cad_pid", mypid},
+		{"/proc/sys/vm/nr_hugepages", "128"}
 	};
 	for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
 		if (!write_file(files[i].name, files[i].data))

@@ -187,7 +187,7 @@ enum {
 	STAT_PROG_KILLED1,
 	STAT_PROG_KILLED2,
 	STAT_PROG_FORKTIME,
-        STAT_OUT_BUF_SECOND_HALF,
+	STAT_OUT_BUF_SECOND_HALF,
 	STAT_TOTAL
 };
 
@@ -421,6 +421,15 @@ static bool copyout(char* addr, uint64 size, uint64* res);
 static void setup_control_pipes();
 static void setup_features(char** enable, int n);
 
+void* mymmap(void* addr, size_t length, int prot, int flags,
+	     int fd, off_t offset)
+{
+	void* res = mmap(addr, length, prot, flags | MAP_HUGETLB, fd, offset);
+	if (res == MAP_FAILED)
+		return mmap(addr, length, prot, flags, fd, offset);
+	return res;
+}
+
 #include "syscalls.h"
 
 #if GOOS_linux
@@ -485,7 +494,7 @@ int main(int argc, char** argv)
 	current_thread = &threads[0];
 
 #if SYZ_EXECUTOR_USES_SHMEM
-	if (mmap(&input_data[0], kMaxInput, PROT_READ, MAP_PRIVATE | MAP_FIXED, kInFd, 0) != &input_data[0])
+	if (mymmap(&input_data[0], kMaxInput, PROT_READ, MAP_PRIVATE | MAP_FIXED, kInFd, 0) != &input_data[0])
 		fail("mmap of input file failed");
 	// The output region is the only thing in executor process for which consistency matters.
 	// If it is corrupted ipc package will fail to parse its contents and panic.
@@ -494,8 +503,8 @@ int main(int argc, char** argv)
 	// surrounded by unmapped pages.
 	// The address chosen must also work on 32-bit kernels with 1GB user address space.
 	void* preferred = (void*)(0x1b2bc20000ull + (1 << 20) * (getpid() % 128));
-	output_data = (uint32*)mmap(preferred, kMaxOutput,
-				    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, kOutFd, 0);
+	output_data = (uint32*)mymmap(preferred, kMaxOutput,
+				      PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, kOutFd, 0);
 	if (output_data != preferred)
 		fail("mmap of output file failed");
 
@@ -981,8 +990,8 @@ retry:
 		collide = colliding = true;
 		goto retry;
 	}
-        if (output_pos - output_data > kMaxOutput/2)
-          submit_stat(STAT_OUT_BUF_SECOND_HALF, 1);
+	if (output_pos - output_data > kMaxOutput / 2)
+		submit_stat(STAT_OUT_BUF_SECOND_HALF, 1);
 }
 
 thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 copyout_index, uint64 num_args, uint64* args, uint64* pos, call_props_t call_props)
@@ -992,10 +1001,10 @@ thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 cop
 	int i = 0;
 	for (; i < kMaxThreads; i++) {
 		thread_t* th = &threads[i];
-                if (flag_coverage && !colliding && th->cov.fd == 0) {
-                  // We need a thread with coverage support.
-                  continue;
-                }
+		if (flag_coverage && !colliding && th->cov.fd == 0) {
+			// We need a thread with coverage support.
+			continue;
+		}
 		if (!th->created)
 			thread_create(th, i);
 		if (event_isset(&th->done)) {
