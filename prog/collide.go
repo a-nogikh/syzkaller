@@ -16,15 +16,9 @@ import (
 // As an educated guess, let's dedicate no more than 50% of threads to async calls.
 const maxAsyncPerProg = 24
 
-// Ensures that if an async call produces a resource, then
-// it is distanced from a call consuming the resource at least
-// by one non-async call.
-// This does not give 100% guarantee that the async call finishes
-// by that time, but hopefully this is enough for most cases.
-func AssignRandomAsync(origProg *Prog, rand *rand.Rand) *Prog {
+func randomAsyncInplace(prog *Prog) int {
 	var unassigned map[*ResultArg]bool
 	leftAsync := maxAsyncPerProg
-	prog := origProg.Clone()
 	for i := len(prog.Calls) - 1; i >= 0 && leftAsync > 0; i-- {
 		call := prog.Calls[i]
 		producesUnassigned := false
@@ -55,7 +49,17 @@ func AssignRandomAsync(origProg *Prog, rand *rand.Rand) *Prog {
 			unassigned = consumes
 		}
 	}
+	return leftAsync
+}
 
+// Ensures that if an async call produces a resource, then
+// it is distanced from a call consuming the resource at least
+// by one non-async call.
+// This does not give 100% guarantee that the async call finishes
+// by that time, but hopefully this is enough for most cases.
+func AssignRandomAsync(origProg *Prog, rand *rand.Rand) *Prog {
+	prog := origProg.Clone()
+	randomAsyncInplace(prog)
 	return prog
 }
 
@@ -87,8 +91,9 @@ func OldStyleCollide(origProg *Prog, rand *rand.Rand) (*Prog, error) {
 			resArg.Res = newRes
 		})
 	}
+
 	// Unlike how it was done earlier, let's collide not every other call, but all at the same time.
-	leftAsync := maxAsyncPerProg
+	leftAsync := randomAsyncInplace(prog)
 	for _, c := range dupCalls {
 		if leftAsync == 0 {
 			break
