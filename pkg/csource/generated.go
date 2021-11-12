@@ -10516,6 +10516,8 @@ static void execute_one(void);
 static void reply_handshake();
 #endif
 
+static void os_meminit();
+
 static void loop(void)
 {
 #if SYZ_HAVE_SETUP_LOOP
@@ -10557,6 +10559,9 @@ static void loop(void)
 #endif
 #if SYZ_HAVE_SETUP_TEST
 			setup_test();
+#endif
+#if SYZ_EXECUTOR && GOOS_linux
+			os_meminit();
 #endif
 #if GOOS_akaros
 #if SYZ_EXECUTOR
