@@ -66,7 +66,8 @@ typedef unsigned char uint8;
 // Note: zircon max fd is 256.
 // Some common_OS.h files know about this constant for RLIMIT_NOFILE.
 const int kMaxFd = 250;
-const int kMaxThreads = 16;
+const int kMaxThreads = 32;
+const int kPreallocCoverThreads = 3; // the number of kcov instances to be set up during init
 const int kInPipeFd = kMaxFd - 1; // remapped from stdin
 const int kOutPipeFd = kMaxFd - 2; // remapped from stdout
 const int kCoverFd = kOutPipeFd - kMaxThreads;
@@ -242,6 +243,7 @@ struct thread_t {
 	uint32 reserrno;
 	bool fault_injected;
 	cover_t cov;
+	bool cov_initialized;
 	bool soft_fail_state;
 };
 
@@ -343,6 +345,7 @@ static void write_call_output(thread_t* th, bool finished);
 static void write_extra_output();
 static void execute_call(thread_t* th);
 static void thread_create(thread_t* th, int id);
+static void thread_setup_cover(thread_t* th);
 static void* worker_thread(void* arg);
 static uint64 read_input(uint64** input_posp, bool peek = false);
 static uint64 read_arg(uint64** input_posp);
@@ -450,8 +453,10 @@ int main(int argc, char** argv)
 	if (flag_coverage) {
 		for (int i = 0; i < kMaxThreads; i++) {
 			threads[i].cov.fd = kCoverFd + i;
-			cover_open(&threads[i].cov, false);
-			cover_protect(&threads[i].cov);
+			// Pre-setup coverage collection for some threads. This should be enough for almost
+			// all programs, for the remaning few ones coverage will be set up when it's needed.
+			if (i < kPreallocCoverThreads)
+				thread_setup_cover(&threads[i]);
 		}
 		cover_open(&extra_cov, true);
 		cover_protect(&extra_cov);
@@ -894,6 +899,11 @@ thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 cop
 	if (event_isset(&th->ready) || !event_isset(&th->done) || th->executing)
 		failmsg("bad thread state in schedule", "ready=%d done=%d executing=%d",
 			event_isset(&th->ready), event_isset(&th->done), th->executing);
+	// Lazily set up coverage collection.
+	// It is assumed that actually it's already initialized - with a few rare exceptions.
+	if (flag_coverage && !colliding)
+		thread_setup_cover(th);
+
 	last_scheduled = th;
 	th->colliding = colliding;
 	th->copyout_pos = pos;
@@ -1125,6 +1135,15 @@ void thread_create(thread_t* th, int id)
 	event_set(&th->done);
 	if (flag_threaded)
 		thread_start(worker_thread, th);
+}
+
+void thread_setup_cover(thread_t* th)
+{
+	if (th->cov_initialized)
+		return;
+	cover_open(&th->cov, false);
+	cover_protect(&th->cov);
+	th->cov_initialized = true;
 }
 
 void* worker_thread(void* arg)
