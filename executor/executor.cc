@@ -113,9 +113,10 @@ static void reply_handshake();
 #endif
 
 #if SYZ_EXECUTOR_USES_SHMEM
-const int kMaxOutput = 16 << 20;
+const int kMaxOutputBase = 16 << 20;
+int kMaxOutput = 0;
 const int kInFd = 3;
-const int kOutFd = 4;
+int kOutFd = 4;
 static uint32* output_data;
 static uint32* output_pos;
 static uint32* write_output(uint32 v);
@@ -381,6 +382,26 @@ static void setup_features(char** enable, int n);
 
 #include "test.h"
 
+#if SYZ_EXECUTOR_USES_SHMEM
+void alloc_output(int size, bool _close)
+{
+	if (kOutFd < 0)
+		return;
+	if (size > kMaxOutput) {
+		void* preferred = (void*)(0x1b2bc20000ull + (1 << 20) * (getpid() % 128));
+		output_data = (uint32*)mmap(preferred, size,
+					    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, kOutFd, 0);
+		if (output_data != preferred)
+			fail("mmap of output file failed");
+		kMaxOutput = size;
+	}
+	if (_close) {
+		close(kOutFd);
+		kOutFd = -1;
+	}
+}
+#endif
+
 int main(int argc, char** argv)
 {
 	if (argc == 2 && strcmp(argv[1], "version") == 0) {
@@ -429,17 +450,13 @@ int main(int argc, char** argv)
 	// so we map the region at a (hopefully) hard to guess address with random offset,
 	// surrounded by unmapped pages.
 	// The address chosen must also work on 32-bit kernels with 1GB user address space.
-	void* preferred = (void*)(0x1b2bc20000ull + (1 << 20) * (getpid() % 128));
-	output_data = (uint32*)mmap(preferred, kMaxOutput,
-				    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, kOutFd, 0);
-	if (output_data != preferred)
-		fail("mmap of output file failed");
 
+	alloc_output(kMaxOutputBase / 16, false);
 	// Prevent test programs to mess with these fds.
 	// Due to races in collider mode, a program can e.g. ftruncate one of these fds,
 	// which will cause fuzzer to crash.
 	close(kInFd);
-	close(kOutFd);
+
 #endif
 
 	use_temporary_dir();
@@ -657,6 +674,12 @@ void execute_one()
 	// where 0x920000 was exactly collide address, so every iteration reset collide to 0.
 	bool colliding = false;
 #if SYZ_EXECUTOR_USES_SHMEM
+	if (flag_comparisons)
+		alloc_output(kMaxOutputBase, true);
+	else if (flag_collect_cover)
+		alloc_output(kMaxOutputBase / 2, true);
+	else if (flag_coverage)
+		alloc_output(kMaxOutputBase / 3, true);
 	output_pos = output_data;
 	write_output(0); // Number of executed syscalls (updated later).
 #endif
