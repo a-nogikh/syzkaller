@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // ProcessTempDir creates a new temp dir in where and returns its path and an unique index.
@@ -98,26 +100,34 @@ func LongPipe() (io.ReadCloser, io.WriteCloser, error) {
 
 // CreateMemMappedFile creates a temp file with the requested size and maps it into memory.
 func CreateMemMappedFile(size int) (f *os.File, mem []byte, err error) {
-	f, err = ioutil.TempFile("./", "syzkaller-shm")
+	fd, err := unix.MemfdCreate("123", 0)
+	//	f, err = ioutil.TempFile("./", "syzkaller-shm")
 	if err != nil {
 		err = fmt.Errorf("failed to create temp file: %v", err)
 		return
 	}
+	// filepath to our newly created in-memory file descriptor
+	fp := fmt.Sprintf("/proc/self/fd/%d", fd)
+
+	// create an *os.File, should you need it
+	// alternatively, pass fd or fp as input to a library.
+	f = os.NewFile(uintptr(fd), fp)
+
 	if err = f.Truncate(int64(size)); err != nil {
 		err = fmt.Errorf("failed to truncate shm file: %v", err)
 		f.Close()
 		os.Remove(f.Name())
 		return
 	}
-	f.Close()
-	fname := f.Name()
-	f, err = os.OpenFile(f.Name(), os.O_RDWR, DefaultFilePerm)
-	if err != nil {
-		err = fmt.Errorf("failed to open shm file: %v", err)
-		os.Remove(fname)
-		return
-	}
-	mem, err = syscall.Mmap(int(f.Fd()), 0, size, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	//f.Close()
+	//fname := f.Name()
+	//f, err = os.OpenFile(f.Name(), os.O_RDWR, DefaultFilePerm)
+	//if err != nil {
+	//		err = fmt.Errorf("failed to open shm file: %v", err)
+	//	os.Remove(fname)
+	//		return
+	//}
+	mem, err = syscall.Mmap(fd, 0, size, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
 		err = fmt.Errorf("failed to mmap shm file: %v", err)
 		f.Close()
@@ -131,7 +141,7 @@ func CreateMemMappedFile(size int) (f *os.File, mem []byte, err error) {
 func CloseMemMappedFile(f *os.File, mem []byte) error {
 	err1 := syscall.Munmap(mem)
 	err2 := f.Close()
-	err3 := os.Remove(f.Name())
+	var err3 error //os.Remove(f.Name())
 	switch {
 	case err1 != nil:
 		return err1
