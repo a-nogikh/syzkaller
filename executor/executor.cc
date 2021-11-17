@@ -116,8 +116,8 @@ static void reply_handshake();
 // Allocating (and forking) virtual memory for each executed process is expensive, so we only mmap
 // the amount we might possibly need for the specific received prog.
 const int kMaxOutputComparisons = 14 << 20; // < 1% of all executions.
-const int kMaxOutputCoverage = 6 << 20; // up to 1/3 of all executions (depending on corpus rotation).
-const int kMaxOutputSignal = 4 << 20;
+const int kMaxOutputCoverage = 9 << 20; // up to 1/3 of all executions (depending on corpus rotation).
+const int kMaxOutputSignal = 6 << 20;
 #ifndef SYZ_EXECUTOR_USES_FORK_SERVER
 const int kMaxOutputNoFork = kMaxOutputComparisons;
 #endif
