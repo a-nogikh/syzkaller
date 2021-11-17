@@ -358,7 +358,7 @@ func (fuzzer *Fuzzer) pollLoop() {
 	var execTotal uint64
 	var lastPoll time.Time
 	var lastPrint time.Time
-	ticker := time.NewTicker(3 * time.Second * fuzzer.timeouts.Scale).C
+	ticker := time.NewTicker(2 * time.Second * fuzzer.timeouts.Scale).C
 	for {
 		poll := false
 		select {
@@ -371,7 +371,7 @@ func (fuzzer *Fuzzer) pollLoop() {
 			log.Logf(0, "alive, executed %v", execTotal)
 			lastPrint = time.Now()
 		}
-		if poll || time.Since(lastPoll) > 10*time.Second*fuzzer.timeouts.Scale {
+		if poll || time.Since(lastPoll) > 7*time.Second*fuzzer.timeouts.Scale {
 			needCandidates := fuzzer.workQueue.wantCandidates()
 			if poll && !needCandidates {
 				continue
