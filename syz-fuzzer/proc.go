@@ -289,6 +289,7 @@ func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog, stat Stat) *ipc.P
 		atomic.AddUint64(&proc.fuzzer.stats[stat], 1)
 		output, info, hanged, err := proc.env.Exec(opts, p)
 		if err != nil {
+			atomic.AddUint64(&proc.fuzzer.stats[StatExecError], 1)
 			if err == prog.ErrExecBufferTooSmall {
 				// It's bad if we systematically fail to serialize programs,
 				// but so far we don't have a better handling than ignoring this.
