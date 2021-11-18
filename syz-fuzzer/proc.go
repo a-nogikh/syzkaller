@@ -102,6 +102,7 @@ func (proc *Proc) loop() {
 func (proc *Proc) triageInput(item *WorkTriage) {
 	log.Logf(1, "#%v: triaging type=%x", proc.pid, item.flags)
 
+	atomic.AddUint64(&proc.fuzzer.stats[StatTriageAttempts], 1)
 	prio := signalPrio(item.p, &item.info, item.call)
 	inputSignal := signal.FromRaw(item.info.Signal, prio)
 	newSignal := proc.fuzzer.corpusSignalDiff(inputSignal)
@@ -125,6 +126,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	for i := 0; i < signalRuns; i++ {
 		info := proc.executeRaw(proc.execOptsCover, item.p, StatTriage)
 		if !reexecutionSuccess(info, &item.info, item.call) {
+			atomic.AddUint64(&proc.fuzzer.stats[StatTriageBadReexec], 1)
 			// The call was not executed or failed.
 			notexecuted++
 			if notexecuted > signalRuns/2+1 {
@@ -137,11 +139,13 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 		// Without !minimized check manager starts losing some considerable amount
 		// of coverage after each restart. Mechanics of this are not completely clear.
 		if newSignal.Empty() && item.flags&ProgMinimized == 0 {
+			atomic.AddUint64(&proc.fuzzer.stats[StatTriageNoSignal], 1)
 			return
 		}
 		inputCover.Merge(thisCover)
 	}
 	if item.flags&ProgMinimized == 0 {
+		atomic.AddUint64(&proc.fuzzer.stats[StatTriageMinimize], 1)
 		item.p, item.call = prog.Minimize(item.p, item.call, false,
 			func(p1 *prog.Prog, call1 int) bool {
 				for i := 0; i < minimizeAttempts; i++ {
@@ -289,6 +293,7 @@ func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog, stat Stat) *ipc.P
 		atomic.AddUint64(&proc.fuzzer.stats[stat], 1)
 		output, info, hanged, err := proc.env.Exec(opts, p)
 		if err != nil {
+			atomic.AddUint64(&proc.fuzzer.stats[StatExecError], 1)
 			if err == prog.ErrExecBufferTooSmall {
 				// It's bad if we systematically fail to serialize programs,
 				// but so far we don't have a better handling than ignoring this.
