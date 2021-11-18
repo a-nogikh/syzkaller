@@ -81,6 +81,7 @@ const (
 	StatSmash
 	StatHint
 	StatSeed
+	StatExecError
 	StatCount
 )
 
@@ -93,6 +94,7 @@ var statNames = [StatCount]string{
 	StatSmash:     "exec smash",
 	StatHint:      "exec hints",
 	StatSeed:      "exec seeds",
+	StatExecError: "exec error",
 }
 
 type OutputType int
