@@ -81,18 +81,28 @@ const (
 	StatSmash
 	StatHint
 	StatSeed
+	StatExecError
+	StatTriageAttempts
+	StatTriageBadReexec
+	StatTriageNoSignal
+	StatTriageMinimize
 	StatCount
 )
 
 var statNames = [StatCount]string{
-	StatGenerate:  "exec gen",
-	StatFuzz:      "exec fuzz",
-	StatCandidate: "exec candidate",
-	StatTriage:    "exec triage",
-	StatMinimize:  "exec minimize",
-	StatSmash:     "exec smash",
-	StatHint:      "exec hints",
-	StatSeed:      "exec seeds",
+	StatGenerate:        "exec gen",
+	StatFuzz:            "exec fuzz",
+	StatCandidate:       "exec candidate",
+	StatTriage:          "exec triage",
+	StatMinimize:        "exec minimize",
+	StatSmash:           "exec smash",
+	StatHint:            "exec hints",
+	StatSeed:            "exec seeds",
+	StatExecError:       "exec error",
+	StatTriageAttempts:  "triage attempts",
+	StatTriageBadReexec: "triage reexec fail",
+	StatTriageNoSignal:  "triage no signal",
+	StatTriageMinimize:  "triage minimize",
 }
 
 type OutputType int
