@@ -1478,20 +1478,26 @@ uint64 read_input(uint64** input_posp, bool peek)
 }
 
 #if SYZ_EXECUTOR_USES_SHMEM
+uint32 get_output_size()
+{
+	if (output_size < (4 << 20) || output_size > kMaxOutputComparisons)
+		return 4 << 20;
+	return output_size;
+}
 uint32* write_output(uint32 v)
 {
-	if (output_pos < output_data || (char*)output_pos >= (char*)output_data + output_size)
+	if (output_pos < output_data || (char*)output_pos >= (char*)output_data + get_output_size())
 		failmsg("output overflow", "pos=%p region=[%p:%p]",
-			output_pos, output_data, (char*)output_data + output_size);
+			output_pos, output_data, (char*)output_data + get_output_size());
 	*output_pos = v;
 	return output_pos++;
 }
 
 uint32* write_output_64(uint64 v)
 {
-	if (output_pos < output_data || (char*)(output_pos + 1) >= (char*)output_data + output_size)
+	if (output_pos < output_data || (char*)(output_pos + 1) >= (char*)output_data + get_output_size())
 		failmsg("output overflow", "pos=%p region=[%p:%p]",
-			output_pos, output_data, (char*)output_data + output_size);
+			output_pos, output_data, (char*)output_data + get_output_size());
 	*(uint64*)output_pos = v;
 	output_pos += 2;
 	return output_pos;
@@ -1552,7 +1558,7 @@ bool kcov_comparison_t::ignore() const
 		// First of all, we want avert fuzzer from our output region.
 		// Without this fuzzer manages to discover and corrupt it.
 		uint64 out_start = (uint64)output_data;
-		uint64 out_end = out_start + output_size;
+		uint64 out_end = out_start + get_output_size();
 		if (arg1 >= out_start && arg1 <= out_end)
 			return true;
 		if (arg2 >= out_start && arg2 <= out_end)
