@@ -280,13 +280,17 @@ func main() {
 	}
 
 	log.Logf(0, "starting %v fuzzer processes", *flagProcs)
+	procs := make(chan *Proc, *flagProcs)
 	for pid := 0; pid < *flagProcs; pid++ {
 		proc, err := newProc(fuzzer, pid)
 		if err != nil {
 			log.Fatalf("failed to create proc: %v", err)
 		}
+		procs <- proc
 		fuzzer.procs = append(fuzzer.procs, proc)
-		go proc.loop()
+
+		ctrl, err := newControl(fuzzer, pid, procs)
+		go ctrl.loop()
 	}
 
 	fuzzer.pollLoop()
