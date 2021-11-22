@@ -78,9 +78,12 @@ static void cover_open(cover_t* cov, bool extra)
 	int fd = open("/sys/kernel/debug/kcov", O_RDWR);
 	if (fd == -1)
 		fail("open of /sys/kernel/debug/kcov failed");
-	if (dup2(fd, cov->fd) < 0)
-		failmsg("filed to dup cover fd", "from=%d, to=%d", fd, cov->fd);
-	close(fd);
+	if (dup2(fd, cov->fd) < 0) {
+		cov->fd = fd;
+		// failmsg("filed to dup cover fd", "from=%d, to=%d", fd, cov->fd);
+	} else {
+		close(fd);
+	}
 	const int kcov_init_trace = is_kernel_64_bit ? KCOV_INIT_TRACE64 : KCOV_INIT_TRACE32;
 	const int cover_size = extra ? kExtraCoverSize : kCoverSize;
 	if (ioctl(cov->fd, kcov_init_trace, cover_size))
