@@ -125,7 +125,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	notexecuted := 0
 	for i := 0; i < signalRuns; i++ {
 		info := proc.executeRaw(proc.execOptsCover, item.p, StatTriage)
-		if !reexecutionSuccess(info, &item.info, item.call) {
+		if !proc.reexecutionSuccess(info, &item.info, item.call) {
 			atomic.AddUint64(&proc.fuzzer.stats[StatTriageBadReexec], 1)
 			// The call was not executed or failed.
 			notexecuted++
@@ -150,7 +150,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 			func(p1 *prog.Prog, call1 int) bool {
 				for i := 0; i < minimizeAttempts; i++ {
 					info := proc.execute(proc.execOptsNoCollide, p1, ProgNormal, StatMinimize)
-					if !reexecutionSuccess(info, &item.info, call1) {
+					if !proc.reexecutionSuccess(info, &item.info, call1) {
 						// The call was not executed or failed.
 						continue
 					}
@@ -181,19 +181,36 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	}
 }
 
-func reexecutionSuccess(info *ipc.ProgInfo, oldInfo *ipc.CallInfo, call int) bool {
-	if info == nil || len(info.Calls) == 0 {
+func (proc *Proc) reexecutionSuccess(info *ipc.ProgInfo, oldInfo *ipc.CallInfo, call int) bool {
+	atomic.AddUint64(&proc.fuzzer.stats[StatReexecs], 1)
+	if info == nil {
+		atomic.AddUint64(&proc.fuzzer.stats[StatNoReexecNil], 1)
+		return false
+	}
+	if len(info.Calls) == 0 {
+		atomic.AddUint64(&proc.fuzzer.stats[StatNoReexecCalls], 1)
 		return false
 	}
 	if call != -1 {
 		// Don't minimize calls from successful to unsuccessful.
 		// Successful calls are much more valuable.
 		if oldInfo.Errno == 0 && info.Calls[call].Errno != 0 {
+			atomic.AddUint64(&proc.fuzzer.stats[StatNoReexecErrno], 1)
 			return false
 		}
-		return len(info.Calls[call].Signal) != 0
+		if len(info.Calls[call].Signal) != 0 {
+			return true
+		} else {
+			atomic.AddUint64(&proc.fuzzer.stats[StatNoReexecSignal], 1)
+			return false
+		}
 	}
-	return len(info.Extra.Signal) != 0
+	if len(info.Extra.Signal) != 0 {
+		return true
+	} else {
+		atomic.AddUint64(&proc.fuzzer.stats[StatNoReexecExtra], 1)
+		return false
+	}
 }
 
 func getSignalAndCover(p *prog.Prog, info *ipc.ProgInfo, call int) (signal.Signal, []uint32) {
