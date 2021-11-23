@@ -86,6 +86,12 @@ const (
 	StatTriageBadReexec
 	StatTriageNoSignal
 	StatTriageMinimize
+	StatReexecs
+	StatNoReexecNil
+	StatNoReexecCalls
+	StatNoReexecSignal
+	StatNoReexecErrno
+	StatNoReexecExtra
 	StatCount
 )
 
@@ -103,6 +109,12 @@ var statNames = [StatCount]string{
 	StatTriageBadReexec: "triage reexec fail",
 	StatTriageNoSignal:  "triage no signal",
 	StatTriageMinimize:  "triage minimize",
+	StatReexecs:         "reexec total",
+	StatNoReexecNil:     "reexec nil",
+	StatNoReexecCalls:   "reexec calls",
+	StatNoReexecSignal:  "reexec signal",
+	StatNoReexecErrno:   "reexec errno",
+	StatNoReexecExtra:   "reexec extra",
 }
 
 type OutputType int
