@@ -228,23 +228,23 @@ struct call_t {
 };
 
 struct cover_t {
-	int fd;
-	uint32 size;
-	char* data;
-	char* data_end;
+	volatile int fd;
+	volatile uint32 size;
+	volatile char* data;
+	volatile char* data_end;
 	// Note: On everything but darwin the first value in data is the count of
 	// recorded PCs, followed by the PCs. We therefore set data_offset to the
 	// size of one PC.
 	// On darwin data points to an instance of the ksancov_trace struct. Here we
 	// set data_offset to the offset between data and the structs 'pcs' member,
 	// which contains the PCs.
-	intptr_t data_offset;
+	volatile intptr_t data_offset;
 	// Note: On everything but darwin this is 0, as the PCs contained in data
 	// are already correct. XNUs KSANCOV API, however, chose to always squeeze
 	// PCs into 32 bit. To make the recorded PC fit, KSANCOV substracts a fixed
 	// offset (VM_MIN_KERNEL_ADDRESS for AMD64) and then truncates the result to
 	// uint32_t. We get this from the 'offset' member in ksancov_trace.
-	intptr_t pc_offset;
+	volatile intptr_t pc_offset;
 };
 
 struct thread_t {
@@ -265,7 +265,7 @@ struct thread_t {
 	uint32 reserrno;
 	bool fault_injected;
 	cover_t cov;
-	bool cov_initialized;
+	volatile bool cov_initialized;
 	bool soft_fail_state;
 };
 
