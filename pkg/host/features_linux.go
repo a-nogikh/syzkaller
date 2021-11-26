@@ -54,7 +54,8 @@ func checkComparisons() (reason string) {
 }
 
 func checkExtraCoverage() (reason string) {
-	return checkCoverageFeature(FeatureExtraCoverage)
+	return "extra coverage is disabled"
+	//	return checkCoverageFeature(FeatureExtraCoverage)
 }
 
 func checkCoverageFeature(feature int) (reason string) {
