@@ -127,9 +127,6 @@ const (
 )
 
 func createIPCConfig(features *host.Features, config *ipc.Config) {
-	if features[host.FeatureExtraCoverage].Enabled {
-		config.Flags |= ipc.FlagExtraCover
-	}
 	if features[host.FeatureNetInjection].Enabled {
 		config.Flags |= ipc.FlagEnableTun
 	}
