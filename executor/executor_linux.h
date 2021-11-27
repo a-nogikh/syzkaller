@@ -76,18 +76,9 @@ static intptr_t execute_syscall(const call_t* c, intptr_t a[kMaxArgs])
 static void cover_open(cover_t* cov, bool extra)
 {
 	int fd = open("/sys/kernel/debug/kcov", O_RDWR);
-	if (fd == -1)
+	if (fd < 0)
 		fail("open of /sys/kernel/debug/kcov failed");
-	if (dup2(fd, cov->fd) < 0) {
-		// It is not mandatory that kcov handle must have the exact fd value.
-		// Moreover, it is especially fragile when we create kcov instances not
-		// at the very beginning of syz-executor, but at the time of fuzzing -
-		// when all sandboxing and preparations have been done.
-		// So we only do our best to dup2 to the originally desired number.
-		cov->fd = fd;
-	} else {
-		close(fd);
-	}
+	cov->fd = fd;
 	const int kcov_init_trace = is_kernel_64_bit ? KCOV_INIT_TRACE64 : KCOV_INIT_TRACE32;
 	const int cover_size = extra ? kExtraCoverSize : kCoverSize;
 	if (ioctl(cov->fd, kcov_init_trace, cover_size))
