@@ -289,8 +289,28 @@ func (proc *Proc) executeAndCollide(execOpts *ipc.ExecOpts, p *prog.Prog, flags 
 	}
 }
 
+var rerunSteps = []int{8, 32, 64}
+
+func (proc *Proc) assignRandomRerun(p *prog.Prog) {
+	for i := 0; i+1 < len(p.Calls); i++ {
+		if !p.Calls[i].Props.Async || proc.rnd.Intn(4) != 0 {
+			continue
+		}
+		// We assign rerun to consecutive pairs of calls, where the first call is async.
+		// TODO: consider assigning rerun also to non-collided progs.
+		rerun := rerunSteps[proc.rnd.Intn(len(rerunSteps))]
+		p.Calls[i].Props.Rerun = rerun
+		p.Calls[i+1].Props.Rerun = rerun
+		i++
+	}
+}
+
 func (proc *Proc) randomCollide(origP *prog.Prog) *prog.Prog {
-	return prog.AssignRandomAsync(origP, proc.rnd)
+	p := prog.AssignRandomAsync(origP, proc.rnd)
+	if proc.rnd.Intn(2) != 0 {
+		proc.assignRandomRerun(p)
+	}
+	return p
 }
 
 func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog, stat Stat) *ipc.ProgInfo {
