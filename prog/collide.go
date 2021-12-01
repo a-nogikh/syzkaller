@@ -5,7 +5,10 @@
 
 package prog
 
-import "math/rand"
+import (
+	"fmt"
+	"math/rand"
+)
 
 // The executor has no more than 16 threads that are used both for async calls and for calls
 // that timed out. If we just ignore that limit, we could end up generating programs that
@@ -54,4 +57,47 @@ func AssignRandomAsync(origProg *Prog, rand *rand.Rand) *Prog {
 	}
 
 	return prog
+}
+
+// We append prog to itself, but let the second part only reference resource from the first one.
+// Then we execute all the duplicated calls simultaneously.
+// This somehow resembles the way the previous collide mode was implemented - a program was executed
+// normally and then one more time again, while keeping resource values from the first execution and
+// not waiting until every other call finishes.
+func DoubleExecCollide(origProg *Prog, rand *rand.Rand) (*Prog, error) {
+	if len(origProg.Calls)*2 > MaxCalls {
+		return nil, fmt.Errorf("the prog is too big for the DoubleExecCollide transformation")
+	}
+	prog := origProg.Clone()
+	oldToNew := make(map[*ResultArg]*ResultArg)
+	dupCalls := cloneCalls(prog.Calls, oldToNew)
+	newToOld := make(map[*ResultArg]*ResultArg)
+	for key, value := range oldToNew {
+		newToOld[value] = key
+	}
+	for _, c := range dupCalls {
+		ForeachArg(c, func(arg Arg, _ *ArgCtx) {
+			resArg, ok := arg.(*ResultArg)
+			if !ok || resArg.Res == nil {
+				return
+			}
+			delete(resArg.Res.uses, resArg)
+			newRes := newToOld[resArg.Res]
+			if newRes == nil {
+				panic("failed to map a cloned resource to the original one")
+			}
+			newRes.uses[resArg] = true
+			resArg.Res = newRes
+		})
+	}
+	leftAsync := maxAsyncPerProg
+	for _, c := range dupCalls {
+		if leftAsync == 0 {
+			break
+		}
+		c.Props.Async = true
+		leftAsync--
+	}
+	prog.Calls = append(prog.Calls, dupCalls...)
+	return prog, nil
 }
