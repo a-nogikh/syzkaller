@@ -470,6 +470,13 @@ int main(int argc, char** argv)
 	if (flag_coverage) {
 		for (int i = 0; i < kMaxThreads; i++) {
 			threads[i].cov.fd = kCoverFd + i;
+			if (i < 16) {
+				int fd = open("/dev/null", O_RDONLY);
+				if (fd < 0)
+					fail("failed to open /dev/null");
+				dup2(fd, threads[i].cov.fd);
+			}
+
 			// Pre-setup coverage collection for some threads. This should be enough for almost
 			// all programs, for the remaning few ones coverage will be set up when it's needed.
 			if (i < kPreallocCoverThreads)
