@@ -946,8 +946,9 @@ thread_t* schedule_call(int call_index, int call_num, bool colliding, uint64 cop
 	int i = 0;
 	for (; i < kMaxThreads; i++) {
 		thread_t* th = &threads[i];
-		if (!th->created)
+		if (!th->created) {
 			thread_create(th, i, flag_coverage && !colliding);
+		}
 		if (event_isset(&th->done)) {
 			if (th->executing)
 				handle_completion(th);
@@ -1186,10 +1187,14 @@ void thread_create(thread_t* th, int id, bool need_coverage)
 	th->created = true;
 	th->id = id;
 	th->executing = false;
+	if (id > 7) {
+		exitf("emulating the old thread limit");
+	}
 	// Lazily set up coverage collection.
 	// It is assumed that actually it's already initialized - with a few rare exceptions.
-	if (need_coverage)
+	if (need_coverage) {
 		thread_setup_cover(th);
+	}
 	event_init(&th->ready);
 	event_init(&th->done);
 	event_set(&th->done);
