@@ -67,7 +67,7 @@ typedef unsigned char uint8;
 // Some common_OS.h files know about this constant for RLIMIT_NOFILE.
 const int kMaxFd = 250;
 const int kMaxThreads = 32;
-const int kPreallocCoverThreads = 2; // the number of kcov instances to be set up during init
+const int kPreallocCoverThreads = 3; // the number of kcov instances to be set up during init
 const int kInPipeFd = kMaxFd - 1; // remapped from stdin
 const int kOutPipeFd = kMaxFd - 2; // remapped from stdout
 const int kCoverFd = kOutPipeFd - kMaxThreads;
