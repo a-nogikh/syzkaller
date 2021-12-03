@@ -88,6 +88,12 @@ func (stats *Stats) all() map[string]uint64 {
 	for k, v := range stats.namedStats {
 		m[k] = v
 	}
+	collideExecs, ok := m["exec collide"]
+	if !ok {
+		collideExecs = 0
+		m["exec collide"] = 0
+	}
+	m["exec nocollide"] = m["exec total"] - collideExecs
 	return m
 }
 
