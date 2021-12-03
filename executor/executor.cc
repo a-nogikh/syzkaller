@@ -477,6 +477,7 @@ int main(int argc, char** argv)
 				thread_mmap_cover(&threads[i]);
 			}
 		}
+		extra_cov.fd = kCoverFd - 1;
 		cover_open(&extra_cov, true);
 		cover_mmap(&extra_cov);
 		cover_protect(&extra_cov);
