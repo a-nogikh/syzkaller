@@ -237,6 +237,12 @@ func RunManager(cfg *mgrconfig.Config) {
 				vals["corpus"] = uint64(len(mgr.corpus))
 				vals["uptime"] = uint64(time.Since(mgr.firstConnect)) / 1e9
 				vals["fuzzing"] = uint64(mgr.fuzzingTime) / 1e9
+
+				vals["extra coverage"] = 0
+				cc, ok := mgr.collectSyscallInfo()[".extra"]
+				if ok {
+					vals["extra coverage"] = uint64(len(cc.cov))
+				}
 				mgr.mu.Unlock()
 
 				data, err := json.MarshalIndent(vals, "", "  ")
