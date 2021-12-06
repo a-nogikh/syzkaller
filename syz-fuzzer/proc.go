@@ -293,7 +293,7 @@ var rerunSteps = []int{8, 32, 64}
 
 func (proc *Proc) assignRandomRerun(p *prog.Prog) {
 	for i := 0; i+1 < len(p.Calls); i++ {
-		if !p.Calls[i].Props.Async || proc.rnd.Intn(4) != 0 {
+		if !p.Calls[i].Props.Async || proc.rnd.Intn(3) != 0 {
 			continue
 		}
 		// We assign rerun to consecutive pairs of calls, where the first call is async.
