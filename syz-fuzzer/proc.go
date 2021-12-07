@@ -289,7 +289,7 @@ func (proc *Proc) executeAndCollide(execOpts *ipc.ExecOpts, p *prog.Prog, flags 
 	}
 }
 
-var rerunSteps = []int{8, 32, 64}
+var rerunSteps = []int{64, 128}
 
 func (proc *Proc) assignRandomRerun(p *prog.Prog) {
 	for i := 0; i+1 < len(p.Calls); i++ {
