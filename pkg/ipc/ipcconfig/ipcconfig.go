@@ -40,8 +40,7 @@ func Default(target *prog.Target) (*ipc.Config, *ipc.ExecOpts, error) {
 	c.UseShmem = sysTarget.ExecutorUsesShmem
 	c.UseForkServer = sysTarget.ExecutorUsesForkServer
 	opts := &ipc.ExecOpts{
-		Flags:       ipc.FlagDedupCover,
-		ProgTimeout: c.Timeouts.Program,
+		Flags: ipc.FlagDedupCover,
 	}
 	if *flagThreaded {
 		opts.Flags |= ipc.FlagThreaded
