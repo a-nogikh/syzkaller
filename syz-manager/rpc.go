@@ -17,6 +17,7 @@ import (
 	"github.com/google/syzkaller/pkg/rpctype"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/prog"
+	"github.com/google/syzkaller/vm"
 )
 
 type RPCServer struct {
@@ -62,6 +63,9 @@ type RPCManagerView interface {
 	newInput(inp rpctype.RPCInput, sign signal.Signal) bool
 	candidateBatch(size int) []rpctype.RPCCandidate
 	rotateCorpus() bool
+	FillRuntest(prog []byte, r *rpctype.RunTestPollRes)
+	GetRetriageTask(id int) (*RetriageTask, int)
+	DumpRetriageResults()
 }
 
 func startRPCServer(mgr *Manager) (*RPCServer, error) {
@@ -309,6 +313,75 @@ func (serv *RPCServer) NewInput(a *rpctype.NewInputArgs, r *int) error {
 			other.inputs = append(other.inputs, a.RPCInput)
 		}
 	}
+	return nil
+}
+
+var exited bool
+
+func (serv *RPCServer) PollRuntest(a *rpctype.RunTestPollReq, r *rpctype.RunTestPollRes) error {
+	serv.mu.Lock()
+	defer serv.mu.Unlock()
+
+	task, id := serv.mgr.GetRetriageTask(-1)
+	if task == nil {
+		if !exited {
+			exited = true
+			log.Logf(0, "Retriage done, exiting")
+			close(vm.Shutdown)
+		}
+		return fmt.Errorf("done")
+	}
+
+	serv.mgr.FillRuntest(task.prog, r)
+	r.ID = id
+	log.Logf(0, "gave away id %d", r.ID)
+
+	// TODO: run each item several times?
+	return nil
+}
+
+func (serv *RPCServer) Done(a *rpctype.RunTestDoneArgs, r *int) error {
+	serv.mu.Lock()
+	defer serv.mu.Unlock()
+
+	log.Logf(0, "got back id %d", a.ID)
+	task, _ := serv.mgr.GetRetriageTask(a.ID)
+	if task == nil {
+		return fmt.Errorf("task not found")
+	}
+
+	if !task.sent {
+		panic("sent is set to false on a task that is already completed")
+	}
+	// TODO: retry also on 0 coverage?
+	if a.Error != "" {
+		log.Logf(0, "error %s", a.Error)
+
+		task.attempt++
+		if task.attempt < 4 {
+			task.sent = false
+		} else {
+			task.error = a.Error
+			task.finished = true
+		}
+		return nil
+	}
+	task.finished = true
+	info := a.Info[0]
+
+	if task.call == -1 {
+		task.coverAfter = append([]uint32{}, info.Extra.Cover...)
+	} else if len(info.Calls) > task.call {
+		task.coverAfter = append([]uint32{}, info.Calls[task.call].Cover...)
+	} else {
+		log.Logf(0, "too few calls %d %d", len(info.Calls), task.call)
+		return nil
+	}
+
+	// TODO: don't do it on every received task - this is just too slow.
+	// Do it in a separate goroutine?
+	// TODO: take care not to loose data on exit. Mv to .bak and then do write?
+	serv.mgr.DumpRetriageResults()
 	return nil
 }
 

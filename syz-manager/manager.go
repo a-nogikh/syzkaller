@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -26,12 +27,14 @@ import (
 	"github.com/google/syzkaller/pkg/hash"
 	"github.com/google/syzkaller/pkg/host"
 	"github.com/google/syzkaller/pkg/instance"
+	"github.com/google/syzkaller/pkg/ipc"
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/mgrconfig"
 	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/pkg/report"
 	"github.com/google/syzkaller/pkg/repro"
 	"github.com/google/syzkaller/pkg/rpctype"
+	"github.com/google/syzkaller/pkg/runtest"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys/targets"
@@ -44,7 +47,106 @@ var (
 	flagBench  = flag.String("bench", "", "write execution statistics into this file periodically")
 )
 
+type RetriageTask struct {
+	key         string
+	prog        []byte
+	call        int
+	callName    string
+	coverBefore []uint32
+	coverAfter  []uint32
+	sent        bool
+	finished    bool
+	error       string
+	attempt     int
+}
+
+func (t *RetriageTask) CommonCover() int {
+	before := make(map[uint32]bool)
+	for _, val := range t.coverBefore {
+		before[val] = true
+	}
+	count := 0
+	for _, val := range t.coverAfter {
+		_, ok := before[val]
+		if ok {
+			count++
+		}
+	}
+	return count
+}
+
+func (m *Manager) DumpRetriageResults() {
+	// TODO: also save coverage itself - it will help analyse the problem.
+	// In what format? We want to be able to get .html, but getting them right away
+	// might take too much time. Maybe only for those with the bad %?
+	table := [][]string{
+		[]string{"Prog", "Call#", "Call Name", "Orig Cover", "Reproduced Cover", "%", "Error"},
+	}
+	for _, task := range m.retriageTasks {
+		if !task.finished {
+			continue
+		}
+		commonCover := task.CommonCover()
+		percentage := float64(100.0)
+		if len(task.coverBefore) > 0 {
+			percentage = float64(commonCover) / float64(len(task.coverBefore)) * 100.0
+		}
+		row := []string{
+			fmt.Sprintf("%s", task.prog),
+			fmt.Sprintf("%d", task.call),
+			task.callName,
+			fmt.Sprintf("%d", len(task.coverBefore)),
+			fmt.Sprintf("%d", len(task.coverAfter)),
+			fmt.Sprintf("%.1f%%", percentage),
+			task.error,
+		}
+		table = append(table, row)
+	}
+	f, err := os.Create("/tmp/syz-result.csv")
+	if err != nil {
+		log.Logf(0, "csv create error %s", err)
+		return
+	}
+	defer f.Close()
+	err = csv.NewWriter(f).WriteAll(table)
+	if err != nil {
+		log.Logf(0, "csv save error %s", err)
+	}
+}
+
+func (m *Manager) GetRetriageTask(id int) (*RetriageTask, int) {
+	if id >= 0 {
+		return &m.retriageTasks[id], id
+	}
+	for id, _ := range m.retriageTasks {
+		task := &m.retriageTasks[id]
+		if !task.sent {
+			task.sent = true
+			return task, id
+		}
+	}
+	return nil, -1
+}
+
+func (mgr *Manager) FillRuntest(prog []byte, r *rpctype.RunTestPollRes) {
+	target := targets.Get(mgr.cfg.TargetOS, mgr.cfg.TargetArch)
+
+	cfg, err := runtest.GenCfg(target, mgr.checkResult.Features, "none", true, true)
+	if err != nil {
+		panic(err)
+	}
+	execOpts := runtest.GenOpts(true, true)
+	execOpts.Flags |= ipc.FlagCollectCover
+
+	r.Prog = append([]byte{}, prog...)
+	r.Repeat = 1
+	r.Cfg = cfg
+	r.Opts = execOpts
+}
+
 type Manager struct {
+	retriageTasks []RetriageTask
+
 	cfg            *mgrconfig.Config
 	vmPool         *vm.Pool
 	target         *prog.Target
@@ -107,6 +209,7 @@ const (
 	// Triaged all new inputs from hub.
 	// This is when we start reproducing crashes.
 	phaseTriagedHub
+	phaseRetriageCorpus
 )
 
 const currentDBVersion = 4
@@ -122,6 +225,7 @@ func main() {
 	if prog.GitRevision == "" {
 		log.Fatalf("bad syz-manager build: build with make, run bin/syz-manager")
 	}
+	panic("fix all TODOs")
 	flag.Parse()
 	log.EnableLogCaching(1000, 1<<20)
 	cfg, err := mgrconfig.LoadFile(*flagConfig)
@@ -292,6 +396,47 @@ func (mgr *Manager) vmLoop() {
 		instancesPerRepro = maxReproVMs
 	}
 	bootInstance := make(chan int)
+
+	go func() {
+		// TODO: add logging
+		time.Sleep(30 * time.Minute)
+		for true {
+			time.Sleep(time.Second * 20)
+			mgr.mu.Lock()
+			needBreak := false
+			if mgr.phase >= phaseTriagedCorpus {
+				mgr.phase = phaseRetriageCorpus
+				needBreak = true
+				log.Logf(1, "going to the retriage phase")
+			} else {
+				log.Logf(1, "phase is too small: %d %d", mgr.phase, phaseTriagedCorpus)
+			}
+			mgr.mu.Unlock()
+			if needBreak {
+				mgr.mu.Lock()
+				tasks := []RetriageTask{}
+				for sig, inp := range mgr.corpus {
+					tasks = append(tasks, RetriageTask{
+						key:         sig,
+						call:        inp.CallNum,
+						callName:    inp.Call,
+						prog:        inp.Prog,
+						coverBefore: append([]uint32{}, inp.Cover...),
+					})
+				}
+				// TODO: shuffle the tasks.
+				mgr.retriageTasks = tasks
+				mgr.mu.Unlock()
+				log.Logf(1, "retriage tasks are prepared; stopping VMs")
+				for i := 0; i < vmCount; i++ {
+					mgr.vmStop <- true
+				}
+				log.Logf(1, "VMs are stopped")
+				break
+			}
+		}
+	}()
+
 	go func() {
 		for i := 0; i < vmCount; i++ {
 			bootInstance <- i
@@ -625,9 +770,15 @@ func (mgr *Manager) runInstanceInner(index int, instanceName string) (*report.Re
 	atomic.AddUint32(&mgr.numFuzzing, 1)
 	defer atomic.AddUint32(&mgr.numFuzzing, ^uint32(0))
 
+	retriage := mgr.phase == phaseRetriageCorpus
+	if retriage {
+		// TODO: do we really want it?
+		procs = 1
+	}
+
 	cmd := instance.FuzzerCmd(fuzzerBin, executorBin, instanceName,
 		mgr.cfg.TargetOS, mgr.cfg.TargetArch, fwdAddr, mgr.cfg.Sandbox, procs, fuzzerV,
-		mgr.cfg.Cover, *flagDebug, false, false, true, mgr.cfg.Timeouts.Slowdown)
+		mgr.cfg.Cover, *flagDebug, false, retriage, true, mgr.cfg.Timeouts.Slowdown)
 	outc, errc, err := inst.Run(mgr.cfg.Timeouts.VMRunningTime, mgr.vmStop, cmd)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to run fuzzer: %v", err)

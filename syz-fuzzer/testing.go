@@ -47,8 +47,8 @@ func runTest(target *prog.Target, manager *rpctype.RPCClient, name, executor str
 	pollReq := &rpctype.RunTestPollReq{Name: name}
 	for {
 		req := new(rpctype.RunTestPollRes)
-		if err := manager.Call("Manager.Poll", pollReq, req); err != nil {
-			log.Fatalf("Manager.Poll call failed: %v", err)
+		if err := manager.Call("Manager.PollRuntest", pollReq, req); err != nil {
+			log.Fatalf("Manager.PollRuntest call failed: %v", err)
 		}
 		if len(req.Bin) == 0 && len(req.Prog) == 0 {
 			return

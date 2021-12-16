@@ -390,10 +390,8 @@ func match(props map[string]bool, requires map[string]bool) bool {
 	return true
 }
 
-func (ctx *Context) createSyzTest(p *prog.Prog, sandbox string, threaded, cov bool, times int) (*RunRequest, error) {
-	sysTarget := targets.Get(p.Target.OS, p.Target.Arch)
+func GenCfg(sysTarget *targets.Target, Features *host.Features, sandbox string, threaded, cov bool) (*ipc.Config, error) {
 	cfg := new(ipc.Config)
-	opts := new(ipc.ExecOpts)
 	cfg.UseShmem = sysTarget.ExecutorUsesShmem
 	cfg.UseForkServer = sysTarget.ExecutorUsesForkServer
 	cfg.Timeouts = sysTarget.Timeouts(1)
@@ -402,43 +400,57 @@ func (ctx *Context) createSyzTest(p *prog.Prog, sandbox string, threaded, cov bo
 		return nil, err
 	}
 	cfg.Flags |= sandboxFlags
-	if threaded {
-		opts.Flags |= ipc.FlagThreaded
-	}
 	if cov {
 		cfg.Flags |= ipc.FlagSignal
-		opts.Flags |= ipc.FlagCollectCover
 	}
-	if ctx.Features[host.FeatureExtraCoverage].Enabled {
+	if Features[host.FeatureExtraCoverage].Enabled {
 		cfg.Flags |= ipc.FlagExtraCover
 	}
-	if ctx.Features[host.FeatureDelayKcovMmap].Enabled {
+	if Features[host.FeatureDelayKcovMmap].Enabled {
 		cfg.Flags |= ipc.FlagDelayKcovMmap
 	}
-	if ctx.Features[host.FeatureNetInjection].Enabled {
+	if Features[host.FeatureNetInjection].Enabled {
 		cfg.Flags |= ipc.FlagEnableTun
 	}
-	if ctx.Features[host.FeatureNetDevices].Enabled {
+	if Features[host.FeatureNetDevices].Enabled {
 		cfg.Flags |= ipc.FlagEnableNetDev
 	}
 	cfg.Flags |= ipc.FlagEnableNetReset
 	cfg.Flags |= ipc.FlagEnableCgroups
-	if ctx.Features[host.FeatureDevlinkPCI].Enabled {
+	if Features[host.FeatureDevlinkPCI].Enabled {
 		cfg.Flags |= ipc.FlagEnableDevlinkPCI
 	}
-	if ctx.Features[host.FeatureVhciInjection].Enabled {
+	if Features[host.FeatureVhciInjection].Enabled {
 		cfg.Flags |= ipc.FlagEnableVhciInjection
 	}
-	if ctx.Features[host.FeatureWifiEmulation].Enabled {
+	if Features[host.FeatureWifiEmulation].Enabled {
 		cfg.Flags |= ipc.FlagEnableWifi
 	}
-	if ctx.Debug {
-		cfg.Flags |= ipc.FlagDebug
+	return cfg, nil
+}
+
+func GenOpts(threaded, cov bool) *ipc.ExecOpts {
+	opts := new(ipc.ExecOpts)
+	opts.Flags |= ipc.FlagDedupCover
+	if threaded {
+		opts.Flags |= ipc.FlagThreaded
+	}
+	if cov {
+		opts.Flags |= ipc.FlagCollectCover
+	}
+	return opts
+}
+
+func (ctx *Context) createSyzTest(p *prog.Prog, sandbox string, threaded, cov bool, times int) (*RunRequest, error) {
+	target := targets.Get(p.Target.OS, p.Target.Arch)
+	cfg, err := GenCfg(target, ctx.Features, sandbox, threaded, cov)
+	if err != nil {
+		return nil, err
 	}
 	req := &RunRequest{
 		P:      p,
 		Cfg:    cfg,
-		Opts:   opts,
+		Opts:   GenOpts(threaded, cov),
 		Repeat: times,
 	}
 	return req, nil
