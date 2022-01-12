@@ -461,6 +461,8 @@ var oses = map[string]osCommon{
 			"syz_read_part_table": []string{"memfd_create"},
 			"syz_mount_image":     []string{"memfd_create"},
 			"syz_io_uring_setup":  []string{"io_uring_setup"},
+			"syz_clone3":          []string{"clone3", "exit"},
+			"syz_fork":            []string{"exit"},
 		},
 		cflags: []string{"-static-pie"},
 	},

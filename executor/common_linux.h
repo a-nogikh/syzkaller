@@ -5215,3 +5215,61 @@ static long syz_80211_join_ibss(volatile long a0, volatile long a1, volatile lon
 }
 
 #endif
+
+#if SYZ_EXECUTOR || __NR_syz_fork || __NR_syz_clone3
+// The slow down multiplier is already taken into account.
+#if SYZ_EXECUTOR
+#define USLEEP_FORKED_CHILD (3 * syscall_timeout_ms)
+#else
+#define USLEEP_FORKED_CHILD (3 * /*{{{BASE_CALL_TIMEOUT_MS}}}*/)
+#endif
+
+static long handle_clone_ret(long ret)
+{
+	if (ret != 0)
+		return ret;
+	// Exit if we're in the child process - not all kernels provide the proper means
+	// to prevent fork-bombs.
+	// But first sleep for some time. This will hopefully foster IPC fuzzing.
+	usleep(USLEEP_FORKED_CHILD);
+	// Note that exit_group is a bad choice here because if we created just a thread, then
+	// the whole process will be killed. A plain exit will work fine in any case.
+	syscall(__NR_exit, 0);
+	int i;
+	for (i = 0;; i++) {
+	}
+}
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_fork
+static long syz_fork(void)
+{
+	return handle_clone_ret(fork());
+}
+#endif
+
+#if SYZ_EXECUTOR || __NR_syz_clone3
+#include <linux/sched.h>
+#include <sched.h>
+
+#ifndef CLONE_VM
+#define CLONE_VM 0x00000100
+#endif
+
+#define MAX_CLONE_ARGS_BYTES 256
+static long syz_clone3(volatile long a0, volatile long a1)
+{
+	unsigned long copy_size = a1;
+	if (copy_size < sizeof(uint64) || copy_size > MAX_CLONE_ARGS_BYTES)
+		return -1;
+	// The structure may have different sizes on different kernel versions, so copy it as raw bytes.
+	char clone_args[MAX_CLONE_ARGS_BYTES];
+	memcpy(&clone_args, (void*)a0, copy_size);
+	// Clear the CLONE_VM flag. Otherwise it'll very likely corrupt syz-executor.
+	// The flag is the first 8-byte integer in the structure.
+	uint64* flags = (uint64*)&clone_args;
+	*flags &= ~CLONE_VM;
+	return handle_clone_ret((long)syscall(__NR_clone3, &clone_args, copy_size));
+}
+
+#endif
