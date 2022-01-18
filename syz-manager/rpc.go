@@ -44,6 +44,7 @@ type RPCServer struct {
 }
 
 type Fuzzer struct {
+	seqId         uint64
 	name          string
 	statName      string
 	rotated       bool
@@ -95,7 +96,15 @@ func (serv *RPCServer) saveStatRecords() {
 	serv.mu.Lock()
 	defer serv.mu.Unlock()
 
+	skipFuzzer := func(f *Fuzzer) bool {
+		// We don't need that much info.
+		return (f.seqId % 3) != 0
+	}
+
 	for _, f := range serv.fuzzers {
+		if skipFuzzer(f) {
+			continue
+		}
 		folder := "perf_stat/" + f.statName + "/"
 		osutil.MkdirAll(folder)
 
@@ -124,6 +133,9 @@ func (serv *RPCServer) saveStatRecords() {
 	}
 
 	for _, f := range serv.fuzzers {
+		if skipFuzzer(f) {
+			continue
+		}
 		folder := "perf_stat/" + f.statName + "/"
 		osutil.MkdirAll(folder)
 		fileName := folder + "occupation.csv"
@@ -151,20 +163,23 @@ func (serv *RPCServer) saveStatRecords() {
 	}
 
 	for _, f := range serv.fuzzers {
+		if skipFuzzer(f) {
+			continue
+		}
 		folder := "perf_stat/" + f.statName + "/"
 		stacks := folder + "stacks/"
 		progs := folder + "progs/"
 		osutil.MkdirAll(stacks)
 		osutil.MkdirAll(progs)
 		for _, proc := range f.statRecords {
-			for _, record := range proc {
+			for pid, record := range proc {
 				if record.LastStack != "" {
 					file := fmt.Sprintf("%s/%s.txt", stacks, record.Time.Truncate(time.Second).String())
 					osutil.WriteFile(file, []byte(record.LastStack))
 					record.LastStack = ""
 				}
 				if record.LastProg != "" {
-					file := fmt.Sprintf("%s/%s.txt", progs, record.Time.Truncate(time.Second).String())
+					file := fmt.Sprintf("%s/%s-proc%d.txt", progs, record.Time.Truncate(time.Second).String(), pid)
 					osutil.WriteFile(file, []byte(record.LastProg))
 					record.LastProg = ""
 				}
@@ -191,6 +206,7 @@ func (serv *RPCServer) Connect(a *rpctype.ConnectArgs, r *rpctype.ConnectRes) er
 
 	connectedFuzzer++
 	f := &Fuzzer{
+		seqId:       connectedFuzzer,
 		name:        a.Name,
 		statName:    fmt.Sprintf("vm-%d", connectedFuzzer),
 		machineInfo: a.MachineInfo,

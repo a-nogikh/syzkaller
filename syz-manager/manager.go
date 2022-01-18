@@ -188,7 +188,7 @@ func RunManager(cfg *mgrconfig.Config) {
 
 	go func() {
 		for true {
-			time.Sleep(45)
+			time.Sleep(60)
 			mgr.serv.saveStatRecords()
 		}
 	}()
