@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"runtime"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -32,7 +34,65 @@ type Proc struct {
 	execOptsCollide *ipc.ExecOpts
 	execOptsCover   *ipc.ExecOpts
 	execOptsComps   *ipc.ExecOpts
+	lastOccupation  rpctype.ProcOccupation
+	recordMu        sync.Mutex
+	records         []rpctype.ProcStatRecord
+	startTime       time.Time
 }
+
+func (proc *Proc) CurrStatRecord(handle func(*rpctype.ProcStatRecord)) {
+	proc.recordMu.Lock()
+	defer proc.recordMu.Unlock()
+	if len(proc.records) > 0 {
+		handle(&proc.records[len(proc.records)-1])
+	}
+}
+
+func (proc *Proc) SetOccupation(v rpctype.ProcOccupation) {
+	proc.lastOccupation = v
+	proc.CurrStatRecord(func(record *rpctype.ProcStatRecord) {
+		record.Occupation = v
+	})
+}
+
+func (proc *Proc) IncExecTotal(prog string) {
+	proc.CurrStatRecord(func(record *rpctype.ProcStatRecord) {
+		record.ExecTotal++
+		record.LastProg = prog
+	})
+}
+
+func (proc *Proc) QueryRecords() []rpctype.ProcStatRecord {
+	proc.recordMu.Lock()
+	defer proc.recordMu.Unlock()
+	if len(proc.records) <= 1 {
+		return nil
+	}
+	last := proc.records[len(proc.records)-1]
+	ret := proc.records[:len(proc.records)-1]
+	proc.records = []rpctype.ProcStatRecord{last}
+	return ret
+}
+
+/*
+const (
+	NoOccupation rpctype.ProcOccupation = iota
+	TriageOccupation
+	CandidateOccupation
+	SmashOccupation
+	GenOccupation
+	FuzzOccupation
+        )*/
+const (
+	NoOccupation          rpctype.ProcOccupation = "no"
+	TriageOccupation                             = "triage"
+	CandidateOccupation                          = "cndt"
+	SmashInjOccupation                           = "smsh_inj"
+	SmashHintOccupation                          = "smsh_hint"
+	SmashMutateOccupation                        = "smash_mut"
+	GenOccupation                                = "gen"
+	FuzzOccupation                               = "fuzz"
+)
 
 func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
 	env, err := ipc.MakeEnv(fuzzer.config, pid)
@@ -55,7 +115,28 @@ func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
 		execOptsCollide: &execOptsCollide,
 		execOptsCover:   &execOptsCover,
 		execOptsComps:   &execOptsComps,
+		startTime:       time.Now(),
+		lastOccupation:  NoOccupation,
 	}
+
+	go func() {
+		count := 0
+		for {
+			currDelta := time.Now().Sub(proc.startTime)
+			count++
+
+			stackBuf := make([]byte, 1<<15)
+			runtime.Stack(stackBuf, true)
+
+			proc.recordMu.Lock()
+			if len(proc.records) > 0 && count%4 == 1 {
+				proc.records[len(proc.records)-1].LastStack = fmt.Sprintf("%s", stackBuf)
+			}
+			proc.records = append(proc.records, rpctype.ProcStatRecord{Time: currDelta, Occupation: NoOccupation})
+			proc.recordMu.Unlock()
+			time.Sleep(5 * time.Second)
+		}
+	}()
 	return proc, nil
 }
 
@@ -71,8 +152,10 @@ func (proc *Proc) loop() {
 		if item != nil {
 			switch item := item.(type) {
 			case *WorkTriage:
+				proc.SetOccupation(TriageOccupation)
 				proc.triageInput(item)
 			case *WorkCandidate:
+				proc.SetOccupation(CandidateOccupation)
 				proc.execute(proc.execOpts, item.p, item.flags, StatCandidate)
 			case *WorkSmash:
 				proc.smashInput(item)
@@ -86,11 +169,13 @@ func (proc *Proc) loop() {
 		fuzzerSnapshot := proc.fuzzer.snapshot()
 		if len(fuzzerSnapshot.corpus) == 0 || i%generatePeriod == 0 {
 			// Generate a new prog.
+			proc.SetOccupation(GenOccupation)
 			p := proc.fuzzer.target.Generate(proc.rnd, prog.RecommendedCalls, ct)
 			log.Logf(1, "#%v: generated", proc.pid)
 			proc.executeAndCollide(proc.execOpts, p, ProgNormal, StatGenerate)
 		} else {
 			// Mutate an existing prog.
+			proc.SetOccupation(FuzzOccupation)
 			p := fuzzerSnapshot.chooseProgram(proc.rnd).Clone()
 			p.Mutate(proc.rnd, prog.RecommendedCalls, ct, fuzzerSnapshot.corpus)
 			log.Logf(1, "#%v: mutated", proc.pid)
@@ -201,12 +286,15 @@ func getSignalAndCover(p *prog.Prog, info *ipc.ProgInfo, call int) (signal.Signa
 }
 
 func (proc *Proc) smashInput(item *WorkSmash) {
+	proc.SetOccupation(SmashInjOccupation)
 	if proc.fuzzer.faultInjectionEnabled && item.call != -1 {
 		proc.failCall(item.p, item.call)
 	}
+	proc.SetOccupation(SmashHintOccupation)
 	if proc.fuzzer.comparisonTracingEnabled && item.call != -1 {
 		proc.executeHintSeed(item.p, item.call)
 	}
+	proc.SetOccupation(SmashMutateOccupation)
 	fuzzerSnapshot := proc.fuzzer.snapshot()
 	for i := 0; i < 100; i++ {
 		p := item.p.Clone()
@@ -303,6 +391,7 @@ func (proc *Proc) randomCollide(origP *prog.Prog) *prog.Prog {
 }
 
 func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog, stat Stat) *ipc.ProgInfo {
+	proc.IncExecTotal(string(p.Serialize()[:]))
 	if opts.Flags&ipc.FlagDedupCover == 0 {
 		log.Fatalf("dedup cover is not enabled")
 	}

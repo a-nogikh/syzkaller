@@ -6,6 +6,8 @@
 package rpctype
 
 import (
+	"time"
+
 	"github.com/google/syzkaller/pkg/host"
 	"github.com/google/syzkaller/pkg/ipc"
 	"github.com/google/syzkaller/pkg/signal"
@@ -56,6 +58,16 @@ type CheckArgs struct {
 	GlobFiles     map[string][]string
 }
 
+type ProcOccupation string
+
+type ProcStatRecord struct {
+	Time       time.Duration
+	ExecTotal  int
+	Occupation ProcOccupation
+	LastProg   string
+	LastStack  string
+}
+
 type SyscallReason struct {
 	ID     int
 	Reason string
@@ -71,6 +83,7 @@ type PollArgs struct {
 	NeedCandidates bool
 	MaxSignal      signal.Serial
 	Stats          map[string]uint64
+	ProcRecords    [][]ProcStatRecord
 }
 
 type PollRes struct {

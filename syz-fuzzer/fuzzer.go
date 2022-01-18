@@ -269,7 +269,7 @@ func main() {
 	fuzzer.gate = ipc.NewGate(2**flagProcs, gateCallback)
 
 	for needCandidates, more := true, true; more; needCandidates = false {
-		more = fuzzer.poll(needCandidates, nil)
+		more = fuzzer.poll(needCandidates, nil, nil)
 		// This loop lead to "no output" in qemu emulation, tell manager we are not dead.
 		log.Logf(0, "fetching corpus: %v, signal %v/%v (executing program)",
 			len(fuzzer.corpus), len(fuzzer.corpusSignal), len(fuzzer.maxSignal))
@@ -382,28 +382,32 @@ func (fuzzer *Fuzzer) pollLoop() {
 				continue
 			}
 			stats := make(map[string]uint64)
+			records := [][]rpctype.ProcStatRecord{}
 			for _, proc := range fuzzer.procs {
 				stats["exec total"] += atomic.SwapUint64(&proc.env.StatExecs, 0)
 				stats["executor restarts"] += atomic.SwapUint64(&proc.env.StatRestarts, 0)
+				records = append(records, proc.QueryRecords())
 			}
 			for stat := Stat(0); stat < StatCount; stat++ {
 				v := atomic.SwapUint64(&fuzzer.stats[stat], 0)
 				stats[statNames[stat]] = v
 				execTotal += v
 			}
-			if !fuzzer.poll(needCandidates, stats) {
+
+			if !fuzzer.poll(needCandidates, stats, records) {
 				lastPoll = time.Now()
 			}
 		}
 	}
 }
 
-func (fuzzer *Fuzzer) poll(needCandidates bool, stats map[string]uint64) bool {
+func (fuzzer *Fuzzer) poll(needCandidates bool, stats map[string]uint64, procRecords [][]rpctype.ProcStatRecord) bool {
 	a := &rpctype.PollArgs{
 		Name:           fuzzer.name,
 		NeedCandidates: needCandidates,
 		MaxSignal:      fuzzer.grabNewSignal().Serialize(),
 		Stats:          stats,
+		ProcRecords:    procRecords,
 	}
 	r := &rpctype.PollRes{}
 	if err := fuzzer.manager.Call("Manager.Poll", a, r); err != nil {

@@ -4,9 +4,11 @@
 package main
 
 import (
+	"encoding/csv"
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/google/syzkaller/pkg/host"
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/mgrconfig"
+	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/pkg/rpctype"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/prog"
@@ -42,11 +45,13 @@ type RPCServer struct {
 
 type Fuzzer struct {
 	name          string
+	statName      string
 	rotated       bool
 	inputs        []rpctype.Input
 	newMaxSignal  signal.Signal
 	rotatedSignal signal.Signal
 	machineInfo   []byte
+	statRecords   [][]rpctype.ProcStatRecord
 }
 
 type BugFrames struct {
@@ -86,6 +91,90 @@ func startRPCServer(mgr *Manager) (*RPCServer, error) {
 	return serv, nil
 }
 
+func (serv *RPCServer) saveStatRecords() {
+	serv.mu.Lock()
+	defer serv.mu.Unlock()
+
+	for _, f := range serv.fuzzers {
+		folder := "perf_stat/" + f.statName + "/"
+		osutil.MkdirAll(folder)
+
+		fileName := folder + "speed.csv"
+		table := [][]string{}
+		for _, proc := range f.statRecords {
+			for i, record := range proc {
+				row := []string{}
+				if i < len(table) {
+					row = table[i]
+				} else {
+					row = append(row, record.Time.Truncate(time.Second).String())
+					table = append(table, row)
+				}
+				row = append(row, fmt.Sprintf("%d", record.ExecTotal))
+				table[i] = row
+			}
+		}
+		f, err := os.Create(fileName)
+		if err != nil {
+			fmt.Printf("failed to open %s", fileName)
+			continue
+		}
+		csv.NewWriter(f).WriteAll(table)
+		f.Close()
+	}
+
+	for _, f := range serv.fuzzers {
+		folder := "perf_stat/" + f.statName + "/"
+		osutil.MkdirAll(folder)
+		fileName := folder + "occupation.csv"
+		table := [][]string{}
+		for _, proc := range f.statRecords {
+			for i, record := range proc {
+				row := []string{}
+				if i < len(table) {
+					row = table[i]
+				} else {
+					row = append(row, record.Time.Truncate(time.Second).String())
+					table = append(table, row)
+				}
+				row = append(row, fmt.Sprintf("%s", record.Occupation))
+				table[i] = row
+			}
+		}
+		f, err := os.Create(fileName)
+		if err != nil {
+			fmt.Printf("failed to open %s", fileName)
+			continue
+		}
+		csv.NewWriter(f).WriteAll(table)
+		f.Close()
+	}
+
+	for _, f := range serv.fuzzers {
+		folder := "perf_stat/" + f.statName + "/"
+		stacks := folder + "stacks/"
+		progs := folder + "progs/"
+		osutil.MkdirAll(stacks)
+		osutil.MkdirAll(progs)
+		for _, proc := range f.statRecords {
+			for _, record := range proc {
+				if record.LastStack != "" {
+					file := fmt.Sprintf("%s/%s.txt", stacks, record.Time.Truncate(time.Second).String())
+					osutil.WriteFile(file, []byte(record.LastStack))
+					record.LastStack = ""
+				}
+				if record.LastProg != "" {
+					file := fmt.Sprintf("%s/%s.txt", progs, record.Time.Truncate(time.Second).String())
+					osutil.WriteFile(file, []byte(record.LastProg))
+					record.LastProg = ""
+				}
+			}
+		}
+	}
+}
+
+var connectedFuzzer uint64
+
 func (serv *RPCServer) Connect(a *rpctype.ConnectArgs, r *rpctype.ConnectRes) error {
 	log.Logf(1, "fuzzer %v connected", a.Name)
 	serv.stats.vmRestarts.inc()
@@ -100,8 +189,10 @@ func (serv *RPCServer) Connect(a *rpctype.ConnectArgs, r *rpctype.ConnectRes) er
 	serv.mu.Lock()
 	defer serv.mu.Unlock()
 
+	connectedFuzzer++
 	f := &Fuzzer{
 		name:        a.Name,
+		statName:    fmt.Sprintf("vm-%d", connectedFuzzer),
 		machineInfo: a.MachineInfo,
 	}
 	serv.fuzzers[a.Name] = f
@@ -324,6 +415,15 @@ func (serv *RPCServer) Poll(a *rpctype.PollArgs, r *rpctype.PollRes) error {
 		// but already have a pending request from this instance in-flight.
 		log.Logf(1, "poll: fuzzer %v is not connected", a.Name)
 		return nil
+	}
+	if a.ProcRecords != nil {
+		for id, newRecords := range a.ProcRecords {
+			if id >= len(f.statRecords) {
+				f.statRecords = append(f.statRecords, newRecords)
+			} else {
+				f.statRecords[id] = append(f.statRecords[id], newRecords...)
+			}
+		}
 	}
 	newMaxSignal := serv.maxSignal.Diff(a.MaxSignal.Deserialize())
 	if !newMaxSignal.Empty() {

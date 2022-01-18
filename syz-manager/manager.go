@@ -186,6 +186,13 @@ func RunManager(cfg *mgrconfig.Config) {
 		log.Fatalf("failed to create rpc server: %v", err)
 	}
 
+	go func() {
+		for true {
+			time.Sleep(45)
+			mgr.serv.saveStatRecords()
+		}
+	}()
+
 	if cfg.DashboardAddr != "" {
 		mgr.dash, err = dashapi.New(cfg.DashboardClient, cfg.DashboardAddr, cfg.DashboardKey)
 		if err != nil {
