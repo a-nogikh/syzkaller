@@ -58,6 +58,10 @@ func (proc *Proc) SetOccupation(v rpctype.ProcOccupation) {
 func (proc *Proc) IncExecTotal(prog string) {
 	proc.CurrStatRecord(func(record *rpctype.ProcStatRecord) {
 		record.ExecTotal++
+		const maxProgSize = 1 << 12
+		if len(prog) > maxProgSize {
+			prog = prog[:maxProgSize]
+		}
 		record.LastProg = prog
 	})
 }
