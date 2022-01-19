@@ -58,7 +58,7 @@ func (proc *Proc) SetOccupation(v rpctype.ProcOccupation) {
 func (proc *Proc) IncExecTotal(prog string) {
 	proc.CurrStatRecord(func(record *rpctype.ProcStatRecord) {
 		record.ExecTotal++
-		const maxProgSize = 1 << 12
+		const maxProgSize = 1 << 13
 		if len(prog) > maxProgSize {
 			prog = prog[:maxProgSize]
 		}
@@ -129,11 +129,11 @@ func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
 			currDelta := time.Now().Sub(proc.startTime)
 			count++
 
-			stackBuf := make([]byte, 1<<15)
+			stackBuf := make([]byte, 1<<16)
 			runtime.Stack(stackBuf, true)
 
 			proc.recordMu.Lock()
-			if len(proc.records) > 0 && count%4 == 1 {
+			if len(proc.records) > 0 && count%4 == 1 && pid%2 == 0 {
 				proc.records[len(proc.records)-1].LastStack = fmt.Sprintf("%s", stackBuf)
 			}
 			proc.records = append(proc.records, rpctype.ProcStatRecord{Time: currDelta, Occupation: NoOccupation})
