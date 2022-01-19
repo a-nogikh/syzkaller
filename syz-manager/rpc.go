@@ -103,6 +103,7 @@ func (serv *RPCServer) saveStatRecords() {
 
 	for _, f := range serv.fuzzers {
 		if skipFuzzer(f) {
+			f.statRecords = nil
 			continue
 		}
 		folder := "perf_stat/" + f.statName + "/"
@@ -171,8 +172,8 @@ func (serv *RPCServer) saveStatRecords() {
 		progs := folder + "progs/"
 		osutil.MkdirAll(stacks)
 		osutil.MkdirAll(progs)
-		for _, proc := range f.statRecords {
-			for pid, record := range proc {
+		for pid, proc := range f.statRecords {
+			for _, record := range proc {
 				if record.LastStack != "" {
 					file := fmt.Sprintf("%s/%s.txt", stacks, record.Time.Truncate(time.Second).String())
 					osutil.WriteFile(file, []byte(record.LastStack))
