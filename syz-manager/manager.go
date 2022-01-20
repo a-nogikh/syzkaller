@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -779,9 +780,13 @@ func (mgr *Manager) needLocalRepro(crash *Crash) bool {
 	if osutil.IsExist(filepath.Join(dir, "repro.prog")) {
 		return false
 	}
+	doRepro := false
+	if strings.Contains(crash.Title, "panic") {
+		doRepro = true
+	}
 	for i := 0; i < maxReproAttempts; i++ {
 		if !osutil.IsExist(filepath.Join(dir, fmt.Sprintf("repro%v", i))) {
-			return true
+			return doRepro
 		}
 	}
 	return false

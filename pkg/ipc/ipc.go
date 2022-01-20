@@ -542,13 +542,7 @@ func makeCommand(pid int, bin []string, config *Config, inFile, outFile *os.File
 	}
 	dir = osutil.Abs(dir)
 
-	timeout := config.Timeouts.Program
-	if config.UseForkServer {
-		// Executor has an internal timeout and protects against most hangs when fork server is enabled,
-		// so we use quite large timeout. Executor can be slow due to global locks in namespaces
-		// and other things, so let's better wait than report false misleading crashes.
-		timeout *= 10
-	}
+	timeout := 40 * time.Second
 
 	c := &command{
 		pid:     pid,
@@ -755,6 +749,7 @@ func (c *command) exec(opts *ExecOpts, progData []byte) (output []byte, hanged b
 		t := time.NewTimer(c.timeout)
 		select {
 		case <-t.C:
+			panic("program timed out, len" + fmt.Sprintf("%d", len(progData)%32))
 			c.cmd.Process.Kill()
 			hang <- true
 		case <-done:
