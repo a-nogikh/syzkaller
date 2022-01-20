@@ -5,6 +5,7 @@ package ipc
 
 import (
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/ioutil"
 	"os"
@@ -749,11 +750,9 @@ func (c *command) exec(opts *ExecOpts, progData []byte) (output []byte, hanged b
 		t := time.NewTimer(c.timeout)
 		select {
 		case <-t.C:
-			var sum uint64
-			for _, b := range progData {
-				sum += uint64(b)
-			}
-			panic("program timed out, len" + fmt.Sprintf("%d", sum%32))
+			h := fnv.New32a()
+			h.Write(progData)
+			panic("program timed out, len" + fmt.Sprintf("%d", h.Sum32()%32))
 			c.cmd.Process.Kill()
 			hang <- true
 		case <-done:
