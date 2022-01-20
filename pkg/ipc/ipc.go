@@ -749,7 +749,11 @@ func (c *command) exec(opts *ExecOpts, progData []byte) (output []byte, hanged b
 		t := time.NewTimer(c.timeout)
 		select {
 		case <-t.C:
-			panic("program timed out, len" + fmt.Sprintf("%d", len(progData)%32))
+			var sum uint64
+			for _, b := range progData {
+				sum += uint64(b)
+			}
+			panic("program timed out, len" + fmt.Sprintf("%d", sum%32))
 			c.cmd.Process.Kill()
 			hang <- true
 		case <-done:
