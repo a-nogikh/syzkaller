@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -89,8 +90,9 @@ type CallInfo struct {
 	Signal []uint32 // feedback signal, filled if FlagSignal is set
 	Cover  []uint32 // per-call coverage, filled if FlagSignal is set and cover == true,
 	// if dedup == false, then cov effectively contains a trace, otherwise duplicates are removed
-	Comps prog.CompMap // per-call comparison operands
-	Errno int          // call errno (0 if the call was successful)
+	RawCover []uint32
+	Comps    prog.CompMap // per-call comparison operands
+	Errno    int          // call errno (0 if the call was successful)
 }
 
 type ProgInfo struct {
@@ -359,10 +361,21 @@ func (env *Env) parseOutput(p *prog.Prog) (*ProgInfo, error) {
 			return nil, fmt.Errorf("call %v/%v/%v: signal overflow: %v/%v",
 				i, reply.index, reply.num, reply.signalSize, len(out))
 		}
-		if inf.Cover, ok = readUint32Array(&out, reply.coverSize); !ok {
+		if inf.RawCover, ok = readUint32Array(&out, reply.coverSize); !ok {
 			return nil, fmt.Errorf("call %v/%v/%v: cover overflow: %v/%v",
 				i, reply.index, reply.num, reply.coverSize, len(out))
 		}
+		inf.Cover = []uint32{}
+		coverMap := make(map[uint32]bool)
+		for _, val := range inf.RawCover {
+			_, ok := coverMap[val]
+			if ok {
+				continue
+			}
+			inf.Cover = append(inf.Cover, val)
+			coverMap[val] = true
+		}
+		sort.Slice(inf.Cover, func(i, j int) bool { return inf.Cover[i] < inf.Cover[j] })
 		comps, err := readComps(&out, reply.compsSize)
 		if err != nil {
 			return nil, err
@@ -385,6 +398,7 @@ func convertExtra(extraParts []CallInfo) CallInfo {
 		extraSignal.Merge(signal.FromRaw(part.Signal, 0))
 	}
 	extra.Cover = extraCover.Serialize()
+	extra.RawCover = append([]uint32{}, extra.Cover...)
 	extra.Signal = make([]uint32, len(extraSignal))
 	i := 0
 	for s := range extraSignal {

@@ -305,7 +305,7 @@ func (mgr *Manager) httpCoverCover(w http.ResponseWriter, r *http.Request, funcF
 			}
 			progs = append(progs, cover.Prog{
 				Data: string(inp.Prog),
-				PCs:  coverToPCs(rg, inp.Cover),
+				PCs:  coverToPCs(rg, inp.RawCover),
 			})
 		}
 	}

@@ -104,6 +104,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 
 	prio := signalPrio(item.p, &item.info, item.call)
 	inputSignal := signal.FromRaw(item.info.Signal, prio)
+
 	newSignal := proc.fuzzer.corpusSignalDiff(inputSignal)
 	if newSignal.Empty() {
 		return
@@ -122,6 +123,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	)
 	// Compute input coverage and non-flaky signal for minimization.
 	notexecuted := 0
+	var inputRawCover []uint32
 	for i := 0; i < signalRuns; i++ {
 		info := proc.executeRaw(proc.execOptsCover, item.p, StatTriage)
 		if !reexecutionSuccess(info, &item.info, item.call) {
@@ -131,6 +133,13 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 				return // if happens too often, give up
 			}
 			continue
+		}
+		inf := &info.Extra
+		if item.call != -1 {
+			inf = &info.Calls[item.call]
+		}
+		if len(inputRawCover) == 0 {
+			inputRawCover = inf.RawCover
 		}
 		thisSignal, thisCover := getSignalAndCover(item.p, info, item.call)
 		newSignal = newSignal.Intersection(thisSignal)
@@ -164,10 +173,11 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 
 	log.Logf(2, "added new input for %v to corpus:\n%s", logCallName, data)
 	proc.fuzzer.sendInputToManager(rpctype.Input{
-		Call:   callName,
-		Prog:   data,
-		Signal: inputSignal.Serialize(),
-		Cover:  inputCover.Serialize(),
+		Call:     callName,
+		Prog:     data,
+		Signal:   inputSignal.Serialize(),
+		Cover:    inputCover.Serialize(),
+		RawCover: inputRawCover,
 	})
 
 	proc.fuzzer.addInputToCorpus(item.p, inputSignal, sig)
@@ -303,9 +313,6 @@ func (proc *Proc) randomCollide(origP *prog.Prog) *prog.Prog {
 }
 
 func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog, stat Stat) *ipc.ProgInfo {
-	if opts.Flags&ipc.FlagDedupCover == 0 {
-		log.Fatalf("dedup cover is not enabled")
-	}
 	proc.fuzzer.checkDisabledCalls(p)
 
 	// Limit concurrency window and do leak checking once in a while.

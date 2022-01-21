@@ -173,9 +173,6 @@ func (rg *ReportGenerator) DoRawCover(w http.ResponseWriter, progs []Prog, cover
 			pcs = append(pcs, pc)
 		}
 	}
-	sort.Slice(pcs, func(i, j int) bool {
-		return pcs[i] < pcs[j]
-	})
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	buf := bufio.NewWriter(w)
