@@ -282,7 +282,7 @@ func (env *Env) Exec(opts *ExecOpts, p *prog.Prog) (output []byte, info *ProgInf
 			return
 		}
 	}
-	output, hanged, err0 = env.cmd.exec(opts, progData)
+	output, hanged, err0 = env.cmd.exec(opts, progData, p.String())
 	if err0 != nil {
 		env.cmd.close()
 		env.cmd = nil
@@ -717,7 +717,7 @@ func (c *command) wait() error {
 	return err
 }
 
-func (c *command) exec(opts *ExecOpts, progData []byte) (output []byte, hanged bool, err0 error) {
+func (c *command) exec(opts *ExecOpts, progData []byte, ptitle string) (output []byte, hanged bool, err0 error) {
 	req := &executeReq{
 		magic:            inMagic,
 		envFlags:         uint64(c.config.Flags),
@@ -749,7 +749,7 @@ func (c *command) exec(opts *ExecOpts, progData []byte) (output []byte, hanged b
 		t := time.NewTimer(c.timeout)
 		select {
 		case <-t.C:
-			panic("program timed out, time" + fmt.Sprintf("%d", time.Now().Second()%32))
+			panic("timed out:" + ptitle)
 			c.cmd.Process.Kill()
 			hang <- true
 		case <-done:
