@@ -139,7 +139,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 			inf = &info.Calls[item.call]
 		}
 		if len(inputRawCover) == 0 {
-			inputRawCover = inf.RawCover
+			inputRawCover = append([]uint32{}, inf.RawCover...)
 		}
 		thisSignal, thisCover := getSignalAndCover(item.p, info, item.call)
 		newSignal = newSignal.Intersection(thisSignal)
