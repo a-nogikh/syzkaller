@@ -295,7 +295,7 @@ func (mgr *Manager) httpCoverCover(w http.ResponseWriter, r *http.Request, funcF
 		inp := mgr.corpus[sig]
 		progs = append(progs, cover.Prog{
 			Data: string(inp.Prog),
-			PCs:  coverToPCs(rg, inp.Cover),
+			PCs:  coverToPCs(rg, inp.RawCover),
 		})
 	} else {
 		call := r.FormValue("call")
