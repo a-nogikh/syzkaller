@@ -12,11 +12,11 @@ import (
 )
 
 type Input struct {
-	Call     string
-	Prog     []byte
-	Signal   signal.Serial
-	Cover    []uint32
-	RawCover []uint32
+	Call      string
+	Prog      []byte
+	Signal    signal.Serial
+	Cover     []uint32
+	RawCovers [][]uint32
 }
 
 type Candidate struct {

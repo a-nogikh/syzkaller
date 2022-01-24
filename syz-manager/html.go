@@ -292,10 +292,18 @@ func (mgr *Manager) httpCoverCover(w http.ResponseWriter, r *http.Request, funcF
 	mgr.mu.Lock()
 	var progs []cover.Prog
 	if sig := r.FormValue("input"); sig != "" {
+		pos := r.FormValue("callid")
+		if pos == "" {
+			pos = "0"
+		}
+		posNum, err := strconv.Atoi(pos)
+		if err != nil {
+			posNum = 0
+		}
 		inp := mgr.corpus[sig]
 		progs = append(progs, cover.Prog{
 			Data: string(inp.Prog),
-			PCs:  coverToPCs(rg, inp.RawCover),
+			PCs:  coverToPCs(rg, inp.RawCovers[posNum]),
 		})
 	} else {
 		call := r.FormValue("call")
@@ -305,7 +313,7 @@ func (mgr *Manager) httpCoverCover(w http.ResponseWriter, r *http.Request, funcF
 			}
 			progs = append(progs, cover.Prog{
 				Data: string(inp.Prog),
-				PCs:  coverToPCs(rg, inp.RawCover),
+				PCs:  coverToPCs(rg, inp.Cover),
 			})
 		}
 	}
@@ -448,6 +456,11 @@ func (mgr *Manager) httpInput(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	extraInfo := "# "
+	for key := range inp.RawCovers {
+		extraInfo = fmt.Sprintf("%s %d,", key)
+	}
+	w.Write([]byte(extraInfo))
 	w.Write(inp.Prog)
 }
 

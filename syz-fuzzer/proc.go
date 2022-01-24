@@ -171,13 +171,17 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	data := item.p.Serialize()
 	sig := hash.Hash(data)
 
+	covers := make([][]uint32, len(item.p.Calls))
+	if item.call != -1 {
+		covers[item.call] = inputRawCover
+	}
 	log.Logf(2, "added new input for %v to corpus:\n%s", logCallName, data)
 	proc.fuzzer.sendInputToManager(rpctype.Input{
-		Call:     callName,
-		Prog:     data,
-		Signal:   inputSignal.Serialize(),
-		Cover:    inputCover.Serialize(),
-		RawCover: inputRawCover,
+		Call:      callName,
+		Prog:      data,
+		Signal:    inputSignal.Serialize(),
+		Cover:     inputCover.Serialize(),
+		RawCovers: covers,
 	})
 
 	proc.fuzzer.addInputToCorpus(item.p, inputSignal, sig)

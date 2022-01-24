@@ -1110,6 +1110,11 @@ func (mgr *Manager) newInput(inp rpctype.Input, sign signal.Signal) bool {
 		cov.Merge(old.Cover)
 		cov.Merge(inp.Cover)
 		old.Cover = cov.Serialize()
+		for key, val := range inp.RawCovers {
+			if len(val) > 0 {
+				old.RawCovers[key] = val
+			}
+		}
 		mgr.corpus[sig] = old
 	} else {
 		mgr.corpus[sig] = inp
