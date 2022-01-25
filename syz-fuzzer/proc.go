@@ -173,7 +173,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	proc.fuzzer.addInputToCorpus(item.p, inputSignal, sig)
 
 	if item.flags&ProgSmashed == 0 {
-		proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.call})
+		proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.call, false, false, 0})
 	}
 }
 
@@ -200,19 +200,45 @@ func getSignalAndCover(p *prog.Prog, info *ipc.ProgInfo, call int) (signal.Signa
 	return signal.FromRaw(inf.Signal, signalPrio(p, inf, call)), inf.Cover
 }
 
-func (proc *Proc) smashInput(item *WorkSmash) {
-	if proc.fuzzer.faultInjectionEnabled && item.call != -1 {
-		proc.failCall(item.p, item.call)
+func (proc *Proc) smashInputByInj(p *prog.Prog, call int) {
+	if proc.fuzzer.faultInjectionEnabled && call != -1 {
+		proc.failCall(p, call)
 	}
-	if proc.fuzzer.comparisonTracingEnabled && item.call != -1 {
-		proc.executeHintSeed(item.p, item.call)
+}
+
+func (proc *Proc) smashInputByHints(p *prog.Prog, call int) {
+	if proc.fuzzer.comparisonTracingEnabled && call != -1 {
+		proc.executeHintSeed(p, call)
 	}
+}
+
+func (proc *Proc) smashInputByMutations(p *prog.Prog, iterations int) {
 	fuzzerSnapshot := proc.fuzzer.snapshot()
-	for i := 0; i < 100; i++ {
-		p := item.p.Clone()
+	for i := 0; i < iterations; i++ {
+		p := p.Clone()
 		p.Mutate(proc.rnd, prog.RecommendedCalls, proc.fuzzer.choiceTable, fuzzerSnapshot.corpus)
 		log.Logf(1, "#%v: smash mutated", proc.pid)
 		proc.executeAndCollide(proc.execOpts, p, ProgNormal, StatSmash)
+	}
+}
+
+func (proc *Proc) smashInput(item *WorkSmash) {
+	if !item.injectionDone {
+		proc.smashInputByInj(item.p, item.call)
+		item.injectionDone = true
+		proc.fuzzer.workQueue.enqueue(item)
+	} else if !item.hintsDone {
+		proc.smashInputByHints(item.p, item.call)
+		item.hintsDone = true
+		proc.fuzzer.workQueue.enqueue(item)
+	} else {
+		const mutationsTotal = 100
+		const mutationsOnce = 10
+		proc.smashInputByMutations(item.p, mutationsOnce)
+		item.mutationsDone += mutationsOnce
+		if item.mutationsDone < mutationsTotal {
+			proc.fuzzer.workQueue.enqueue(item)
+		}
 	}
 }
 

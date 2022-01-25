@@ -4,6 +4,7 @@
 package main
 
 import (
+	"container/list"
 	"sync"
 
 	"github.com/google/syzkaller/pkg/ipc"
@@ -19,7 +20,7 @@ type WorkQueue struct {
 	triageCandidate []*WorkTriage
 	candidate       []*WorkCandidate
 	triage          []*WorkTriage
-	smash           []*WorkSmash
+	smash           *list.List
 
 	procs          int
 	needCandidates chan struct{}
@@ -57,14 +58,18 @@ type WorkCandidate struct {
 // During smashing these programs receive a one-time special attention
 // (emit faults, collect comparison hints, etc).
 type WorkSmash struct {
-	p    *prog.Prog
-	call int
+	p             *prog.Prog
+	call          int
+	injectionDone bool
+	hintsDone     bool
+	mutationsDone int
 }
 
 func newWorkQueue(procs int, needCandidates chan struct{}) *WorkQueue {
 	return &WorkQueue{
 		procs:          procs,
 		needCandidates: needCandidates,
+		smash:          list.New(),
 	}
 }
 
@@ -81,7 +86,7 @@ func (wq *WorkQueue) enqueue(item interface{}) {
 	case *WorkCandidate:
 		wq.candidate = append(wq.candidate, item)
 	case *WorkSmash:
-		wq.smash = append(wq.smash, item)
+		wq.smash.PushBack(item)
 	default:
 		panic("unknown work type")
 	}
@@ -89,7 +94,7 @@ func (wq *WorkQueue) enqueue(item interface{}) {
 
 func (wq *WorkQueue) dequeue() (item interface{}) {
 	wq.mu.RLock()
-	if len(wq.triageCandidate)+len(wq.candidate)+len(wq.triage)+len(wq.smash) == 0 {
+	if len(wq.triageCandidate)+len(wq.candidate)+len(wq.triage)+wq.smash.Len() == 0 {
 		wq.mu.RUnlock()
 		return nil
 	}
@@ -109,10 +114,10 @@ func (wq *WorkQueue) dequeue() (item interface{}) {
 		last := len(wq.triage) - 1
 		item = wq.triage[last]
 		wq.triage = wq.triage[:last]
-	} else if len(wq.smash) != 0 {
-		last := len(wq.smash) - 1
-		item = wq.smash[last]
-		wq.smash = wq.smash[:last]
+	} else if wq.smash.Len() != 0 {
+		front := wq.smash.Front()
+		item = front.Value.(*WorkSmash)
+		wq.smash.Remove(front)
 	}
 	wq.mu.Unlock()
 	if wantCandidates {
