@@ -4,7 +4,9 @@
 package main
 
 import (
+	"math/rand"
 	"sync"
+	"time"
 
 	"github.com/google/syzkaller/pkg/ipc"
 	"github.com/google/syzkaller/prog"
@@ -16,12 +18,13 @@ import (
 // in order to not permanently lose interesting programs in case of VM crash.
 type WorkQueue struct {
 	mu              sync.RWMutex
-	triageCandidate []*WorkTriage
-	candidate       []*WorkCandidate
-	triage          []*WorkTriage
-	smash           []*WorkSmash
+	triageCandidate []interface{}
+	candidate       []interface{}
+	triage          []interface{}
+	smash           []interface{}
 
 	procs          int
+	rnd            *rand.Rand
 	needCandidates chan struct{}
 }
 
@@ -65,9 +68,11 @@ type WorkSmash struct {
 }
 
 func newWorkQueue(procs int, needCandidates chan struct{}) *WorkQueue {
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 	return &WorkQueue{
 		procs:          procs,
 		needCandidates: needCandidates,
+		rnd:            rnd,
 	}
 }
 
@@ -90,6 +95,15 @@ func (wq *WorkQueue) enqueue(item interface{}) {
 	}
 }
 
+func (wq *WorkQueue) extractElement(queue *[]interface{}) interface{} {
+	size := len(*queue)
+	randElem := &(*queue)[wq.rnd.Intn(size)]
+	ret := *randElem
+	*randElem = (*queue)[size-1]
+	*queue = (*queue)[:size-1]
+	return ret
+}
+
 func (wq *WorkQueue) dequeue() (item interface{}) {
 	wq.mu.RLock()
 	if len(wq.triageCandidate)+len(wq.candidate)+len(wq.triage)+len(wq.smash) == 0 {
@@ -100,22 +114,14 @@ func (wq *WorkQueue) dequeue() (item interface{}) {
 	wq.mu.Lock()
 	wantCandidates := false
 	if len(wq.triageCandidate) != 0 {
-		last := len(wq.triageCandidate) - 1
-		item = wq.triageCandidate[last]
-		wq.triageCandidate = wq.triageCandidate[:last]
+		item = wq.extractElement(&wq.triageCandidate)
 	} else if len(wq.candidate) != 0 {
-		last := len(wq.candidate) - 1
-		item = wq.candidate[last]
-		wq.candidate = wq.candidate[:last]
+		item = wq.extractElement(&wq.candidate)
 		wantCandidates = len(wq.candidate) < wq.procs
 	} else if len(wq.triage) != 0 {
-		last := len(wq.triage) - 1
-		item = wq.triage[last]
-		wq.triage = wq.triage[:last]
+		item = wq.extractElement(&wq.triage)
 	} else if len(wq.smash) != 0 {
-		last := len(wq.smash) - 1
-		item = wq.smash[last]
-		wq.smash = wq.smash[:last]
+		item = wq.extractElement(&wq.smash)
 	}
 	wq.mu.Unlock()
 	if wantCandidates {
