@@ -57,8 +57,11 @@ type WorkCandidate struct {
 // During smashing these programs receive a one-time special attention
 // (emit faults, collect comparison hints, etc).
 type WorkSmash struct {
-	p    *prog.Prog
-	call int
+	p             *prog.Prog
+	call          int
+	injectionDone bool
+	hintsDone     bool
+	mutationsDone int
 }
 
 func newWorkQueue(procs int, needCandidates chan struct{}) *WorkQueue {
