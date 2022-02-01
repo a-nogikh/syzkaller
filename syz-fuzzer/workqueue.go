@@ -21,6 +21,7 @@ type WorkQueue struct {
 	candidate       []*WorkCandidate
 	triage          []*WorkTriage
 	smash           *list.List
+	smashMutate     *list.List
 
 	procs          int
 	needCandidates chan struct{}
@@ -70,6 +71,7 @@ func newWorkQueue(procs int, needCandidates chan struct{}) *WorkQueue {
 		procs:          procs,
 		needCandidates: needCandidates,
 		smash:          list.New(),
+		smashMutate:    list.New(),
 	}
 }
 
@@ -86,7 +88,12 @@ func (wq *WorkQueue) enqueue(item interface{}) {
 	case *WorkCandidate:
 		wq.candidate = append(wq.candidate, item)
 	case *WorkSmash:
-		wq.smash.PushBack(item)
+		if !item.injectionDone || !item.hintsDone {
+			wq.smash.PushBack(item)
+		} else {
+			wq.smashMutate.PushBack(item)
+		}
+
 	default:
 		panic("unknown work type")
 	}
@@ -94,7 +101,7 @@ func (wq *WorkQueue) enqueue(item interface{}) {
 
 func (wq *WorkQueue) dequeue() (item interface{}) {
 	wq.mu.RLock()
-	if len(wq.triageCandidate)+len(wq.candidate)+len(wq.triage)+wq.smash.Len() == 0 {
+	if len(wq.triageCandidate)+len(wq.candidate)+len(wq.triage)+wq.smash.Len()+wq.smashMutate.Len() == 0 {
 		wq.mu.RUnlock()
 		return nil
 	}
@@ -118,6 +125,10 @@ func (wq *WorkQueue) dequeue() (item interface{}) {
 		front := wq.smash.Front()
 		item = front.Value.(*WorkSmash)
 		wq.smash.Remove(front)
+	} else if wq.smashMutate.Len() != 0 {
+		front := wq.smashMutate.Front()
+		item = front.Value.(*WorkSmash)
+		wq.smashMutate.Remove(front)
 	}
 	wq.mu.Unlock()
 	if wantCandidates {
