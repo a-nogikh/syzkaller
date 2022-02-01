@@ -64,6 +64,7 @@ type WorkSmash struct {
 	injectionDone bool
 	hintsDone     bool
 	mutationsDone int
+	secondsSpent  float64
 }
 
 func newWorkQueue(procs int, needCandidates chan struct{}) *WorkQueue {

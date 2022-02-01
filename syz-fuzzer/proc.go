@@ -173,7 +173,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	proc.fuzzer.addInputToCorpus(item.p, inputSignal, sig)
 
 	if item.flags&ProgSmashed == 0 {
-		proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.call, false, false, 0})
+		proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.call, false, false, 0, 0.0})
 	}
 }
 
@@ -212,14 +212,17 @@ func (proc *Proc) smashInputByHints(p *prog.Prog, call int) {
 	}
 }
 
-func (proc *Proc) smashInputByMutations(p *prog.Prog, iterations int) {
+func (proc *Proc) smashInputByMutations(p *prog.Prog, iterations int) float64 {
 	fuzzerSnapshot := proc.fuzzer.snapshot()
+	startTime := time.Now()
 	for i := 0; i < iterations; i++ {
 		p := p.Clone()
 		p.Mutate(proc.rnd, prog.RecommendedCalls, proc.fuzzer.choiceTable, fuzzerSnapshot.corpus)
 		log.Logf(1, "#%v: smash mutated", proc.pid)
 		proc.executeAndCollide(proc.execOpts, p, ProgNormal, StatSmash)
 	}
+	delta := time.Since(startTime)
+	return delta.Seconds()
 }
 
 func (proc *Proc) smashInput(item *WorkSmash) {
@@ -234,9 +237,11 @@ func (proc *Proc) smashInput(item *WorkSmash) {
 	} else {
 		const mutationsTotal = 100
 		const mutationsOnce = 10
-		proc.smashInputByMutations(item.p, mutationsOnce)
+		const secondsTotal = 60 * 5
+		add := proc.smashInputByMutations(item.p, mutationsOnce)
+		item.secondsSpent += add
 		item.mutationsDone += mutationsOnce
-		if item.mutationsDone < mutationsTotal {
+		if item.mutationsDone < mutationsTotal && item.secondsSpent < secondsTotal {
 			proc.fuzzer.workQueue.enqueue(item)
 		}
 	}
