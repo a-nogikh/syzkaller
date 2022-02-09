@@ -239,10 +239,32 @@ func (proc *Proc) executeHintSeed(p *prog.Prog, call int) {
 	// Then mutate the initial program for every match between
 	// a syscall argument and a comparison operand.
 	// Execute each of such mutants to check if it gives new coverage.
-	p.MutateWithHints(call, info.Calls[call].Comps, func(p *prog.Prog) {
+	p.MutateWithSomeHints(call, info.Calls[call].Comps, func(p *prog.Prog) {
 		log.Logf(1, "#%v: executing comparison hint", proc.pid)
 		proc.execute(proc.execOpts, p, ProgNormal, StatHint)
-	})
+	}, prog.ConstHints)
+
+	collection := []*prog.Prog{}
+	p.MutateWithSomeHints(call, info.Calls[call].Comps, func(p *prog.Prog) {
+		collection = append(collection, p.Clone())
+	}, prog.DataHints)
+
+	const maxDataHints = 50
+	const maxTime = 5 * time.Minute
+	if len(collection) > maxDataHints {
+		proc.rnd.Shuffle(len(collection), func(i, j int) {
+			collection[i], collection[j] = collection[j], collection[i]
+		})
+		collection = collection[:maxDataHints]
+	}
+	start := time.Now()
+	for _, prog := range collection {
+		if time.Since(start) > maxTime {
+			break
+		}
+		log.Logf(1, "#%v: executing comparison hint for blobs", proc.pid)
+		proc.execute(proc.execOpts, prog, ProgNormal, StatHint)
+	}
 }
 
 func (proc *Proc) execute(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) *ipc.ProgInfo {
