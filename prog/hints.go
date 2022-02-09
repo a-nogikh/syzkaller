@@ -63,6 +63,16 @@ func (m CompMap) String() string {
 // Mutates the program using the comparison operands stored in compMaps.
 // For each of the mutants executes the exec callback.
 func (p *Prog) MutateWithHints(callIndex int, comps CompMap, exec func(p *Prog)) {
+	p.MutateWithSomeHints(callIndex, comps, exec, ConstHints|DataHints)
+}
+
+// TODO: rename to blob
+const (
+	ConstHints = 0x1
+	DataHints  = 0x2
+)
+
+func (p *Prog) MutateWithSomeHints(callIndex int, comps CompMap, exec func(p *Prog), mask int) {
 	p = p.Clone()
 	c := p.Calls[callIndex]
 	execValidate := func() {
@@ -76,11 +86,11 @@ func (p *Prog) MutateWithHints(callIndex int, comps CompMap, exec func(p *Prog))
 		exec(p)
 	}
 	ForeachArg(c, func(arg Arg, _ *ArgCtx) {
-		generateHints(comps, arg, execValidate)
+		generateHints(comps, arg, execValidate, mask)
 	})
 }
 
-func generateHints(compMap CompMap, arg Arg, exec func()) {
+func generateHints(compMap CompMap, arg Arg, exec func(), mask int) {
 	typ := arg.Type()
 	if typ == nil || arg.Dir() == DirOut {
 		return
@@ -114,9 +124,13 @@ func generateHints(compMap CompMap, arg Arg, exec func()) {
 
 	switch a := arg.(type) {
 	case *ConstArg:
-		checkConstArg(a, compMap, exec)
+		if mask&ConstHints > 0 {
+			checkConstArg(a, compMap, exec)
+		}
 	case *DataArg:
-		checkDataArg(a, compMap, exec)
+		if mask&DataHints > 0 {
+			checkDataArg(a, compMap, exec)
+		}
 	}
 }
 
