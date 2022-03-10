@@ -4,7 +4,10 @@
 package main
 
 import (
+	"container/heap"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/google/syzkaller/pkg/ipc"
 	"github.com/google/syzkaller/prog"
@@ -19,9 +22,8 @@ import (
 // At the moment these are the work items coming from syz-manager, and we
 // naturally want them to be distributed among all procs.
 type GlobalWorkQueue struct {
-	mu        sync.RWMutex
-	candidate []*WorkCandidate
-
+	mu             sync.RWMutex
+	candidate      []*WorkCandidate
 	procs          int
 	needCandidates chan struct{}
 }
@@ -36,7 +38,7 @@ type GroupWorkQueue struct {
 	globalQueue     *GlobalWorkQueue
 	triage          []*WorkTriage
 	triageCandidate []*WorkTriage
-	smash           []*WorkSmash
+	smash           *SmashQueue
 }
 
 type ProgTypes int
@@ -71,8 +73,80 @@ type WorkCandidate struct {
 // During smashing these programs receive a one-time special attention
 // (emit faults, collect comparison hints, etc).
 type WorkSmash struct {
-	p    *prog.Prog
-	call int
+	p          *prog.Prog
+	call       int
+	subtype    interface{}
+	randomPrio float64
+}
+
+type DoFaultInjection struct{}
+type DoProgHints struct{}
+type DoProgSmash struct {
+	newSignal        int
+	durationLastTime time.Duration
+	totalIterations  int
+	totalDuration    time.Duration
+}
+
+type SmashQueue []*WorkSmash
+
+func (queue SmashQueue) Len() int {
+	return len(queue)
+}
+
+func (queue SmashQueue) Swap(i, j int) {
+	queue[i], queue[j] = queue[j], queue[i]
+}
+
+func (queue *SmashQueue) Push(item interface{}) {
+	*queue = append(*queue, item.(*WorkSmash))
+}
+
+func (queue *SmashQueue) Pop() (ret interface{}) {
+	len := queue.Len()
+	if len == 0 {
+		panic("queue is empty")
+	}
+	ret = (*queue)[len-1]
+	(*queue)[len-1] = nil
+	*queue = (*queue)[:len-1]
+	return
+}
+
+func (w *WorkSmash) GetPriority() int {
+	const hintsPrio = 1e6
+	const newSmashPrio = 1e6
+	const smashPrio = 2e6
+
+	// The priority is based on the following principles.
+	// 1. Fault injection has the highest priority (i.e. the lowest number).
+	// 2. Not-yet-attempted smash and hints have the same priority.
+	// 3. Among attempted smashes, ones that found more new signal on avg have precedence.
+	prio := 0
+	switch v := w.subtype.(type) {
+	case *DoFaultInjection:
+	case *DoProgHints:
+		prio += hintsPrio
+	case *DoProgSmash:
+		if v.totalIterations == 0 {
+			prio += newSmashPrio
+		} else {
+			prio = smashPrio - 10*v.newSignal/v.totalIterations
+		}
+
+	default:
+		panic(fmt.Sprintf("cannot calculate priority for %T", v))
+	}
+	return prio
+}
+
+func (queue SmashQueue) Less(i, j int) bool {
+	first, second := queue[i], queue[j]
+	pLeft, pRight := first.GetPriority(), second.GetPriority()
+	if pLeft != pRight {
+		return pLeft < pRight
+	}
+	return first.randomPrio < second.randomPrio
 }
 
 func newGlobalWorkQueue(procs int, needCandidates chan struct{}) *GlobalWorkQueue {
@@ -101,6 +175,7 @@ func (wq *GlobalWorkQueue) dequeue() (item interface{}) {
 		item = wq.candidate[last]
 		wq.candidate = wq.candidate[:last]
 		wantCandidates = len(wq.candidate) < wq.procs
+
 	}
 	wq.mu.Unlock()
 	if wantCandidates {
@@ -121,6 +196,7 @@ func (wq *GlobalWorkQueue) wantCandidates() bool {
 func newGroupWorkQueue(global *GlobalWorkQueue) *GroupWorkQueue {
 	return &GroupWorkQueue{
 		globalQueue: global,
+		smash:       &SmashQueue{},
 	}
 }
 
@@ -135,7 +211,7 @@ func (wq *GroupWorkQueue) enqueue(item interface{}) {
 			wq.triage = append(wq.triage, item)
 		}
 	case *WorkSmash:
-		wq.smash = append(wq.smash, item)
+		heap.Push(wq.smash, item)
 	default:
 		panic("GroupWorkQueue: unknown work type")
 	}
@@ -174,10 +250,8 @@ func (wq *GroupWorkQueue) dequeue() (item interface{}) {
 		last := len(wq.triage) - 1
 		item = wq.triage[last]
 		wq.triage = wq.triage[:last]
-	} else if len(wq.smash) != 0 {
-		last := len(wq.smash) - 1
-		item = wq.smash[last]
-		wq.smash = wq.smash[:last]
+	} else if wq.smash.Len() != 0 {
+		item = heap.Pop(wq.smash)
 	}
 	wq.mu.Unlock()
 	return item
