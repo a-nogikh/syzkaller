@@ -442,6 +442,10 @@ func (mgr *Manager) vmLoop() {
 	}
 }
 
+func (mgr *Manager) getPhase() int {
+	return mgr.phase
+}
+
 func (mgr *Manager) preloadCorpus() {
 	log.Logf(0, "loading corpus...")
 	corpusDB, err := db.Open(filepath.Join(mgr.cfg.Workdir, "corpus.db"), true)

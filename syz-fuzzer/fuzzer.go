@@ -37,7 +37,8 @@ type Fuzzer struct {
 	execOpts          *ipc.ExecOpts
 	procs             []*Proc
 	gate              *ipc.Gate
-	workQueue         *WorkQueue
+	workQueue         *GlobalWorkQueue
+	wqDetach          *GroupWorkQueue
 	needPoll          chan struct{}
 	choiceTable       *prog.ChoiceTable
 	stats             [StatCount]uint64
@@ -255,7 +256,7 @@ func main() {
 		outputType:               outputType,
 		config:                   config,
 		execOpts:                 execOpts,
-		workQueue:                newWorkQueue(*flagProcs, needPoll),
+		workQueue:                newGlobalWorkQueue(*flagProcs, needPoll),
 		needPoll:                 needPoll,
 		manager:                  manager,
 		target:                   target,
@@ -284,17 +285,30 @@ func main() {
 		fuzzer.execOpts.Flags |= ipc.FlagEnableCoverageFilter
 	}
 
-	log.Logf(0, "starting %v fuzzer processes", *flagProcs)
-	for pid := 0; pid < *flagProcs; pid++ {
-		proc, err := newProc(fuzzer, pid)
+	fuzzer.startProcs(*flagProcs)
+	fuzzer.pollLoop()
+}
+
+func (fuzzer *Fuzzer) startProcs(count int) {
+	log.Logf(0, "starting %v fuzzer processes", count)
+	var wq *GroupWorkQueue
+	qCount := 0
+	secondAt := count * 2 / 3
+	for pid := 0; pid < count; pid++ {
+		if wq == nil || pid == secondAt {
+			wq = newGroupWorkQueue(fuzzer.workQueue)
+			qCount++
+		}
+		proc, err := newProc(fuzzer, pid, wq)
 		if err != nil {
 			log.Fatalf("failed to create proc: %v", err)
 		}
 		fuzzer.procs = append(fuzzer.procs, proc)
 		go proc.loop()
 	}
-
-	fuzzer.pollLoop()
+	if qCount > 1 {
+		fuzzer.wqDetach = wq
+	}
 }
 
 func collectMachineInfos(target *prog.Target) ([]byte, []host.KernelModule) {
@@ -408,6 +422,9 @@ func (fuzzer *Fuzzer) poll(needCandidates bool, stats map[string]uint64) bool {
 	r := &rpctype.PollRes{}
 	if err := fuzzer.manager.Call("Manager.Poll", a, r); err != nil {
 		log.Fatalf("Manager.Poll call failed: %v", err)
+	}
+	if fuzzer.wqDetach != nil && r.TriageComplete {
+		fuzzer.wqDetach.detach()
 	}
 	maxSignal := r.MaxSignal.Deserialize()
 	log.Logf(1, "poll: candidates=%v inputs=%v signal=%v",
