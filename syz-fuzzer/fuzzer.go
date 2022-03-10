@@ -293,11 +293,9 @@ func (fuzzer *Fuzzer) startProcs(count int) {
 	log.Logf(0, "starting %v fuzzer processes", count)
 	var wq *GroupWorkQueue
 	qCount := 0
+	secondAt := count * 2 / 3
 	for pid := 0; pid < count; pid++ {
-		// Distribute procs to work queue groups.
-		// Join the 1-proc residue, if it exists, to the previous group.
-		const procsPerGroup = 2
-		if pid%procsPerGroup == 0 && (wq == nil || pid+1 < count) {
+		if wq == nil || pid == secondAt {
 			wq = newGroupWorkQueue(fuzzer.workQueue)
 			qCount++
 		}
