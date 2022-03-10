@@ -38,6 +38,7 @@ type Fuzzer struct {
 	procs             []*Proc
 	gate              *ipc.Gate
 	workQueue         *GlobalWorkQueue
+	wqDetach          *GroupWorkQueue
 	needPoll          chan struct{}
 	choiceTable       *prog.ChoiceTable
 	stats             [StatCount]uint64
@@ -291,12 +292,14 @@ func main() {
 func (fuzzer *Fuzzer) startProcs(count int) {
 	log.Logf(0, "starting %v fuzzer processes", count)
 	var wq *GroupWorkQueue
+	qCount := 0
 	for pid := 0; pid < count; pid++ {
 		// Distribute procs to work queue groups.
 		// Join the 1-proc residue, if it exists, to the previous group.
 		const procsPerGroup = 2
 		if pid%procsPerGroup == 0 && (wq == nil || pid+1 < count) {
 			wq = newGroupWorkQueue(fuzzer.workQueue)
+			qCount++
 		}
 		proc, err := newProc(fuzzer, pid, wq)
 		if err != nil {
@@ -304,6 +307,9 @@ func (fuzzer *Fuzzer) startProcs(count int) {
 		}
 		fuzzer.procs = append(fuzzer.procs, proc)
 		go proc.loop()
+	}
+	if qCount > 1 {
+		fuzzer.wqDetach = wq
 	}
 }
 
@@ -418,6 +424,9 @@ func (fuzzer *Fuzzer) poll(needCandidates bool, stats map[string]uint64) bool {
 	r := &rpctype.PollRes{}
 	if err := fuzzer.manager.Call("Manager.Poll", a, r); err != nil {
 		log.Fatalf("Manager.Poll call failed: %v", err)
+	}
+	if fuzzer.wqDetach != nil && r.TriageComplete {
+		fuzzer.wqDetach.detach()
 	}
 	maxSignal := r.MaxSignal.Deserialize()
 	log.Logf(1, "poll: candidates=%v inputs=%v signal=%v",

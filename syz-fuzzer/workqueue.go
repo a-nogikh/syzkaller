@@ -141,6 +141,12 @@ func (wq *GroupWorkQueue) enqueue(item interface{}) {
 	}
 }
 
+func (wq *GroupWorkQueue) detach() {
+	wq.mu.Lock()
+	wq.globalQueue = nil
+	wq.mu.Unlock()
+}
+
 func (wq *GroupWorkQueue) dequeue() (item interface{}) {
 	// Triage candidate have the highest priority - handle them first.
 	wq.mu.Lock()
@@ -149,16 +155,19 @@ func (wq *GroupWorkQueue) dequeue() (item interface{}) {
 		item = wq.triageCandidate[last]
 		wq.triageCandidate = wq.triageCandidate[:last]
 	}
+	globalQueue := wq.globalQueue
 	wq.mu.Unlock()
 	if item != nil {
 		return
 	}
 
-	// If there are no triage candidates, ry to query the global queue
-	// for a candidate.
-	item = wq.globalQueue.dequeue()
-	if item != nil {
-		return
+	if globalQueue != nil {
+		// If there are no triage candidates, ry to query the global queue
+		// for a candidate.
+		item = globalQueue.dequeue()
+		if item != nil {
+			return
+		}
 	}
 	wq.mu.Lock()
 	if len(wq.triage) != 0 {
