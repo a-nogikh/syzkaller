@@ -62,6 +62,7 @@ type RPCManagerView interface {
 	newInput(inp rpctype.Input, sign signal.Signal) bool
 	candidateBatch(size int) []rpctype.Candidate
 	rotateCorpus() bool
+	getPhase() int
 }
 
 func startRPCServer(mgr *Manager) (*RPCServer, error) {
@@ -318,6 +319,7 @@ func (serv *RPCServer) Poll(a *rpctype.PollArgs, r *rpctype.PollRes) error {
 	serv.mu.Lock()
 	defer serv.mu.Unlock()
 
+	r.TriageComplete = serv.mgr.getPhase() >= phaseTriagedCorpus
 	f := serv.fuzzers[a.Name]
 	if f == nil {
 		// This is possible if we called shutdownInstance,

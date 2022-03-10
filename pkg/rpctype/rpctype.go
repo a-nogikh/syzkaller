@@ -74,9 +74,10 @@ type PollArgs struct {
 }
 
 type PollRes struct {
-	Candidates []Candidate
-	NewInputs  []Input
-	MaxSignal  signal.Serial
+	Candidates     []Candidate
+	NewInputs      []Input
+	MaxSignal      signal.Serial
+	TriageComplete bool
 }
 
 type RunnerConnectArgs struct {
