@@ -147,7 +147,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 		item.p, item.call = prog.Minimize(item.p, item.call, false,
 			func(p1 *prog.Prog, call1 int) bool {
 				for i := 0; i < minimizeAttempts; i++ {
-					info := proc.execute(proc.execOpts, p1, ProgNormal, StatMinimize)
+					info, _ := proc.execute(proc.execOpts, p1, ProgNormal, StatMinimize)
 					if !reexecutionSuccess(info, &item.info, call1) {
 						// The call was not executed or failed.
 						continue
@@ -175,8 +175,18 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	proc.fuzzer.addInputToCorpus(item.p, inputSignal, sig)
 
 	if item.flags&ProgSmashed == 0 {
-		proc.wq.enqueue(&WorkSmash{item.p, item.call})
+		proc.enqueueSmash(item.p, item.call)
 	}
+}
+
+func (proc *Proc) enqueueSmash(p *prog.Prog, call int) {
+	if proc.fuzzer.faultInjectionEnabled && call != -1 {
+		proc.wq.enqueue(&WorkSmash{p, call, &DoFaultInjection{}, proc.rnd.Float64()})
+	}
+	if proc.fuzzer.comparisonTracingEnabled && call != -1 {
+		proc.wq.enqueue(&WorkSmash{p, call, &DoProgHints{}, proc.rnd.Float64()})
+	}
+	proc.wq.enqueue(&WorkSmash{p, call, &DoProgSmash{}, proc.rnd.Float64()})
 }
 
 func reexecutionSuccess(info *ipc.ProgInfo, oldInfo *ipc.CallInfo, call int) bool {
@@ -203,19 +213,36 @@ func getSignalAndCover(p *prog.Prog, info *ipc.ProgInfo, call int) (signal.Signa
 }
 
 func (proc *Proc) smashInput(item *WorkSmash) {
-	if proc.fuzzer.faultInjectionEnabled && item.call != -1 {
+	switch v := item.subtype.(type) {
+	case *DoFaultInjection:
 		proc.failCall(item.p, item.call)
-	}
-	if proc.fuzzer.comparisonTracingEnabled && item.call != -1 {
+	case *DoProgHints:
 		proc.executeHintSeed(item.p, item.call)
+	case *DoProgSmash:
+		proc.smashCall(item.p, v, item.call)
+		const maxTotalCount = 100
+		const maxTime = 5 * time.Minute
+		repeat := v.totalIterations < maxTotalCount && v.totalDuration < maxTime
+		if repeat {
+			proc.fuzzer.workQueue.enqueue(item)
+		}
 	}
+}
+
+func (proc *Proc) smashCall(p *prog.Prog, task *DoProgSmash, call int) {
+	const maxCount = 25
+	const maxTime = 2 * time.Minute
+
+	executed, startTime := 0, time.Now()
 	fuzzerSnapshot := proc.fuzzer.snapshot()
-	for i := 0; i < 100; i++ {
-		p := item.p.Clone()
+	for ; executed < maxCount && time.Since(startTime) < maxTime; executed++ {
+		p := p.Clone()
 		p.Mutate(proc.rnd, prog.RecommendedCalls, proc.fuzzer.choiceTable, fuzzerSnapshot.corpus)
 		log.Logf(1, "#%v: smash mutated", proc.pid)
-		proc.executeAndCollide(proc.execOpts, p, ProgNormal, StatSmash)
+		task.newSignal += proc.executeAndCollide(proc.execOpts, p, ProgNormal, StatSmash)
 	}
+	task.totalIterations += executed
+	task.totalDuration += time.Since(startTime)
 }
 
 func (proc *Proc) failCall(p *prog.Prog, call int) {
@@ -233,7 +260,7 @@ func (proc *Proc) failCall(p *prog.Prog, call int) {
 func (proc *Proc) executeHintSeed(p *prog.Prog, call int) {
 	log.Logf(1, "#%v: collecting comparisons", proc.pid)
 	// First execute the original program to dump comparisons from KCOV.
-	info := proc.execute(proc.execOptsComps, p, ProgNormal, StatSeed)
+	info, _ := proc.execute(proc.execOptsComps, p, ProgNormal, StatSeed)
 	if info == nil {
 		return
 	}
@@ -269,19 +296,20 @@ func (proc *Proc) executeHintSeed(p *prog.Prog, call int) {
 	}
 }
 
-func (proc *Proc) execute(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) *ipc.ProgInfo {
+func (proc *Proc) execute(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) (*ipc.ProgInfo, int) {
 	info := proc.executeRaw(execOpts, p, stat)
 	if info == nil {
-		return nil
+		return nil, 0
 	}
-	calls, extra := proc.fuzzer.checkNewSignal(p, info)
+	newSignal := 0
+	calls, extra := proc.fuzzer.checkNewSignal(p, info, &newSignal)
 	for _, callIndex := range calls {
 		proc.enqueueCallTriage(p, flags, callIndex, info.Calls[callIndex])
 	}
 	if extra {
 		proc.enqueueCallTriage(p, flags, -1, info.Extra)
 	}
-	return info
+	return info, newSignal
 }
 
 func (proc *Proc) enqueueCallTriage(p *prog.Prog, flags ProgTypes, callIndex int, info ipc.CallInfo) {
@@ -298,8 +326,8 @@ func (proc *Proc) enqueueCallTriage(p *prog.Prog, flags ProgTypes, callIndex int
 	})
 }
 
-func (proc *Proc) executeAndCollide(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) {
-	proc.execute(execOpts, p, flags, stat)
+func (proc *Proc) executeAndCollide(execOpts *ipc.ExecOpts, p *prog.Prog, flags ProgTypes, stat Stat) (newSignal int) {
+	_, newSignal = proc.execute(execOpts, p, flags, stat)
 
 	if proc.execOptsCollide.Flags&ipc.FlagThreaded == 0 {
 		// We cannot collide syscalls without being in the threaded mode.
@@ -309,6 +337,7 @@ func (proc *Proc) executeAndCollide(execOpts *ipc.ExecOpts, p *prog.Prog, flags 
 	for i := 0; i < collideIterations; i++ {
 		proc.executeRaw(proc.execOptsCollide, proc.randomCollide(p), StatCollide)
 	}
+	return
 }
 
 func (proc *Proc) randomCollide(origP *prog.Prog) *prog.Prog {
