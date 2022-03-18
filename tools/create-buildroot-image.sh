@@ -7,7 +7,7 @@
 # TARGETARCH={amd64,arm64,arm,riscv64,s390x,mips64le,ppc64le} [NOMAKE=yes] create-buildroot-image.sh
 # If no NOMAKE=yes is specified, then it will just prepare the buildroot config,
 # but will not run the final make.
-# For amd64 it creates a bootable image with root partition
+# For amd64 and arm64 it creates a bootable image with root partition
 # on /dev/sda1 in output/images/disk.img file.
 # For other architectures it creates a non-bootable disk
 # suitable qemu injected boot with root partition on /dev/sda
@@ -23,7 +23,7 @@ case "$TARGETARCH" in
 	amd64)
 		DEFCONFIG="pc_x86_64_bios_defconfig";;
 	arm64)
-		DEFCONFIG="qemu_aarch64_virt_defconfig";;
+		DEFCONFIG="aarch64_efi_defconfig";;
 	arm)
 		DEFCONFIG="qemu_arm_vexpress_defconfig";;
 	riscv64)
@@ -39,8 +39,9 @@ case "$TARGETARCH" in
 		exit 1;;
 esac
 
+git stash
 git fetch origin
-git checkout 2021.11.x
+git checkout 2022.02
 
 make "${DEFCONFIG}"
 
@@ -117,8 +118,9 @@ EOF
         arm64)
                 cat >>.config <<EOF
 BR2_cortex_a57=y
-# Kernel is not needed for non-bootable images.
-# BR2_LINUX_KERNEL is not set
+BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG=y
+BR2_LINUX_KERNEL_IMAGEGZ=y
+BR2_LINUX_KERNEL_GZIP=y
 EOF
 ;;
 	arm)
@@ -204,6 +206,26 @@ menuentry "syzkaller" {
 EOF
 EOFEOF
 ;;
+esac
+
+# Adjust consts in buildroot source files.
+case "$TARGETARCH" in
+  arm64)
+    # 64 MB is too small for our large images.
+    sed -i 's/size = 64M/size = 256M/g' board/aarch64-efi/genimage-efi.cfg
+    # Also, use compressed images.
+    sed -i 's/Image/Image.gz/g' board/aarch64-efi/genimage-efi.cfg
+    # Overwrite grub.
+    cat >board/aarch64-efi/grub.cfg <<EOF
+set default="0"
+set timeout="0"
+
+menuentry "syzkaller" {
+	linux /Image.gz root=PARTLABEL=root enforcing=0 console=ttyS0
+}
+
+EOF
+    ;;
 esac
 
 chmod u+x rootfs_script.sh
