@@ -220,8 +220,8 @@ func (proc *Proc) smashInput(item *WorkSmash) {
 		proc.executeHintSeed(item.p, item.call)
 	case *DoProgSmash:
 		proc.smashCall(item.p, v, item.call)
-		const maxTotalCount = 100
-		const maxTime = 5 * time.Minute
+		const maxTotalCount = 50
+		const maxTime = 3 * time.Minute
 		repeat := v.totalIterations < maxTotalCount && v.totalDuration < maxTime
 		if repeat {
 			proc.wq.enqueue(item)
