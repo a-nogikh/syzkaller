@@ -224,7 +224,7 @@ func (proc *Proc) smashInput(item *WorkSmash) {
 		const maxTime = 5 * time.Minute
 		repeat := v.totalIterations < maxTotalCount && v.totalDuration < maxTime
 		if repeat {
-			proc.fuzzer.workQueue.enqueue(item)
+			proc.wq.enqueue(item)
 		}
 	}
 }
