@@ -62,14 +62,15 @@ func newProc(fuzzer *Fuzzer, pid int, wq *GroupWorkQueue) (*Proc, error) {
 }
 
 func (proc *Proc) loop() {
-	generatePeriod := 100
+	skipPeriod := 10
+	generatePeriod := 20
 	if proc.fuzzer.config.Flags&ipc.FlagSignal == 0 {
 		// If we don't have real coverage signal, generate programs more frequently
 		// because fallback signal is weak.
 		generatePeriod = 2
 	}
 	for i := 0; ; i++ {
-		item := proc.wq.dequeue()
+		item := proc.wq.dequeue(i%skipPeriod == 0)
 		if item != nil {
 			switch item := item.(type) {
 			case *WorkTriage:

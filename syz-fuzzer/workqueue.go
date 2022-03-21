@@ -223,7 +223,7 @@ func (wq *GroupWorkQueue) detach() {
 	wq.mu.Unlock()
 }
 
-func (wq *GroupWorkQueue) dequeue() (item interface{}) {
+func (wq *GroupWorkQueue) dequeue(ignoreNonPrio bool) (item interface{}) {
 	// Triage candidate have the highest priority - handle them first.
 	wq.mu.Lock()
 	if len(wq.triageCandidate) != 0 {
@@ -244,6 +244,9 @@ func (wq *GroupWorkQueue) dequeue() (item interface{}) {
 		if item != nil {
 			return
 		}
+	}
+	if ignoreNonPrio {
+		return item
 	}
 	wq.mu.Lock()
 	if len(wq.triage) != 0 {
