@@ -168,7 +168,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	proc.fuzzer.sendInputToManager(rpctype.Input{
 		Call:   callName,
 		Prog:   data,
-		Signal: newSignal.Serialize(),
+		Signal: inputSignal.Serialize(),
 		Cover:  inputCover.Serialize(),
 	})
 
