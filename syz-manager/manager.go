@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -92,6 +93,9 @@ type Manager struct {
 	coverFilter        map[uint32]uint32
 	coverFilterBitmap  []byte
 	modulesInitialized bool
+
+	crashLog     [][]string
+	crashLogLock sync.Mutex
 }
 
 const (
@@ -620,6 +624,7 @@ func (mgr *Manager) runInstance(index int) (*Crash, error) {
 }
 
 func (mgr *Manager) runInstanceInner(index int, instanceName string) (*report.Report, []byte, error) {
+	startTime := time.Now()
 	inst, err := mgr.vmPool.Create(index)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create instance: %v", err)
@@ -653,6 +658,9 @@ func (mgr *Manager) runInstanceInner(index int, instanceName string) (*report.Re
 		procs = 1
 	}
 
+	mgr.stats.vmPrepareTimeCount.inc()
+	mgr.stats.vmPrepareTimeSum.add(int(time.Since(startTime).Seconds()))
+
 	// Run the fuzzer binary.
 	start := time.Now()
 	atomic.AddUint32(&mgr.numFuzzing, 1)
@@ -672,6 +680,7 @@ func (mgr *Manager) runInstanceInner(index int, instanceName string) (*report.Re
 		// This is the only "OK" outcome.
 		log.Logf(0, "%s: running for %v, restarting", instanceName, time.Since(start))
 	} else {
+		mgr.rememberReport(rep, time.Since(startTime))
 		vmInfo, err = inst.Info()
 		if err != nil {
 			vmInfo = []byte(fmt.Sprintf("error getting VM info: %v\n", err))
@@ -679,6 +688,30 @@ func (mgr *Manager) runInstanceInner(index int, instanceName string) (*report.Re
 	}
 
 	return rep, vmInfo, nil
+}
+
+func (mgr *Manager) rememberReport(rep *report.Report, totalVMTime time.Duration) {
+	if len(mgr.crashLog) == 0 {
+		mgr.crashLog = append(mgr.crashLog, []string{"Title", "VM lifetime", "Real fuzzing", "Wasted", "Since last crash"})
+	}
+	logLine := []string{rep.Title,
+		fmt.Sprintf("%d", int(totalVMTime.Seconds())),
+		fmt.Sprintf("%d", int(rep.RealFuzzingTime.Seconds())),
+		fmt.Sprintf("%d", int(totalVMTime.Seconds()-rep.RealFuzzingTime.Seconds())),
+		fmt.Sprintf("%d", int(rep.SinceLastExec.Seconds()))}
+	go func() {
+		mgr.crashLogLock.Lock()
+		defer mgr.crashLogLock.Unlock()
+		mgr.crashLog = append(mgr.crashLog, logLine)
+		file, err := os.Create("crashes.log")
+		if err != nil {
+			log.Logf(0, "failed to open crashes.log: %s", err)
+			return
+		}
+		w := csv.NewWriter(file)
+		w.WriteAll(mgr.crashLog)
+		file.Close()
+	}()
 }
 
 func (mgr *Manager) emailCrash(crash *Crash) {

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/syzkaller/pkg/mgrconfig"
 	"github.com/google/syzkaller/pkg/vcs"
@@ -64,7 +65,9 @@ type Report struct {
 	// Recipients is a list of RecipientInfo with Email, Display Name, and type.
 	Recipients vcs.Recipients
 	// guiltyFile is the source file that we think is to blame for the crash  (filled in by Symbolize).
-	guiltyFile string
+	RealFuzzingTime time.Duration
+	SinceLastExec   time.Duration
+	guiltyFile      string
 	// reportPrefixLen is length of additional prefix lines that we added before actual crash report.
 	reportPrefixLen int
 	// symbolized is set if the report is symbolized.

@@ -32,6 +32,8 @@ type Stats struct {
 	corpusCoverFiltered Stat
 	corpusSignal        Stat
 	maxSignal           Stat
+	vmPrepareTimeSum    Stat
+	vmPrepareTimeCount  Stat
 
 	mu         sync.Mutex
 	namedStats map[string]uint64
@@ -74,6 +76,11 @@ func (stats *Stats) all() map[string]uint64 {
 		"signal":            stats.corpusSignal.get(),
 		"max signal":        stats.maxSignal.get(),
 	}
+	m["vm prepare"] = 0
+	if stats.vmPrepareTimeCount.get() > 0 {
+		m["vm prepare"] = stats.vmPrepareTimeSum.get() / stats.vmPrepareTimeCount.get()
+	}
+
 	if stats.haveHub {
 		m["hub: send prog add"] = stats.hubSendProgAdd.get()
 		m["hub: send prog del"] = stats.hubSendProgDel.get()

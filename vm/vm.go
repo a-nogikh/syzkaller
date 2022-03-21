@@ -225,6 +225,10 @@ func (inst *Instance) MonitorExecution(outc <-chan []byte, errc <-chan error,
 			mon.output = append(mon.output, out...)
 			if bytes.Contains(mon.output[lastPos:], executingProgram1) ||
 				bytes.Contains(mon.output[lastPos:], executingProgram2) {
+				if mon.firstExecuteTime.IsZero() {
+					mon.firstExecuteTime = time.Now()
+				}
+				mon.lastExecuteTime = time.Now()
 				lastExecuteTime = time.Now()
 			}
 			if reporter.ContainsCrash(mon.output[mon.matchPos:]) {
@@ -263,13 +267,15 @@ func (inst *Instance) MonitorExecution(outc <-chan []byte, errc <-chan error,
 }
 
 type monitor struct {
-	inst     *Instance
-	outc     <-chan []byte
-	errc     <-chan error
-	reporter *report.Reporter
-	exit     ExitCondition
-	output   []byte
-	matchPos int
+	inst             *Instance
+	outc             <-chan []byte
+	errc             <-chan error
+	reporter         *report.Reporter
+	exit             ExitCondition
+	output           []byte
+	matchPos         int
+	firstExecuteTime time.Time
+	lastExecuteTime  time.Time
 }
 
 func (mon *monitor) extractError(defaultError string) *report.Report {
@@ -295,6 +301,10 @@ func (mon *monitor) extractError(defaultError string) *report.Report {
 	rep := mon.createReport(defaultError)
 	if rep == nil {
 		return nil
+	}
+	if !mon.lastExecuteTime.IsZero() {
+		rep.RealFuzzingTime = mon.lastExecuteTime.Sub(mon.firstExecuteTime)
+		rep.SinceLastExec = time.Since(mon.lastExecuteTime)
 	}
 	if len(diagOutput) > 0 {
 		rep.Output = append(rep.Output, vmDiagnosisStart...)
