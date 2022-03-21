@@ -433,6 +433,17 @@ func (p *Prog) sanitizeFix() {
 	}
 }
 
+func (p *Prog) IsSane() error {
+	p2 := p.Clone()
+	before := p2.Serialize()
+	p2.sanitize(true)
+	after := p2.Serialize()
+	if !reflect.DeepEqual(before, after) {
+		return fmt.Errorf("before `%s` after `%s`", before, after)
+	}
+	return nil
+}
+
 func (p *Prog) sanitize(fix bool) error {
 	for _, c := range p.Calls {
 		if err := p.Target.sanitize(c, fix); err != nil {

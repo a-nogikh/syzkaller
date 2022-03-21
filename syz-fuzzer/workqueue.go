@@ -4,9 +4,12 @@
 package main
 
 import (
+	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/google/syzkaller/pkg/ipc"
+	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/prog"
 )
 
@@ -57,8 +60,18 @@ type WorkCandidate struct {
 // During smashing these programs receive a one-time special attention
 // (emit faults, collect comparison hints, etc).
 type WorkSmash struct {
-	p    *prog.Prog
-	call int
+	p     *prog.Prog
+	pCopy *prog.Prog
+	call  int
+}
+
+func (ws *WorkSmash) TestSame() {
+	before := ws.pCopy.Serialize()
+	after := ws.p.Serialize()
+	if !reflect.DeepEqual(before, after) {
+		log.Logf(0, "non same smash, before '%s', after '%s'", before, after)
+		panic(fmt.Sprintf("non same smash, before '%s', after '%s'", before, after))
+	}
 }
 
 func newWorkQueue(procs int, needCandidates chan struct{}) *WorkQueue {

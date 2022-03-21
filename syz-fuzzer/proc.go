@@ -172,8 +172,13 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 
 	proc.fuzzer.addInputToCorpus(item.p, inputSignal, sig)
 
+	if err := item.p.IsSane(); err != nil {
+		log.Logf(0, "insane prog at the end of triage: %s", err)
+		panic("insane prog/triage " + string(item.p.Serialize()))
+	}
+
 	if item.flags&ProgSmashed == 0 {
-		proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.call})
+		proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.p.Clone(), item.call})
 	}
 }
 
@@ -201,12 +206,15 @@ func getSignalAndCover(p *prog.Prog, info *ipc.ProgInfo, call int) (signal.Signa
 }
 
 func (proc *Proc) smashInput(item *WorkSmash) {
+	item.TestSame()
 	if proc.fuzzer.faultInjectionEnabled && item.call != -1 {
 		proc.failCall(item.p, item.call)
 	}
+	item.TestSame()
 	if proc.fuzzer.comparisonTracingEnabled && item.call != -1 {
 		proc.executeHintSeed(item.p, item.call)
 	}
+	item.TestSame()
 	fuzzerSnapshot := proc.fuzzer.snapshot()
 	for i := 0; i < 100; i++ {
 		p := item.p.Clone()
@@ -307,6 +315,11 @@ func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog, stat Stat) *ipc.P
 		log.Fatalf("dedup cover is not enabled")
 	}
 	proc.fuzzer.checkDisabledCalls(p)
+
+	if err := p.IsSane(); err != nil {
+		log.Logf(0, "insane prog: %s", err)
+		panic("insane prog" + string(p.Serialize()))
+	}
 
 	// Limit concurrency window and do leak checking once in a while.
 	ticket := proc.fuzzer.gate.Enter()
