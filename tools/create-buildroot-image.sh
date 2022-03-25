@@ -39,7 +39,6 @@ case "$TARGETARCH" in
 		exit 1;;
 esac
 
-git stash
 git fetch origin
 git checkout 2022.02
 
@@ -121,6 +120,8 @@ BR2_cortex_a57=y
 BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG=y
 BR2_LINUX_KERNEL_IMAGEGZ=y
 BR2_LINUX_KERNEL_GZIP=y
+BR2_ROOTFS_POST_IMAGE_SCRIPT="board/aarch64-efi/post-image.sh ./post_image_script.sh support/scripts/genimage.sh"
+BR2_ROOTFS_POST_SCRIPT_ARGS="-c ./custom-genimage-efi.cfg"
 EOF
 ;;
 	arm)
@@ -206,32 +207,34 @@ menuentry "syzkaller" {
 EOF
 EOFEOF
 ;;
+        arm64)
+cat >post_image_script.sh <<'EOFEOF'
+cat >${BINARIES_DIR}/efi-part/EFI/BOOT/grub.cfg <<EOF
+set default="0"
+set timeout="0"
+menuentry "syzkaller" {
+	linux /Image.gz root=PARTLABEL=root enforcing=0 console=ttyS0
+}
+EOF
+EOFEOF
+;;
 esac
 
 # Adjust consts in buildroot source files.
 case "$TARGETARCH" in
   arm64)
+    cp board/aarch64-efi/genimage-efi.cfg custom-genimage-efi.cfg
     # 64 MB is too small for our large images.
-    sed -i 's/size = 64M/size = 256M/g' board/aarch64-efi/genimage-efi.cfg
+    sed -i 's/size = 64M/size = 256M/g' custom-genimage-efi.cfg
     # Also, use compressed images.
-    sed -i 's/Image/Image.gz/g' board/aarch64-efi/genimage-efi.cfg
-    # Overwrite grub.
-    cat >board/aarch64-efi/grub.cfg <<EOF
-set default="0"
-set timeout="0"
-
-menuentry "syzkaller" {
-	linux /Image.gz root=PARTLABEL=root enforcing=0 console=ttyS0
-}
-
-EOF
+    sed -i 's/Image/Image.gz/g' custom-genimage-efi.cfg
     ;;
 esac
 
-chmod u+x rootfs_script.sh
+chmod u+x rootfs_script.sh post_image_script.sh
 
-make olddefconfig
+make olddefconfig -j32
 
 if [[ "$NOMAKE" == "" ]]; then
-	make
+	make -j32
 fi
