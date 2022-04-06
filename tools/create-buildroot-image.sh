@@ -18,7 +18,7 @@
 set -eux
 
 NOMAKE="${NOMAKE:-}"
-TARGETARCH="${TARGETARCH:-amd64}"
+TARGETARCH="${TARGETARCH:-`uname -m`}"
 case "$TARGETARCH" in
 	amd64)
 		DEFCONFIG="pc_x86_64_bios_defconfig";;
