@@ -22,7 +22,7 @@ TARGETARCH="${TARGETARCH:-`uname -m`}"
 case "$TARGETARCH" in
 	amd64)
 		DEFCONFIG="pc_x86_64_bios_defconfig";;
-	arm64)
+	arm64 | aarch64)
 		DEFCONFIG="aarch64_efi_defconfig";;
 	arm)
 		DEFCONFIG="qemu_arm_vexpress_defconfig";;
