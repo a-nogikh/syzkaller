@@ -107,6 +107,12 @@ table td, table th {
 	max-width: 350pt;
 }
 
+.list_table .title .attention {
+	font-weight: bold;
+	color: red;
+	padding-right: 3px;
+}
+
 .list_table .commit_list {
 	width: 500pt;
 	max-width: 500pt;
