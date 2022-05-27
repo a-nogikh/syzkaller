@@ -148,6 +148,7 @@ type uiBugGroup struct {
 	ShowPatched   bool
 	ShowStatus    bool
 	ShowIndex     int
+	HideBugs      bool
 	Bugs          []*uiBug
 	DispLastAct   bool
 }
@@ -245,8 +246,12 @@ func handleMain(c context.Context, w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
+	filterFragment := r.FormValue("fragment")
 	for _, group := range groups {
 		group.DispLastAct = true
+		if filterFragment != "" && group.Fragment != filterFragment {
+			group.HideBugs = true
+		}
 	}
 	data := &uiMainPage{
 		Header:         hdr,

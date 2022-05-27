@@ -86,14 +86,15 @@ Use of this source code is governed by Apache 2 LICENSE that can be found in the
 <table class="list_table">
 	{{if $.Caption}}
 		{{if $.Fragment}}
-			<caption id="{{$.Fragment}}"><a class="plain" href="#{{$.Fragment}}">
+			<caption id="{{$.Fragment}}"><a class="plain" href="?fragment={{$.Fragment}}">
 		{{else}}
 			<caption>
 		{{end}}
-		{{$.Caption}} ({{len $.Bugs}}):
+		{{$.Caption}} ({{if $.HideBugs}}hidden{{else}}{{len $.Bugs}}{{end}}):
 		{{if $.Fragment}}</a>{{end}}
 		</caption>
 	{{end}}
+	{{if not $.HideBugs}}
 	<thead>
 	<tr>
 		{{if $.ShowNamespace}}
@@ -160,6 +161,7 @@ Use of this source code is governed by Apache 2 LICENSE that can be found in the
 		</tr>
 	{{end}}
 	</tbody>
+	{{end}}
 </table>
 {{end}}
 {{end}}
