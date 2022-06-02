@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/dashboard/dashapi"
+	"github.com/google/syzkaller/pkg/assets"
 	"github.com/google/syzkaller/pkg/email"
 	"github.com/google/syzkaller/pkg/html"
 	"github.com/google/syzkaller/sys/targets"
@@ -422,7 +423,18 @@ func createBugReport(c context.Context, bug *Bug, crash *Crash, crashKey *db.Key
 	if !bugReporting.Reported.IsZero() {
 		typ = dashapi.ReportRepro
 	}
-
+	// TODO: add support for crash-specific assets.
+	assetList := []dashapi.Asset{}
+	for _, asset := range build.Assets {
+		if asset.AssetType == assets.HtmlCoverageReport {
+			continue
+		}
+		assetList = append(assets, dashapi.Asset{
+			Title:       assets.GetHumanReadableName(asset.AssetType),
+			DownloadURL: asset.DownloadURL,
+			AssetType:   asset.AssetType,
+		})
+	}
 	kernelRepo := kernelRepoInfo(build)
 	rep := &dashapi.BugReport{
 		Type:            typ,
@@ -448,6 +460,7 @@ func createBugReport(c context.Context, bug *Bug, crash *Crash, crashKey *db.Key
 		CrashTime:       crash.Time,
 		NumCrashes:      bug.NumCrashes,
 		HappenedOn:      managersToRepos(c, bug.Namespace, bug.HappenedOn),
+		Assets:          assetList,
 	}
 	if bugReporting.CC != "" {
 		rep.CC = append(rep.CC, strings.Split(bugReporting.CC, "|")...)

@@ -63,6 +63,7 @@ import (
 	"regexp"
 	"sync"
 
+	"github.com/google/syzkaller/pkg/assets"
 	"github.com/google/syzkaller/pkg/config"
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/mgrconfig"
@@ -107,6 +108,8 @@ type Config struct {
 	JobPollPeriod int `json:"job_poll_period"`
 	// Poll period for commits in seconds (optional, defaults to 3600 seconds)
 	CommitPollPeriod int `json:"commit_poll_period"`
+	// Asset Storage config
+	AssetStorage assets.Config `json:"asset_storage"`
 }
 
 type ManagerConfig struct {
@@ -212,9 +215,14 @@ func main() {
 		wg.Done()
 	}()
 
+	var assetStorage *assets.AssetStorage
+	if !cfg.AssetStorage.IsEmpty() {
+		assetStorage = assets.AssetStorageFromConfig(cfg.Name, cfg.AssetStorage)
+	}
+
 	var managers []*Manager
 	for _, mgrcfg := range cfg.Managers {
-		mgr, err := createManager(cfg, mgrcfg, stop, *flagDebug)
+		mgr, err := createManager(cfg, mgrcfg, assetStorage, stop, *flagDebug)
 		if err != nil {
 			log.Logf(0, "failed to create manager %v: %v", mgrcfg.Name, err)
 			continue
@@ -311,6 +319,9 @@ func loadConfig(filename string) (*Config, error) {
 	cfg.Managers = managers
 	if len(cfg.Managers) == 0 {
 		return nil, fmt.Errorf("no managers specified")
+	}
+	if err := cfg.AssetStorage.Validate(); err != nil {
+		return nil, fmt.Errorf("asset storage config error: %w", err)
 	}
 	return cfg, nil
 }

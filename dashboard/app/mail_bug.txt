@@ -16,8 +16,13 @@ git tree:       {{.KernelRepoAlias}}
 {{end}}{{if and .Moderation .Maintainers}}CC:             {{.Maintainers}}
 {{end}}{{if and (not .NoRepro) (not .ReproCLink) (not .ReproSyzLink)}}
 Unfortunately, I don't have any reproducer for this issue yet.
-{{end}}
-{{if .BisectCause}}{{if .BisectCause.Commit}}The issue was bisected to:
+{{end}}{{if .Assets}}
+
+Downloadable assets:
+{{range $i, $asset := range .Assets}}{{$asset.Title}}:
+{{$asset.DownloadURL}}
+{end}}
+{{end}}{{if .BisectCause}}{{if .BisectCause.Commit}}The issue was bisected to:
 
 commit {{.BisectCause.Commit.Hash}}
 Author: {{.BisectCause.Commit.AuthorName}} <{{.BisectCause.Commit.Author}}>

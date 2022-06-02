@@ -50,6 +50,14 @@ type ManagerStats struct {
 	TotalExecs        int64
 }
 
+type AssetInfo struct {
+	Type              string
+	DeprecationPolicy string
+	DownloadURL       string
+	StorageName       string
+	CreateDate        time.Time
+}
+
 type Build struct {
 	Namespace           string
 	Manager             string
@@ -65,9 +73,10 @@ type Build struct {
 	KernelRepo          string
 	KernelBranch        string
 	KernelCommit        string
-	KernelCommitTitle   string    `datastore:",noindex"`
-	KernelCommitDate    time.Time `datastore:",noindex"`
-	KernelConfig        int64     // reference to KernelConfig text entity
+	KernelCommitTitle   string      `datastore:",noindex"`
+	KernelCommitDate    time.Time   `datastore:",noindex"`
+	KernelConfig        int64       // reference to KernelConfig text entity
+	Assets              []AssetInfo // build-related assets
 }
 
 type Bug struct {
@@ -157,6 +166,8 @@ type Crash struct {
 	// For example, a crash in mainline kernel has higher priority than a crash in a side branch.
 	// For historical reasons this is called ReportLen.
 	ReportLen int64
+	// As Datastore does not support joining data, we have to de-normalize data.
+	Assets []AssetInfo
 }
 
 // ReportingState holds dynamic info associated with reporting.
@@ -575,12 +586,20 @@ func (bug *Bug) dailyStatsTail(from time.Time) []BugDailyStats {
 	return bug.DailyStats[startPos:]
 }
 
-func markCrashReported(c context.Context, crashID int64, bugKey *db.Key, now time.Time) error {
+func markCrashReported(c context.Context, crashID int64, ns string, bugKey *db.Key, now time.Time) error {
 	crash := new(Crash)
 	crashKey := db.NewKey(c, "Crash", "", crashID, bugKey)
 	if err := db.Get(c, crashKey, crash); err != nil {
 		return fmt.Errorf("failed to get reported crash %v: %v", crashID, err)
 	}
+	build, err := loadBuild(c, ns, crash.BuildID)
+	if err != nil {
+		return fmt.Errorf("failed to query build for %v: %v", crashID, err)
+	}
+	// For some assets, we have to duplicate them both in Build and Crash - otherwise
+	// we just won't be able to perform certain types of queries.
+	// For details see the comment in the getBugStatusDeprecatedAssets() function.
+	crash.PropagateBuildAssets(build)
 	crash.Reported = now
 	if _, err := db.Put(c, crashKey, crash); err != nil {
 		return fmt.Errorf("failed to put reported crash %v: %v", crashID, err)

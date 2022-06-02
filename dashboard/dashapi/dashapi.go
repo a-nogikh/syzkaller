@@ -384,6 +384,13 @@ type BugReport struct {
 	PatchLink      string
 	BisectCause    *BisectResult
 	BisectFix      *BisectResult
+	Assets         []Asset
+}
+
+type Asset struct {
+	Title       string
+	DownloadURL string
+	AssetType   string
 }
 
 type BisectResult struct {
@@ -523,6 +530,47 @@ type ManagerStatsReq struct {
 
 func (dash *Dashboard) UploadManagerStats(req *ManagerStatsReq) error {
 	return dash.Query("manager_stats", req, nil)
+}
+
+// Asset lifetime:
+// 1. syz-ci uploads it to GCS and reports to the dashboard via add_build_asset.
+// 2. syz-ci periodically queries deprecated_assets to figure out which assets
+//
+//	can be deleted.
+//
+// 3. Once an asset is deleted, syz-ci invokes forget_assets.
+type AddBuildAssetReq struct {
+	BuildID      string
+	AssetStorage string
+	AssetType    string
+	DownloadURL  string
+}
+
+func (dash *Dashboard) AddBuildAsset(req *AddBuildAssetReq) error {
+	return dash.Query("add_build_asset", req, nil)
+}
+
+type ForgetAssetsReq struct {
+	DownloadURLs []string
+}
+
+func (dash *Dashboard) ForgetAssets(req *ForgetAsetsReq) error {
+	return dash.Query("forget_assets", req, nil)
+}
+
+type DeprecatedAssetsReq struct {
+	// The Asset Storage can only delete files it has reported.
+	AssetStorage string
+}
+
+type DeprecatedAssetsResp struct {
+	DeprecatedDownloadURLs []string
+}
+
+func (dash *Dashboard) DeprecatedAssetsList(req *DeprecatedAssetsReq) (*DeprecatedAssetsListResp, error) {
+	resp := new(BugListResp)
+	err := dash.Query("deprecated_assets", req, resp)
+	return resp, err
 }
 
 type BugListResp struct {

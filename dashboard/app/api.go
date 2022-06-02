@@ -54,6 +54,9 @@ var apiNamespaceHandlers = map[string]APINamespaceHandler{
 	"upload_commits":      apiUploadCommits,
 	"bug_list":            apiBugList,
 	"load_bug":            apiLoadBug,
+	"add_build_asset":     apiAddBuildAsset,
+	"forget_assets":       apiForgetAssets,
+	"deprecated_assets":   apiDeprecatedAssetsList,
 }
 
 type JSONHandler func(c context.Context, r *http.Request) (interface{}, error)
@@ -1056,6 +1059,31 @@ func loadBugReport(c context.Context, bug *Bug) (*dashapi.BugReport, error) {
 		return nil, fmt.Errorf("reporting %v is missing in config", bugReporting.Name)
 	}
 	return createBugReport(c, bug, crash, crashKey, bugReporting, reporting)
+}
+
+func apiAddBuildAsset(c context.Context, ns string, r *http.Request, payload []byte) (interface{}, error) {
+	req := new(dashapi.AddBuildAssetReq)
+	if err := json.Unmarshal(payload, req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %v", err)
+	}
+	// TODO: validate fields?
+	return nil, saveBuildAsset(c, ns, req)
+}
+
+func apiForgetAssets(c context.Context, ns string, r *http.Request, payload []byte) (interface{}, error) {
+	req := new(dashapi.ForgetAssetsReq)
+	if err := json.Unmarshal(payload, req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %v", err)
+	}
+	return nil, forgetAssets(c, ns, req)
+}
+
+func apiDeprecatedAssetsList(c context.Context, ns string, r *http.Request, payload []byte) (interface{}, error) {
+	req := new(dashapi.DeprecatedAssetsReq)
+	if err := json.Unmarshal(payload, req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %v", err)
+	}
+	return queryDeprecatedAssets(c, ns, req)
 }
 
 func findExistingBugForCrash(c context.Context, ns string, titles []string) (*Bug, error) {

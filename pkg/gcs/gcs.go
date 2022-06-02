@@ -117,6 +117,41 @@ func (client *Client) Publish(gcsFile string) error {
 	return obj.ACL().Set(client.ctx, storage.AllUsers, storage.RoleReader)
 }
 
+func (client *Client) SetContentMetadata(gcsFile, contentType, contentEncoding string) error {
+	// The original method is much more fexible, but let's keep this simple for now.
+	bucket, filename, err := split(gcsFile)
+	if err != nil {
+		return err
+	}
+	obj := client.client.Bucket(bucket).Object(filename)
+	return obj.Update(client.ctx, storage.ObjectAttrsToUpdate{
+		ContentType:     contentType,
+		ContentEncoding: contentEncoding,
+	})
+}
+
+func (client *Client) DeleteFile(gcsFile string) error {
+	bucket, filename, err := split(gcsFile)
+	if err != nil {
+		return nil, err
+	}
+	f := client.client.Bucket(bucket).Object(filename)
+	return f.Delete(client.ctx)
+}
+
+func (client *Client) GetDownloadURL(gcsFile string) (string, error) {
+	bucket, filename, err := split(gcsFile)
+	if err != nil {
+		return "", err
+	}
+	f := client.client.Bucket(bucket).Object(filename)
+	attrs, err := f.Attrs(client.ctx)
+	if err != nil {
+		return "", err
+	}
+	return attrs.MediaLink, nil
+}
+
 // Where things get published.
 const PublicPrefix = "https://storage.googleapis.com/"
 
