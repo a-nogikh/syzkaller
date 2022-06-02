@@ -23,12 +23,17 @@ import (
 )
 
 type Dashboard struct {
-	Client       string
-	Addr         string
-	Key          string
-	ctor         RequestCtor
-	doer         RequestDoer
-	logger       RequestLogger
+	Client string
+	Addr   string
+	Key    string
+	ctor   RequestCtor
+	doer   RequestDoer
+	logger RequestLogger
+	// Yes, we have the ability to set custom constructor, doer and logger, but
+	// there are also cases when we just want to mock the whole request processing.
+	// Implementing that on top of http.Request/http.Response would complicate the
+	// code too much.
+	mocker       RequestMocker
 	errorHandler func(error)
 }
 
@@ -36,10 +41,17 @@ func New(client, addr, key string) (*Dashboard, error) {
 	return NewCustom(client, addr, key, http.NewRequest, http.DefaultClient.Do, nil, nil)
 }
 
+func NewMock(mocker RequestMocker) *Dashboard {
+	return &Dashboard{
+		mocker: mocker,
+	}
+}
+
 type (
 	RequestCtor   func(method, url string, body io.Reader) (*http.Request, error)
 	RequestDoer   func(req *http.Request) (*http.Response, error)
 	RequestLogger func(msg string, args ...interface{})
+	RequestMocker func(method string, req interface{}) (interface{}, error)
 )
 
 // key == "" indicates that the ambient GCE service account authority
@@ -384,6 +396,15 @@ type BugReport struct {
 	PatchLink      string
 	BisectCause    *BisectResult
 	BisectFix      *BisectResult
+	Assets         []Asset
+}
+
+type Asset struct {
+	Title       string
+	DownloadURL string
+	// We unfortunately cannot make it be of asset.Type, we get a circular dependency
+	// in that case.
+	Type string
 }
 
 type BisectResult struct {
@@ -525,6 +546,33 @@ func (dash *Dashboard) UploadManagerStats(req *ManagerStatsReq) error {
 	return dash.Query("manager_stats", req, nil)
 }
 
+// Asset lifetime:
+// 1. syz-ci uploads it to GCS and reports to the dashboard via add_build_asset.
+// 2. syz-ci periodically queries deprecated_assets to figure out which assets
+//
+//	can be deleted.
+//
+// 3. Once an asset is deleted, syz-ci invokes forget_assets.
+type AddBuildAssetReq struct {
+	BuildID     string
+	AssetType   string
+	DownloadURL string
+}
+
+func (dash *Dashboard) AddBuildAsset(req *AddBuildAssetReq) error {
+	return dash.Query("add_build_asset", req, nil)
+}
+
+type NeededAssetsResp struct {
+	DownloadURLs []string
+}
+
+func (dash *Dashboard) NeededAssetsList() (*NeededAssetsResp, error) {
+	resp := new(NeededAssetsResp)
+	err := dash.Query("needed_assets", nil, resp)
+	return resp, err
+}
+
 type BugListResp struct {
 	List []string
 }
@@ -591,6 +639,15 @@ const (
 func (dash *Dashboard) Query(method string, req, reply interface{}) error {
 	if dash.logger != nil {
 		dash.logger("API(%v): %#v", method, req)
+	}
+	if dash.mocker != nil {
+		if reply == nil {
+			_, err := dash.mocker(method, req)
+			return err
+		}
+		mockReply, err := dash.mocker(method, req)
+		reflect.ValueOf(reply).Elem().Set(reflect.ValueOf(mockReply).Elem())
+		return err
 	}
 	err := dash.queryImpl(method, req, reply)
 	if err != nil {

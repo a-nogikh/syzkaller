@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/dashboard/dashapi"
+	"github.com/google/syzkaller/pkg/asset"
 	"github.com/google/syzkaller/pkg/email"
 	"github.com/google/syzkaller/pkg/html"
 	"github.com/google/syzkaller/sys/targets"
@@ -74,7 +75,8 @@ func reportingPollBugs(c context.Context, typ string) []*dashapi.BugReport {
 
 func handleReportBug(c context.Context, typ string, state *ReportingState, bug *Bug) (
 	*dashapi.BugReport, error) {
-	reporting, bugReporting, crash, crashKey, _, _, _, err := needReport(c, typ, state, bug)
+	reporting, bugReporting, crash, crashKey, _, status, _, err := needReport(c, typ, state, bug)
+	log.Infof(c, "needReport: %v %v", status, err)
 	if err != nil || reporting == nil {
 		return nil, err
 	}
@@ -366,6 +368,7 @@ func reproStr(level dashapi.ReproLevel) string {
 	}
 }
 
+// nolint: gocyclo
 func createBugReport(c context.Context, bug *Bug, crash *Crash, crashKey *db.Key,
 	bugReporting *BugReporting, reporting *Reporting) (*dashapi.BugReport, error) {
 	reportingConfig, err := json.Marshal(reporting.Config)
@@ -422,7 +425,18 @@ func createBugReport(c context.Context, bug *Bug, crash *Crash, crashKey *db.Key
 	if !bugReporting.Reported.IsZero() {
 		typ = dashapi.ReportRepro
 	}
-
+	assetList := []dashapi.Asset{}
+	for _, buildAsset := range build.Assets {
+		if buildAsset.Type == asset.HTMLCoverageReport {
+			continue
+		}
+		assetList = append(assetList, dashapi.Asset{
+			Title: asset.GetHumanReadableName(
+				buildAsset.Type, targets.Get(build.OS, build.Arch)),
+			DownloadURL: buildAsset.DownloadURL,
+			Type:        string(buildAsset.Type),
+		})
+	}
 	kernelRepo := kernelRepoInfo(build)
 	rep := &dashapi.BugReport{
 		Type:            typ,
@@ -448,6 +462,7 @@ func createBugReport(c context.Context, bug *Bug, crash *Crash, crashKey *db.Key
 		CrashTime:       crash.Time,
 		NumCrashes:      bug.NumCrashes,
 		HappenedOn:      managersToRepos(c, bug.Namespace, bug.HappenedOn),
+		Assets:          assetList,
 	}
 	if bugReporting.CC != "" {
 		rep.CC = append(rep.CC, strings.Split(bugReporting.CC, "|")...)

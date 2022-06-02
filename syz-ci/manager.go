@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/dashboard/dashapi"
+	"github.com/google/syzkaller/pkg/asset"
 	"github.com/google/syzkaller/pkg/build"
 	"github.com/google/syzkaller/pkg/config"
 	"github.com/google/syzkaller/pkg/gcs"
@@ -62,27 +63,30 @@ func init() {
 // Manager represents a single syz-manager instance.
 // Handles kernel polling, image rebuild and manager process management.
 // As syzkaller builder, it maintains 2 builds:
-//  - latest: latest known good kernel build
-//  - current: currently used kernel build
+//   - latest: latest known good kernel build
+//   - current: currently used kernel build
 type Manager struct {
-	name       string
-	workDir    string
-	kernelDir  string
-	currentDir string
-	latestDir  string
-	configTag  string
-	configData []byte
-	cfg        *Config
-	repo       vcs.Repo
-	mgrcfg     *ManagerConfig
-	managercfg *mgrconfig.Config
-	cmd        *ManagerCmd
-	dash       *dashapi.Dashboard
-	stop       chan struct{}
-	debug      bool
+	name            string
+	workDir         string
+	kernelDir       string
+	currentDir      string
+	latestDir       string
+	configTag       string
+	configData      []byte
+	cfg             *Config
+	repo            vcs.Repo
+	mgrcfg          *ManagerConfig
+	managercfg      *mgrconfig.Config
+	cmd             *ManagerCmd
+	dash            *dashapi.Dashboard
+	storage         *asset.Storage
+	stop            chan struct{}
+	debug           bool
+	lastBuildObject *dashapi.Build
 }
 
-func createManager(cfg *Config, mgrcfg *ManagerConfig, stop chan struct{}, debug bool) (*Manager, error) {
+func createManager(cfg *Config, mgrcfg *ManagerConfig, stop chan struct{},
+	debug bool) (*Manager, error) {
 	dir := osutil.Abs(filepath.Join("managers", mgrcfg.Name))
 	err := osutil.MkdirAll(dir)
 	if err != nil {
@@ -99,7 +103,13 @@ func createManager(cfg *Config, mgrcfg *ManagerConfig, stop chan struct{}, debug
 			return nil, err
 		}
 	}
-
+	var assetStorage *asset.Storage
+	if !cfg.AssetStorage.IsEmpty() {
+		assetStorage, err = asset.StorageFromConfig(cfg.AssetStorage, dash)
+		if err != nil {
+			log.Logf(0, "failed to create asset storage: %v", err)
+		}
+	}
 	var configData []byte
 	if mgrcfg.KernelConfig != "" {
 		if configData, err = ioutil.ReadFile(mgrcfg.KernelConfig); err != nil {
@@ -125,6 +135,7 @@ func createManager(cfg *Config, mgrcfg *ManagerConfig, stop chan struct{}, debug
 		mgrcfg:     mgrcfg,
 		managercfg: mgrcfg.managercfg,
 		dash:       dash,
+		storage:    assetStorage,
 		stop:       stop,
 		debug:      debug,
 	}
@@ -472,7 +483,11 @@ func (mgr *Manager) reportBuildError(rep *report.Report, info *BuildInfo, imageD
 			Report:     rep.Report,
 		},
 	}
-	return mgr.dash.ReportBuildError(req)
+	if err := mgr.dash.ReportBuildError(req); err != nil {
+		return err
+	}
+	mgr.uploadBuildArtifacts(build, imageDir)
+	return nil
 }
 
 func (mgr *Manager) createTestConfig(imageDir string, info *BuildInfo) (*mgrconfig.Config, error) {
@@ -545,6 +560,7 @@ func (mgr *Manager) uploadBuild(info *BuildInfo, imageDir string) (string, error
 	if err != nil {
 		return "", err
 	}
+	mgr.lastBuildObject = build
 	commitTitles, fixCommits, err := mgr.pollCommits(info.KernelCommit)
 	if err != nil {
 		// This is not critical for operation.
@@ -555,6 +571,7 @@ func (mgr *Manager) uploadBuild(info *BuildInfo, imageDir string) (string, error
 	if err := mgr.dash.UploadBuild(build); err != nil {
 		return "", err
 	}
+	mgr.uploadBuildArtifacts(build, imageDir)
 	return build.ID, nil
 }
 
@@ -634,7 +651,55 @@ func (mgr *Manager) pollCommits(buildCommit string) ([]string, []dashapi.Commit,
 	return present, fixCommits, nil
 }
 
+func (mgr *Manager) uploadBuildArtifacts(build *dashapi.Build, assetFolder string) {
+	if mgr.storage == nil {
+		// No reason to continue anyway.
+		return
+	}
+	type pendingAsset struct {
+		path      string
+		assetType asset.Type
+		name      string
+	}
+	pending := []pendingAsset{}
+	bootableDisk := true
+	kernelFile := filepath.Join(assetFolder, "kernel")
+	if osutil.IsExist(kernelFile) {
+		bootableDisk = true
+		pending = append(pending, pendingAsset{kernelFile, asset.KernelImage, "kernel"})
+	}
+	imageFile := filepath.Join(assetFolder, "image")
+	if osutil.IsExist(imageFile) {
+		if bootableDisk {
+			pending = append(pending, pendingAsset{imageFile, asset.BootableDisk,
+				"disk.raw"})
+		} else {
+			pending = append(pending, pendingAsset{imageFile, asset.NonBootableDisk,
+				"non_bootable_disk.raw"})
+		}
+	}
+	kernelObjFile := filepath.Join(assetFolder, "obj", "vmlinux")
+	if osutil.IsExist(kernelObjFile) {
+		pending = append(pending,
+			pendingAsset{kernelObjFile, asset.KernelObject, "vmlinux"})
+	}
+	// TODO: add initrd?
+	for _, pendingAsset := range pending {
+		if !mgr.storage.AssetTypeEnabled(pendingAsset.assetType) {
+			continue
+		}
+		go mgr.storage.UploadBuildAssetCopy(pendingAsset.path,
+			pendingAsset.assetType, pendingAsset.name, build)
+	}
+}
+
 func (mgr *Manager) uploadCoverReport() error {
+	if mgr.storage == nil {
+		return fmt.Errorf("no asset storage is enabled")
+	}
+	if mgr.lastBuildObject == nil {
+		return fmt.Errorf("no build has been uploaded yet")
+	}
 	// Report generation can consume lots of memory. Generate one at a time.
 	select {
 	case kernelBuildSem <- struct{}{}:
@@ -653,8 +718,12 @@ func (mgr *Manager) uploadCoverReport() error {
 		return fmt.Errorf("failed to get report: %v", err)
 	}
 	defer resp.Body.Close()
-	// Upload coverage report.
-	return uploadFile(mgr.cfg.CoverUploadPath, mgr.name+".html", resp.Body)
+	err = mgr.storage.UploadBuildAssetStream(resp.Body, asset.HTMLCoverageReport,
+		mgr.name+".html", mgr.lastBuildObject)
+	if err != nil {
+		return fmt.Errorf("failed to upload html coverage report: %w", err)
+	}
+	return nil
 }
 
 func (mgr *Manager) uploadCorpus() error {
