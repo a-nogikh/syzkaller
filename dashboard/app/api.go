@@ -40,6 +40,7 @@ var apiHandlers = map[string]APIHandler{
 	"reporting_poll_notifs": apiReportingPollNotifications,
 	"reporting_poll_closed": apiReportingPollClosed,
 	"reporting_update":      apiReportingUpdate,
+	"needed_assets":         apiNeededAssetsList,
 }
 
 var apiNamespaceHandlers = map[string]APINamespaceHandler{
@@ -54,6 +55,7 @@ var apiNamespaceHandlers = map[string]APINamespaceHandler{
 	"upload_commits":      apiUploadCommits,
 	"bug_list":            apiBugList,
 	"load_bug":            apiLoadBug,
+	"add_build_asset":     apiAddBuildAsset,
 }
 
 type JSONHandler func(c context.Context, r *http.Request) (interface{}, error)
@@ -1056,6 +1058,19 @@ func loadBugReport(c context.Context, bug *Bug) (*dashapi.BugReport, error) {
 		return nil, fmt.Errorf("reporting %v is missing in config", bugReporting.Name)
 	}
 	return createBugReport(c, bug, crash, crashKey, bugReporting, reporting)
+}
+
+func apiAddBuildAsset(c context.Context, ns string, r *http.Request, payload []byte) (interface{}, error) {
+	req := new(dashapi.AddBuildAssetReq)
+	if err := json.Unmarshal(payload, req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %v", err)
+	}
+	// TODO: validate fields?
+	return nil, saveBuildAsset(c, ns, req)
+}
+
+func apiNeededAssetsList(c context.Context, r *http.Request, payload []byte) (interface{}, error) {
+	return queryNeededAssets(c)
 }
 
 func findExistingBugForCrash(c context.Context, ns string, titles []string) (*Bug, error) {
