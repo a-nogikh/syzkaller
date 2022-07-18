@@ -66,23 +66,23 @@ func init() {
 //   - latest: latest known good kernel build
 //   - current: currently used kernel build
 type Manager struct {
-	name            string
-	workDir         string
-	kernelDir       string
-	currentDir      string
-	latestDir       string
-	configTag       string
-	configData      []byte
-	cfg             *Config
-	repo            vcs.Repo
-	mgrcfg          *ManagerConfig
-	managercfg      *mgrconfig.Config
-	cmd             *ManagerCmd
-	dash            *dashapi.Dashboard
-	storage         *asset.Storage
-	stop            chan struct{}
-	debug           bool
-	lastBuildObject *dashapi.Build
+	name       string
+	workDir    string
+	kernelDir  string
+	currentDir string
+	latestDir  string
+	configTag  string
+	configData []byte
+	cfg        *Config
+	repo       vcs.Repo
+	mgrcfg     *ManagerConfig
+	managercfg *mgrconfig.Config
+	cmd        *ManagerCmd
+	dash       *dashapi.Dashboard
+	storage    *asset.Storage
+	stop       chan struct{}
+	debug      bool
+	lastBuild  *dashapi.Build
 }
 
 func createManager(cfg *Config, mgrcfg *ManagerConfig, stop chan struct{},
@@ -180,10 +180,8 @@ loop:
 		}
 		if !artifactUploadTime.IsZero() && time.Now().After(artifactUploadTime) {
 			artifactUploadTime = time.Time{}
-			if mgr.managercfg.Cover && mgr.cfg.CoverUploadPath != "" {
-				if err := mgr.uploadCoverReport(); err != nil {
-					mgr.Errorf("failed to upload cover report: %v", err)
-				}
+			if err := mgr.uploadCoverReport(); err != nil {
+				mgr.Errorf("failed to upload cover report: %v", err)
 			}
 			if mgr.cfg.CorpusUploadPath != "" {
 				if err := mgr.uploadCorpus(); err != nil {
@@ -560,7 +558,7 @@ func (mgr *Manager) uploadBuild(info *BuildInfo, imageDir string) (string, error
 	if err != nil {
 		return "", err
 	}
-	mgr.lastBuildObject = build
+	mgr.lastBuild = build
 	commitTitles, fixCommits, err := mgr.pollCommits(info.KernelCommit)
 	if err != nil {
 		// This is not critical for operation.
@@ -688,17 +686,25 @@ func (mgr *Manager) uploadBuildArtifacts(build *dashapi.Build, assetFolder strin
 		if !mgr.storage.AssetTypeEnabled(pendingAsset.assetType) {
 			continue
 		}
-		go mgr.storage.UploadBuildAssetCopy(pendingAsset.path,
-			pendingAsset.assetType, pendingAsset.name, build)
+		file, err := os.Open(pendingAsset.path)
+		if err != nil {
+			log.Logf(0, "failed to open an asset for uploading: %s, %s",
+				pendingAsset.path, err)
+			continue
+		}
+		go mgr.storage.UploadBuildAsset(file, pendingAsset.name,
+			pendingAsset.assetType, build)
 	}
 }
 
 func (mgr *Manager) uploadCoverReport() error {
-	if mgr.storage == nil {
-		return fmt.Errorf("no asset storage is enabled")
+	directUpload := mgr.managercfg.Cover && mgr.cfg.CoverUploadPath != ""
+	if mgr.storage == nil && !directUpload {
+		// Cover report uploading is disabled.
+		return nil
 	}
-	if mgr.lastBuildObject == nil {
-		return fmt.Errorf("no build has been uploaded yet")
+	if mgr.storage != nil && directUpload {
+		return fmt.Errorf("cover report must be either uploaded directly or via asset storage")
 	}
 	// Report generation can consume lots of memory. Generate one at a time.
 	select {
@@ -718,8 +724,12 @@ func (mgr *Manager) uploadCoverReport() error {
 		return fmt.Errorf("failed to get report: %v", err)
 	}
 	defer resp.Body.Close()
-	err = mgr.storage.UploadBuildAssetStream(resp.Body, asset.HTMLCoverageReport,
-		mgr.name+".html", mgr.lastBuildObject)
+	if directUpload {
+		return uploadFile(mgr.cfg.CoverUploadPath, mgr.name+".html", resp.Body)
+	}
+	// Upload via the asset storage.
+	err = mgr.storage.UploadBuildAsset(resp.Body, mgr.name+".html", asset.HTMLCoverageReport,
+		mgr.lastBuild)
 	if err != nil {
 		return fmt.Errorf("failed to upload html coverage report: %w", err)
 	}

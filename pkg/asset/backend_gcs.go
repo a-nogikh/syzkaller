@@ -5,6 +5,7 @@ package asset
 
 import (
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 
@@ -29,8 +30,15 @@ func MakeCloudStorageBackend(bucket string) (*CloudStorageBackend, error) {
 
 func (csb *CloudStorageBackend) upload(req *uploadRequest) (*uploadResponse, error) {
 	path := fmt.Sprintf("%s/%s", csb.bucket, req.savePath)
-	err := csb.client.UploadFile(req.origFile, req.savePath, req.contentType, req.contentEncoding)
+	w, err := csb.client.FileWriterExt(req.savePath, req.contentType, req.contentEncoding)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(w, req.reader); err != nil {
+		w.Close()
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
 		return nil, err
 	}
 	url, err := csb.client.GetDownloadURL(path)

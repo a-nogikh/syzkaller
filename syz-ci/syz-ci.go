@@ -55,7 +55,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"math/rand"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -272,6 +271,9 @@ func main() {
 }
 
 func deprecateAssets(cfg *Config, shutdownPending chan struct{}) {
+	if cfg.DashboardAddr == "" || cfg.AssetStorage == nil {
+		return
+	}
 	dash, err := dashapi.New(cfg.DashboardClient, cfg.DashboardAddr, cfg.DashboardKey)
 	if err != nil {
 		log.Logf(0, "deprecateAssets: failed to create dashapi: %v", err)
@@ -282,19 +284,18 @@ func deprecateAssets(cfg *Config, shutdownPending chan struct{}) {
 		log.Logf(0, "deprecateAssets: failed to create asset storage: %v", err)
 		return
 	}
-	rand.Seed(time.Now().UTC().UnixNano())
 loop:
 	for {
-		sleepHours := 6 + rand.Intn(6)
+		const sleepHours = 6
 		select {
 		case <-shutdownPending:
 			break loop
 		case <-time.After(time.Hour * time.Duration(sleepHours)):
 		}
-		log.Logf(0, "running deprecateAssets()")
+		log.Logf(0, "deprecating assets")
 		err := storage.DeprecateAssets()
 		if err != nil {
-			log.Logf(0, "deprecateAssets() failed: %v", err)
+			dash.LogError("syz-ci", "asset deprecation failed: %v", err)
 		}
 	}
 }

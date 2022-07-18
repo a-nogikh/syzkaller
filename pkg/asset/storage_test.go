@@ -83,11 +83,7 @@ func makeStorage(dash *dashapi.Dashboard) (*Storage, *testStorageBackend) {
 }
 
 func validateGzipContent(req *uploadRequest, expected []byte) error {
-	file, err := os.Open(req.origFile)
-	if err != nil {
-		return fmt.Errorf("failed to open %s", req.origFile)
-	}
-	reader, err := gzip.NewReader(file)
+	reader, err := gzip.NewReader(req.reader)
 	if err != nil {
 		return fmt.Errorf("gzip.NewReader failed: %w", err)
 	}
@@ -109,11 +105,9 @@ func validateXzContent(req *uploadRequest, expected []byte) error {
 		return fmt.Errorf("xz was available, but didn't get used")
 	}
 	if xzUsed {
-		if !osutil.IsExist(req.origFile) {
-			return fmt.Errorf("origFile does not exist")
-		}
-		out, err := osutil.RunCmd(time.Minute, "",
-			"xz", "--decompress", "--to-stdout", req.origFile)
+		cmd := osutil.Command("xz", "--decompress", "--to-stdout")
+		cmd.Stdin = req.reader
+		out, err := osutil.Run(time.Minute, cmd)
 		if err != nil {
 			return fmt.Errorf("xz invocation failed: %w", err)
 		}
@@ -133,12 +127,6 @@ func TestUploadBuildAsset(t *testing.T) {
 
 	// Upload two assets using different means.
 	vmLinuxContent := []byte{0xDE, 0xAD, 0xBE, 0xEF}
-	vmLinuxFile, err := osutil.WriteTempFile(vmLinuxContent)
-	if err != nil {
-		t.Fatalf("WriteTempFile failed: %s", err)
-	}
-	defer os.Remove(vmLinuxFile)
-
 	dashMock.addBuildAsset = func(req *dashapi.AddBuildAssetReq) error {
 		if req.AssetType != string(KernelObject) {
 			t.Fatalf("expected KernelObject, got %v", req.AssetType)
@@ -155,13 +143,13 @@ func TestUploadBuildAsset(t *testing.T) {
 		}
 		return nil
 	}
-	err = storage.UploadBuildAssetCopy(vmLinuxFile, KernelObject, "vmlinux", build)
+	err := storage.UploadBuildAsset(bytes.NewReader(vmLinuxContent), "vmlinux", KernelObject, build)
 	if err != nil {
 		t.Errorf("UploadBuildAssetCopy failed: %s", err)
 	}
 
 	// Upload the same file the second time.
-	storage.UploadBuildAssetCopy(vmLinuxFile, KernelObject, "vmlinux", build)
+	storage.UploadBuildAsset(bytes.NewReader(vmLinuxContent), "vmlinux", KernelObject, build)
 	// The currently expected behavior is that it will be uploaded twice and will have
 	// different names.
 	if len(dashMock.downloadURLs) < 2 {
@@ -189,8 +177,7 @@ func TestUploadBuildAsset(t *testing.T) {
 		}
 		return nil
 	}
-	storage.UploadBuildAssetStream(bytes.NewReader(diskImageContent), KernelImage,
-		"disk.img", build)
+	storage.UploadBuildAsset(bytes.NewReader(diskImageContent), "disk.img", KernelImage, build)
 
 	// First try to remove two assets.
 	allUrls := []string{}
@@ -253,8 +240,8 @@ func TestUploadHtmlAsset(t *testing.T) {
 		}
 		return nil
 	}
-	storage.UploadBuildAssetStream(bytes.NewReader(htmlContent), HTMLCoverageReport,
-		"cover_report.html", build)
+	storage.UploadBuildAsset(bytes.NewReader(htmlContent), "cover_report.html",
+		HTMLCoverageReport, build)
 }
 
 func TestRecentAssetDeletionProtection(t *testing.T) {
@@ -263,8 +250,8 @@ func TestRecentAssetDeletionProtection(t *testing.T) {
 	build := &dashapi.Build{ID: "1234", KernelCommit: "abcdef2134"}
 	htmlContent := []byte("<html><head><title>Hi!</title></head></html>")
 	be.currentTime = time.Now().Add(-time.Hour * 24 * 6)
-	err := storage.UploadBuildAssetStream(bytes.NewReader(htmlContent), HTMLCoverageReport,
-		"cover_report.html", build)
+	err := storage.UploadBuildAsset(bytes.NewReader(htmlContent), "cover_report.html",
+		HTMLCoverageReport, build)
 	if err != nil {
 		t.Fatalf("failed to upload a file: %v", err)
 	}
@@ -296,23 +283,21 @@ func TestAssetStorageConfiguration(t *testing.T) {
 
 	// Uploading a file of a disabled asset type.
 	htmlContent := []byte("<html><head><title>Hi!</title></head></html>")
-	err = storage.UploadBuildAssetStream(bytes.NewReader(htmlContent), HTMLCoverageReport,
-		"cover_report.html", build)
+	err = storage.UploadBuildAsset(bytes.NewReader(htmlContent), "cover_report.html",
+		HTMLCoverageReport, build)
 	if !errors.Is(err, ErrAssetTypeDisabled) {
 		t.Fatalf("UploadBuildAssetStream expected to fail with ErrAssetTypeDisabled, but got %v", err)
 	}
 
 	// Uploading a file of an enabled asset type.
 	testContent := []byte{0x1, 0x2, 0x3, 0x4}
-	err = storage.UploadBuildAssetStream(bytes.NewReader(testContent), BootableDisk,
-		"disk.raw", build)
+	err = storage.UploadBuildAsset(bytes.NewReader(testContent), "disk.raw", BootableDisk, build)
 	if err != nil {
 		t.Fatalf("UploadBuildAssetStream of BootableDisk expected to succeed, got %v", err)
 	}
 
 	// Uploading a file of an unspecified asset type.
-	err = storage.UploadBuildAssetStream(bytes.NewReader(testContent), KernelImage,
-		"disk.raw", build)
+	err = storage.UploadBuildAsset(bytes.NewReader(testContent), "disk.raw", KernelImage, build)
 	if !errors.Is(err, ErrAssetTypeDisabled) {
 		t.Fatalf("UploadBuildAssetStream expected to fail with ErrAssetTypeDisabled, but got %v", err)
 	}

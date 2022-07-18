@@ -8,6 +8,12 @@ import (
 	"strings"
 )
 
+type Config struct {
+	Debug    bool                `json:"debug"`
+	UploadTo string              `json:"upload_to"`
+	Assets   map[Type]TypeConfig `json:"assets"`
+}
+
 type TypeConfig struct {
 	Always bool `json:"always"`
 	Never  bool `json:"never"`
@@ -22,12 +28,6 @@ func (tc *TypeConfig) Validate() error {
 	return nil
 }
 
-type Config struct {
-	Debug    bool                `json:"debug"`
-	UploadTo string              `json:"upload_to"`
-	Assets   map[Type]TypeConfig `json:"assets"`
-}
-
 func (c *Config) IsEnabled(assetType Type) bool {
 	cfg, ok := c.Assets[assetType]
 	if !ok {
@@ -37,7 +37,7 @@ func (c *Config) IsEnabled(assetType Type) bool {
 }
 
 func (c *Config) IsEmpty() bool {
-	return len(c.Assets) == 0
+	return c == nil || len(c.Assets) == 0
 }
 
 func (c *Config) Validate() error {
