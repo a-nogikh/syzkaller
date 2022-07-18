@@ -19,11 +19,11 @@ import (
 	"cloud.google.com/go/logging"
 	"cloud.google.com/go/logging/logadmin"
 	"github.com/google/syzkaller/dashboard/dashapi"
-	"github.com/google/syzkaller/pkg/asset"
 	"github.com/google/syzkaller/pkg/email"
 	"github.com/google/syzkaller/pkg/html"
 	"github.com/google/syzkaller/pkg/vcs"
 	"golang.org/x/net/context"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/iterator"
 	"google.golang.org/appengine/v2"
 	db "google.golang.org/appengine/v2/datastore"
@@ -1099,24 +1099,23 @@ func loadManagers(c context.Context, accessLevel AccessLevel, ns, manager string
 	builds := make([]*Build, len(buildKeys))
 	stats := make([]*ManagerStats, len(statsKeys))
 	coverAssets := map[string]Asset{}
-	err = parallelize("failed to query manager-related info",
-		func() error {
-			return db.GetMulti(c, buildKeys, builds)
-		},
-		func() error {
-			return db.GetMulti(c, statsKeys, stats)
-		},
-		func() error {
-			// Get the last coverage report asset for the last week.
-			const maxDuration = time.Hour * 24 * 7
-			var err error
-			coverAssets, err = queryLatestManagerAssets(c, ns,
-				asset.HTMLCoverageReport, maxDuration)
-			return err
-		},
-	)
+	g, _ := errgroup.WithContext(context.Background())
+	g.Go(func() error {
+		return db.GetMulti(c, buildKeys, builds)
+	})
+	g.Go(func() error {
+		return db.GetMulti(c, statsKeys, stats)
+	})
+	g.Go(func() error {
+		// Get the last coverage report asset for the last week.
+		const maxDuration = time.Hour * 24 * 7
+		var err error
+		coverAssets, err = queryLatestManagerAssets(c, ns, dashapi.HTMLCoverageReport, maxDuration)
+		return err
+	})
+	err = g.Wait()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query manager-related info: %w", err)
 	}
 	uiBuilds := make(map[string]*uiBuild)
 	for _, build := range builds {
@@ -1142,9 +1141,8 @@ func loadManagers(c context.Context, accessLevel AccessLevel, ns, manager string
 		if now.Sub(mgr.LastAlive) > 6*time.Hour {
 			uptime = 0
 		}
-		// TODO: ideally we'd want to explicitly detect and mark cases, when
-		// the build is too new to have some coverage report. For now we just
-		// query the latest uploaded cover report for the manager.
+		// TODO: also display how fresh the coverage report is (to display it on
+		// the main page -- this will reduce confusion).
 		coverURL := ""
 		if config.CoverPath != "" {
 			coverURL = config.CoverPath + mgr.Name + ".html"

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/dashboard/dashapi"
-	"github.com/google/syzkaller/pkg/asset"
 	"github.com/google/syzkaller/pkg/email"
 )
 
@@ -19,23 +18,33 @@ func TestBuildAssetLifetime(t *testing.T) {
 	defer c.Close()
 
 	build := testBuild(1)
+	// Embed one of the assets right away.
+	build.Assets = []dashapi.NewAsset{
+		{
+			Type:        dashapi.KernelObject,
+			DownloadURL: "http://google.com/vmlinux",
+		},
+	}
 	c.client2.UploadBuild(build)
 
-	// "Upload" several assets.
-	c.expectOK(c.client2.AddBuildAsset(&dashapi.AddBuildAssetReq{
-		BuildID:     build.ID,
-		AssetType:   string(asset.KernelObject),
-		DownloadURL: "http://google.com/vmlinux",
+	// "Upload" several more assets.
+	c.expectOK(c.client2.AddBuildAssets(&dashapi.AddBuildAssetsReq{
+		BuildID: build.ID,
+		Assets: []dashapi.NewAsset{
+			{
+				Type:        dashapi.BootableDisk,
+				DownloadURL: "http://google.com/bootable_disk",
+			},
+		},
 	}))
-	c.expectOK(c.client2.AddBuildAsset(&dashapi.AddBuildAssetReq{
-		BuildID:     build.ID,
-		AssetType:   string(asset.BootableDisk),
-		DownloadURL: "http://google.com/bootable_disk",
-	}))
-	c.expectOK(c.client2.AddBuildAsset(&dashapi.AddBuildAssetReq{
-		BuildID:     build.ID,
-		AssetType:   string(asset.HTMLCoverageReport),
-		DownloadURL: "http://google.com/coverage.html",
+	c.expectOK(c.client2.AddBuildAssets(&dashapi.AddBuildAssetsReq{
+		BuildID: build.ID,
+		Assets: []dashapi.NewAsset{
+			{
+				Type:        dashapi.HTMLCoverageReport,
+				DownloadURL: "http://google.com/coverage.html",
+			},
+		},
 	}))
 
 	crash := testCrash(build, 1)
@@ -69,12 +78,8 @@ CC:             [bar@foo.com foo@bar.com idont@want.EMAILS]
 Unfortunately, I don't have any reproducer for this issue yet.
 
 Downloadable assets:
-
-vmlinux:
-http://google.com/vmlinux
-disk image:
-http://google.com/bootable_disk
-
+disk image: http://google.com/bootable_disk
+vmlinux: http://google.com/vmlinux
 
 IMPORTANT: if you fix the issue, please add the following tag to the commit:
 Reported-by: syzbot+%[1]v@testapp.appspotmail.com
@@ -144,10 +149,14 @@ func TestCoverReportDisplay(t *testing.T) {
 
 	// Upload an asset.
 	origHTMLAsset := "http://google.com/coverage0.html"
-	c.expectOK(c.client.AddBuildAsset(&dashapi.AddBuildAssetReq{
-		BuildID:     build.ID,
-		AssetType:   string(asset.HTMLCoverageReport),
-		DownloadURL: origHTMLAsset,
+	c.expectOK(c.client.AddBuildAssets(&dashapi.AddBuildAssetsReq{
+		BuildID: build.ID,
+		Assets: []dashapi.NewAsset{
+			{
+				Type:        dashapi.HTMLCoverageReport,
+				DownloadURL: origHTMLAsset,
+			},
+		},
 	}))
 	uiManagers, err = loadManagers(c.ctx, AccessAdmin, "test1", "")
 	c.expectOK(err)
@@ -157,10 +166,14 @@ func TestCoverReportDisplay(t *testing.T) {
 
 	// Upload a newer coverage.
 	newHTMLAsset := "http://google.com/coverage1.html"
-	c.expectOK(c.client.AddBuildAsset(&dashapi.AddBuildAssetReq{
-		BuildID:     build.ID,
-		AssetType:   string(asset.HTMLCoverageReport),
-		DownloadURL: newHTMLAsset,
+	c.expectOK(c.client.AddBuildAssets(&dashapi.AddBuildAssetsReq{
+		BuildID: build.ID,
+		Assets: []dashapi.NewAsset{
+			{
+				Type:        dashapi.HTMLCoverageReport,
+				DownloadURL: newHTMLAsset,
+			},
+		},
 	}))
 	uiManagers, err = loadManagers(c.ctx, AccessAdmin, "test1", "")
 	c.expectOK(err)
@@ -187,10 +200,14 @@ func TestCoverReportDeprecation(t *testing.T) {
 	c.client.UploadBuild(build)
 
 	uploadReport := func(url string) {
-		c.expectOK(c.client.AddBuildAsset(&dashapi.AddBuildAssetReq{
-			BuildID:     build.ID,
-			AssetType:   string(asset.HTMLCoverageReport),
-			DownloadURL: url,
+		c.expectOK(c.client.AddBuildAssets(&dashapi.AddBuildAssetsReq{
+			BuildID: build.ID,
+			Assets: []dashapi.NewAsset{
+				{
+					Type:        dashapi.HTMLCoverageReport,
+					DownloadURL: url,
+				},
+			},
 		}))
 	}
 

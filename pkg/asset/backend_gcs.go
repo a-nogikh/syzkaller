@@ -5,43 +5,58 @@ package asset
 
 import (
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 
+	"github.com/google/syzkaller/pkg/debugtracer"
 	"github.com/google/syzkaller/pkg/gcs"
 )
 
-type CloudStorageBackend struct {
+type cloudStorageBackend struct {
 	client *gcs.Client
 	bucket string
+	tracer debugtracer.DebugTracer
 }
 
-func MakeCloudStorageBackend(bucket string) (*CloudStorageBackend, error) {
+func makeCloudStorageBackend(bucket string, tracer debugtracer.DebugTracer) (*cloudStorageBackend, error) {
 	client, err := gcs.NewClient()
 	if err != nil {
 		return nil, fmt.Errorf("the call to NewClient failed: %w", err)
 	}
-	return &CloudStorageBackend{
+	return &cloudStorageBackend{
 		client: client,
 		bucket: bucket,
+		tracer: tracer,
 	}, nil
 }
 
-func (csb *CloudStorageBackend) upload(req *uploadRequest) (*uploadResponse, error) {
+func (csb *cloudStorageBackend) upload(req *uploadRequest) (*uploadResponse, error) {
 	path := fmt.Sprintf("%s/%s", csb.bucket, req.savePath)
-	err := csb.client.UploadFile(req.origFile, req.savePath, req.contentType, req.contentEncoding)
+	w, err := csb.client.FileWriterExt(req.savePath, req.contentType, req.contentEncoding)
+	csb.tracer.Log("gcs upload: obtained a writer, error %s", err)
 	if err != nil {
 		return nil, err
 	}
+	if _, err := io.Copy(w, req.reader); err != nil {
+		w.Close()
+		return nil, err
+	}
+	csb.tracer.Log("gcs upload: successfully copied the file")
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
 	url, err := csb.client.GetDownloadURL(path)
+	csb.tracer.Log("gcs upload: queried download URL, url %s, error %s", url, err)
 	if err != nil {
 		// The file would have been deleted later during clean up, but why not do it right away?
 		csb.client.DeleteFile(path)
+		return nil, err
 	}
 	return &uploadResponse{downloadURL: url}, nil
 }
 
-func (csb *CloudStorageBackend) list() ([]storedObject, error) {
+func (csb *cloudStorageBackend) list() ([]storedObject, error) {
 	list, err := csb.client.ListObjects(csb.bucket)
 	if err != nil {
 		return nil, err
@@ -56,7 +71,7 @@ func (csb *CloudStorageBackend) list() ([]storedObject, error) {
 	return ret, nil
 }
 
-func (csb *CloudStorageBackend) remove(downloadURL string) error {
+func (csb *cloudStorageBackend) remove(downloadURL string) error {
 	// We need to fetch the file path from the URL.
 	u, err := url.Parse(downloadURL)
 	if err != nil {

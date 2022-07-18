@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -11,78 +12,71 @@ import (
 	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/asset"
 	"golang.org/x/net/context"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/appengine/v2"
 	db "google.golang.org/appengine/v2/datastore"
 	"google.golang.org/appengine/v2/log"
 )
 
-// TODO: decide if we really want to save job-related assets right now.
-//
-// The problem is that:
-// 1. We cannot first report the job status and then upload the assets -- an email will already
-//    be sent by that time.
-// 2. If we first upload assets and then construct a JobDoneReq response already with assets,
-//    we need to handle extra corner cases:
-//    - If JobDoneReq failed, assets must be deleted.
-//    - If we uploaded several files, all must be deleted.
-//    - What if syz-ci was killed somewhere in between? How do we get rid of those abadoned files?
-//
-// With the existing asset types it does not seem to be worth it to solve those problems.
-// Probably once we have things like code dumps it will start to make some sense.
+// TODO: decide if we want to save job-related assets.
 
-func saveBuildAsset(c context.Context, ns string, req *dashapi.AddBuildAssetReq) error {
-	asset := Asset{
-		Type:        asset.Type(req.AssetType),
-		DownloadURL: req.DownloadURL,
-		CreateDate:  timeNow(c),
-	}
+func appendBuildAssets(c context.Context, ns, buildID string, assets []Asset) (*Build, error) {
+	var retBuild *Build
 	tx := func(c context.Context) error {
-		build, err := loadBuild(c, ns, req.BuildID)
+		build, err := loadBuild(c, ns, buildID)
 		if err != nil {
 			return err
 		}
-		build.Assets = append(build.Assets, asset)
-		if _, err := db.Put(c, buildKey(c, ns, req.BuildID), build); err != nil {
+		retBuild = build
+		appendedOk := false
+		var appendErr error
+		for _, newAsset := range assets {
+			appendErr = build.AppendAsset(newAsset)
+			if appendErr == nil {
+				appendedOk = true
+			}
+		}
+		// It took quite a number of resources to upload the files, so we return success
+		// even if we managed to save at least one of the new assets.
+		if !appendedOk {
+			return fmt.Errorf("failed to append all assets, last error %w", appendErr)
+		}
+		if _, err := db.Put(c, buildKey(c, ns, buildID), build); err != nil {
 			return fmt.Errorf("failed to put build: %w", err)
 		}
 		log.Infof(c, "updated build: %#v", build)
 		return nil
 	}
 	if err := db.RunInTransaction(c, tx, &db.TransactionOptions{}); err != nil {
-		log.Errorf(c, "failed to update build: %v", err)
-		return err
+		return nil, err
 	}
-	return nil
+	return retBuild, nil
 }
 
-func parallelize(errorStart string, funcs ...func() error) error {
-	errors := make(chan error)
-	for _, f := range funcs {
-		go func(callFunc func() error) {
-			errors <- callFunc()
-		}(f)
+var ErrAssetDuplicated = errors.New("an asset of this type is already present")
+
+func (build *Build) AppendAsset(addAsset Asset) error {
+	typeInfo := asset.GetTypeDescription(addAsset.Type)
+	if typeInfo == nil {
+		return fmt.Errorf("unknown asset type")
 	}
-	defer close(errors)
-	errorStr := ""
-	for i := 0; i < len(funcs); i++ {
-		err := <-errors
-		if err == nil {
-			continue
+	if !typeInfo.AllowMultiple {
+		for _, obj := range build.Assets {
+			if obj.Type == addAsset.Type {
+				return ErrAssetDuplicated
+			}
 		}
-		errorStr = fmt.Sprintf("%s%v\n", errorStr, err)
 	}
-	if errorStr != "" {
-		return fmt.Errorf("%s\n%s", errorStart, errorStr)
-	}
+	build.Assets = append(build.Assets, addAsset)
 	return nil
 }
 
 func queryNeededAssets(c context.Context) (*dashapi.NeededAssetsResp, error) {
 	// So far only build assets.
-	// TODO: once crash assets are implemented, parallelize the queries.
 	var builds []*Build
 	_, err := db.NewQuery("Build").
 		Filter("Assets.DownloadURL>", "").
+		Project("Assets.DownloadURL").
 		GetAll(c, &builds)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query builds: %w", err)
@@ -95,6 +89,29 @@ func queryNeededAssets(c context.Context) (*dashapi.NeededAssetsResp, error) {
 		}
 	}
 	return resp, nil
+}
+
+func handleDeprecateAssets(w http.ResponseWriter, r *http.Request) {
+	c := appengine.NewContext(r)
+	for ns := range config.Namespaces {
+		err := deprecateNamespaceAssets(c, ns)
+		if err != nil {
+			log.Errorf(c, "deprecateNamespaceAssets failed for ns=%v: %v", ns, err)
+		}
+	}
+}
+
+func deprecateNamespaceAssets(c context.Context, ns string) error {
+	ad := assetDeprecator{
+		ns: ns,
+		c:  c,
+	}
+	const buildBatchSize = 16
+	err := ad.batchProcessBuilds(buildBatchSize)
+	if err != nil {
+		return fmt.Errorf("build batch processing failed: %w", err)
+	}
+	return nil
 }
 
 type assetDeprecator struct {
@@ -112,36 +129,36 @@ func (ad *assetDeprecator) queryBugs() error {
 	}
 	var openBugKeys []*db.Key
 	var closedBugKeys []*db.Key
-	err := parallelize("failed to query bugs",
-		func() error {
-			// Query open bugs.
-			var err error
-			openBugKeys, err = db.NewQuery("Bug").
-				Filter("Namespace=", ad.ns).
-				Filter("Status=", BugStatusOpen).
-				KeysOnly().
-				GetAll(ad.c, nil)
-			if err != nil {
-				return fmt.Errorf("failed to fetch open builds: %w", err)
-			}
-			return nil
-		},
-		func() error {
-			// Query recently closed bugs.
-			var err error
-			closedBugKeys, err = db.NewQuery("Bug").
-				Filter("Namespace=", ad.ns).
-				Filter("Closed>", timeNow(ad.c).Add(-keepAssetsForClosedBugs)).
-				KeysOnly().
-				GetAll(ad.c, nil)
-			if err != nil {
-				return fmt.Errorf("failed to fetch closed builds: %w", err)
-			}
-			return nil
-		},
-	)
+	g, _ := errgroup.WithContext(context.Background())
+	g.Go(func() error {
+		// Query open bugs.
+		var err error
+		openBugKeys, err = db.NewQuery("Bug").
+			Filter("Namespace=", ad.ns).
+			Filter("Status=", BugStatusOpen).
+			KeysOnly().
+			GetAll(ad.c, nil)
+		if err != nil {
+			return fmt.Errorf("failed to fetch open builds: %w", err)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		// Query recently closed bugs.
+		var err error
+		closedBugKeys, err = db.NewQuery("Bug").
+			Filter("Namespace=", ad.ns).
+			Filter("Closed>", timeNow(ad.c).Add(-keepAssetsForClosedBugs)).
+			KeysOnly().
+			GetAll(ad.c, nil)
+		if err != nil {
+			return fmt.Errorf("failed to fetch closed builds: %w", err)
+		}
+		return nil
+	})
+	err := g.Wait()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to query bugs: %w", err)
 	}
 	ad.relevantBugs = map[string]bool{}
 	for _, key := range append(append([]*db.Key{}, openBugKeys...), closedBugKeys...) {
@@ -216,7 +233,7 @@ func (ad *assetDeprecator) buildBugStatusPolicy(build *Build) (bool, error) {
 }
 
 func (ad *assetDeprecator) needThisBuildAsset(build *Build, buildAsset *Asset) (bool, error) {
-	if buildAsset.Type == asset.HTMLCoverageReport {
+	if buildAsset.Type == dashapi.HTMLCoverageReport {
 		// We want to keep coverage reports forever, not just
 		// while there are any open bugs. But we don't want to
 		// keep all coverage reports, just a share of them.
@@ -295,38 +312,12 @@ func (ad *assetDeprecator) batchProcessBuilds(count int) error {
 	return nil
 }
 
-const buildBatchSize = 16
-
-func deprecateNamespaceAssets(c context.Context, ns string) error {
-	ad := assetDeprecator{
-		ns: ns,
-		c:  c,
-	}
-	err := ad.batchProcessBuilds(buildBatchSize)
-	if err != nil {
-		return fmt.Errorf("build batch processing failed: %w", err)
-	}
-	return nil
-}
-
-func handleDeprecateAssets(w http.ResponseWriter, r *http.Request) {
-	c := appengine.NewContext(r)
-	for ns := range config.Namespaces {
-		err := deprecateNamespaceAssets(c, ns)
-		if err != nil {
-			log.Errorf(c, "deprecateNamespaceAssets failed for ns=%v: %v", ns, err)
-		}
-	}
-}
-
-func queryLatestManagerAssets(c context.Context, ns string, assetType asset.Type,
+func queryLatestManagerAssets(c context.Context, ns string, assetType dashapi.AssetType,
 	period time.Duration) (map[string]Asset, error) {
-	// We don't want to query everything for such a purpose.
-	// Assume the assets we're interested in are uploaded often enough.
-	const queryLastAssetsFor = time.Hour * 24 * 14
 	var builds []*Build
-	startTime := timeNow(c).Add(-queryLastAssetsFor)
+	startTime := timeNow(c).Add(-period)
 	_, err := db.NewQuery("Build").
+		Filter("Namespace=", ns).
 		Filter("Assets.Type=", assetType).
 		Filter("Assets.CreateDate>", startTime).
 		Order("Assets.CreateDate").

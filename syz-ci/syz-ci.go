@@ -55,7 +55,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"math/rand"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -261,7 +260,7 @@ func main() {
 		}
 	})
 
-	go deprecateAssets(cfg, shutdownPending)
+	go deprecateAssets(cfg, shutdownPending, &wg)
 	wg.Wait()
 
 	select {
@@ -271,30 +270,36 @@ func main() {
 	}
 }
 
-func deprecateAssets(cfg *Config, shutdownPending chan struct{}) {
+func deprecateAssets(cfg *Config, shutdownPending chan struct{}, wg *sync.WaitGroup) {
+	if cfg.DashboardAddr == "" || cfg.AssetStorage.IsEmpty() ||
+		!cfg.AssetStorage.DoDeprecation {
+		return
+	}
 	dash, err := dashapi.New(cfg.DashboardClient, cfg.DashboardAddr, cfg.DashboardKey)
 	if err != nil {
-		log.Logf(0, "deprecateAssets: failed to create dashapi: %v", err)
+		log.Fatalf("failed to create dashapi during asset deprecation: %v", err)
 		return
 	}
 	storage, err := asset.StorageFromConfig(cfg.AssetStorage, dash)
 	if err != nil {
-		log.Logf(0, "deprecateAssets: failed to create asset storage: %v", err)
+		dash.LogError("syz-ci",
+			"failed to create asset storage during asset deprecation: %v", err)
 		return
 	}
-	rand.Seed(time.Now().UTC().UnixNano())
 loop:
 	for {
-		sleepHours := 6 + rand.Intn(6)
+		const sleepHours = 6
 		select {
 		case <-shutdownPending:
 			break loop
 		case <-time.After(time.Hour * time.Duration(sleepHours)):
 		}
-		log.Logf(0, "running deprecateAssets()")
+		log.Logf(0, "deprecating assets")
+		wg.Add(1)
 		err := storage.DeprecateAssets()
+		wg.Done()
 		if err != nil {
-			log.Logf(0, "deprecateAssets() failed: %v", err)
+			dash.LogError("syz-ci", "asset deprecation failed: %v", err)
 		}
 	}
 }

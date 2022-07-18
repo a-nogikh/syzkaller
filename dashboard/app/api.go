@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"reflect"
 	"regexp"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/syzkaller/dashboard/dashapi"
+	"github.com/google/syzkaller/pkg/asset"
 	"github.com/google/syzkaller/pkg/auth"
 	"github.com/google/syzkaller/pkg/email"
 	"github.com/google/syzkaller/pkg/hash"
@@ -55,7 +57,7 @@ var apiNamespaceHandlers = map[string]APINamespaceHandler{
 	"upload_commits":      apiUploadCommits,
 	"bug_list":            apiBugList,
 	"load_bug":            apiLoadBug,
-	"add_build_asset":     apiAddBuildAsset,
+	"add_build_assets":    apiAddBuildAssets,
 }
 
 type JSONHandler func(c context.Context, r *http.Request) (interface{}, error)
@@ -419,10 +421,26 @@ func apiUploadBuild(c context.Context, ns string, r *http.Request, payload []byt
 
 func uploadBuild(c context.Context, now time.Time, ns string, req *dashapi.Build, typ BuildType) (
 	*Build, bool, error) {
+	newAssets := []Asset{}
+	for i, toAdd := range req.Assets {
+		newAsset, err := parseIncomingAsset(c, toAdd)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to parse asset #%d: %w", i, err)
+		}
+		newAssets = append(newAssets, newAsset)
+	}
 	if build, err := loadBuild(c, ns, req.ID); err == nil {
+		if len(newAssets) > 0 {
+			updatedBuild, err := appendBuildAssets(c, ns, req.ID, newAssets)
+			if err != nil {
+				// Note that we tolerate errors here, because those errors are likely
+				// due to duplicates and syz-ci couldn't really tell if it had already
+				// uploaded the asset during previous manager restarts.
+				build = updatedBuild
+			}
+		}
 		return build, false, nil
 	}
-
 	checkStrLen := func(str, name string, maxLen int) error {
 		if str == "" {
 			return fmt.Errorf("%v is empty", name)
@@ -475,6 +493,7 @@ func uploadBuild(c context.Context, now time.Time, ns string, req *dashapi.Build
 		KernelCommitTitle:   req.KernelCommitTitle,
 		KernelCommitDate:    req.KernelCommitDate,
 		KernelConfig:        configID,
+		Assets:              newAssets,
 	}
 	if _, err := db.Put(c, buildKey(c, ns, req.ID), build); err != nil {
 		return nil, false, err
@@ -1060,13 +1079,40 @@ func loadBugReport(c context.Context, bug *Bug) (*dashapi.BugReport, error) {
 	return createBugReport(c, bug, crash, crashKey, bugReporting, reporting)
 }
 
-func apiAddBuildAsset(c context.Context, ns string, r *http.Request, payload []byte) (interface{}, error) {
-	req := new(dashapi.AddBuildAssetReq)
+func apiAddBuildAssets(c context.Context, ns string, r *http.Request, payload []byte) (interface{}, error) {
+	req := new(dashapi.AddBuildAssetsReq)
 	if err := json.Unmarshal(payload, req); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal request: %v", err)
 	}
-	// TODO: validate fields?
-	return nil, saveBuildAsset(c, ns, req)
+	assets := []Asset{}
+	for i, toAdd := range req.Assets {
+		asset, err := parseIncomingAsset(c, toAdd)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse asset #%d: %w", i, err)
+		}
+		assets = append(assets, asset)
+	}
+	_, err := appendBuildAssets(c, ns, req.BuildID, assets)
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func parseIncomingAsset(c context.Context, newAsset dashapi.NewAsset) (Asset, error) {
+	typeInfo := asset.GetTypeDescription(newAsset.Type)
+	if typeInfo == nil {
+		return Asset{}, fmt.Errorf("unknown asset type")
+	}
+	_, err := url.ParseRequestURI(newAsset.DownloadURL)
+	if err != nil {
+		return Asset{}, fmt.Errorf("invalid URL: %w", err)
+	}
+	return Asset{
+		Type:        newAsset.Type,
+		DownloadURL: newAsset.DownloadURL,
+		CreateDate:  timeNow(c),
+	}, nil
 }
 
 func apiNeededAssetsList(c context.Context, r *http.Request, payload []byte) (interface{}, error) {

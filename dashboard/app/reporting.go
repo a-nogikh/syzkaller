@@ -426,16 +426,23 @@ func createBugReport(c context.Context, bug *Bug, crash *Crash, crashKey *db.Key
 	}
 	assetList := []dashapi.Asset{}
 	for _, buildAsset := range build.Assets {
-		if buildAsset.Type == asset.HTMLCoverageReport {
+		if buildAsset.Type == dashapi.HTMLCoverageReport {
+			continue
+		}
+		typeDescr := asset.GetTypeDescription(buildAsset.Type)
+		if typeDescr == nil || typeDescr.NoReporting {
 			continue
 		}
 		assetList = append(assetList, dashapi.Asset{
-			Title: asset.GetHumanReadableName(
-				buildAsset.Type, targets.Get(build.OS, build.Arch)),
+			Title:       typeDescr.GetTitle(targets.Get(build.OS, build.Arch)),
 			DownloadURL: buildAsset.DownloadURL,
-			Type:        string(buildAsset.Type),
+			Type:        buildAsset.Type,
 		})
 	}
+	sort.SliceStable(assetList, func(i, j int) bool {
+		return asset.GetTypeDescription(assetList[i].Type).ReportingPrio <
+			asset.GetTypeDescription(assetList[j].Type).ReportingPrio
+	})
 	kernelRepo := kernelRepoInfo(build)
 	rep := &dashapi.BugReport{
 		Type:            typ,
