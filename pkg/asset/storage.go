@@ -4,14 +4,13 @@
 package asset
 
 import (
-	"bufio"
 	"compress/gzip"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -23,11 +22,10 @@ import (
 )
 
 type Storage struct {
-	cfg           *Config
-	backend       StorageBackend
-	preprocessors *PreprocessorCollection
-	dash          *dashapi.Dashboard
-	tracer        debugtracer.DebugTracer
+	cfg     *Config
+	backend StorageBackend
+	dash    *dashapi.Dashboard
+	tracer  debugtracer.DebugTracer
 }
 
 func StorageFromConfig(cfg *Config, dash *dashapi.Dashboard) (*Storage, error) {
@@ -44,110 +42,119 @@ func StorageFromConfig(cfg *Config, dash *dashapi.Dashboard) (*Storage, error) {
 	var backend StorageBackend
 	if strings.HasPrefix(cfg.UploadTo, "gs://") {
 		var err error
-		backend, err = MakeCloudStorageBackend(strings.TrimPrefix(cfg.UploadTo, "gs://"))
+		backend, err = makeCloudStorageBackend(strings.TrimPrefix(cfg.UploadTo, "gs://"), tracer)
 		if err != nil {
 			return nil, fmt.Errorf("the call to MakeCloudStorageBackend failed: %w", err)
 		}
-	} else if strings.HasPrefix(cfg.UploadTo, "test://") {
-		backend = makeTestStorageBackend()
+	} else if strings.HasPrefix(cfg.UploadTo, "dummy://") {
+		backend = makeDummyStorageBackend()
 	} else {
 		return nil, fmt.Errorf("unknown UploadTo during StorageFromConfig(): %#v", cfg.UploadTo)
 	}
 	return &Storage{
-		cfg:           cfg,
-		backend:       backend,
-		preprocessors: DefaultPreprocessors(),
-		dash:          dash,
-		tracer:        tracer,
+		cfg:     cfg,
+		backend: backend,
+		dash:    dash,
+		tracer:  tracer,
 	}, nil
 }
 
-func (storage *Storage) AssetTypeEnabled(assetType Type) bool {
+func (storage *Storage) AssetTypeEnabled(assetType dashapi.AssetType) bool {
 	return storage.cfg.IsEnabled(assetType)
+}
+
+func (storage *Storage) getDefaultCompressor() Compressor {
+	if xzAvailable() {
+		return xzCompressor
+	}
+	return gzipCompressor
 }
 
 var ErrAssetTypeDisabled = errors.New("uploading assets of this type is disabled")
 
-func (storage *Storage) UploadFile(origFile string, assetType Type, name string) (string, error) {
-	storage.tracer.Log("UploadFile(%#v, %#v, %#v)", origFile, assetType, name)
+func (storage *Storage) uploadFileStream(reader io.Reader, assetType dashapi.AssetType,
+	name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("file name is not specified")
 	}
+	typeDescr := GetTypeDescription(assetType)
+	if typeDescr == nil {
+		return "", fmt.Errorf("asset type %s is unknown", assetType)
+	}
 	if !storage.AssetTypeEnabled(assetType) {
-		return "", fmt.Errorf("didn't upload an asset of type %s: %w",
+		return "", fmt.Errorf("not allowed to upload an asset of type %s: %w",
 			assetType, ErrAssetTypeDisabled)
 	}
 	// The idea is to make a file name useful and yet unique.
 	// So we put a file to a pseudo-unique "folder".
-	path := fmt.Sprintf("%v/%s", time.Now().UnixNano(), name)
+	const folderPrefix = 6
+	folderName := sha256.Sum256([]byte(fmt.Sprintf("%v", time.Now().UnixNano())))
+	path := fmt.Sprintf("%x/%s", folderName[0:folderPrefix], name)
+	// TODO: allow an optional argument that would replace this "random" prefix.
+	// This should prevent the duplication of a number of assets (if the caller
+	// passes e.g. a file hash).
 	req := &uploadRequest{
-		origFile: origFile,
-		savePath: path,
+		savePath:          path,
+		contentType:       typeDescr.ContentType,
+		preserveExtension: typeDescr.preserveExtension,
 	}
-	handler := storage.preprocessors.GetPreprocessor(assetType)
-	res, err := handler.Do(req, func(req *uploadRequest) (*uploadResponse, error) {
-		return storage.backend.upload(req)
-	})
+	if req.contentType == "" {
+		req.contentType = "application/octet-stream"
+	}
+	compressor := storage.getDefaultCompressor()
+	if typeDescr.customCompressor != nil {
+		compressor = typeDescr.customCompressor
+	}
+	res, err := compressor(req, storage.backend.upload)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to query writer: %w", err)
 	}
-	return res.downloadURL, nil
+	written, err := io.Copy(res.writer, reader)
+	if err != nil {
+		more := ""
+		closeErr := res.writer.Close()
+		if exiterr, ok := closeErr.(*exec.ExitError); ok {
+			more = fmt.Sprintf(", process state '%s'", exiterr.ProcessState)
+		}
+		return "", fmt.Errorf("failed to redirect byte stream: copied %d bytes, error %w%s",
+			written, err, more)
+	}
+	err = res.writer.Close()
+	if err != nil {
+		return "", fmt.Errorf("failed to close writer: %w", err)
+	}
+	return storage.backend.downloadURL(res.path, storage.cfg.PublicAccess)
 }
 
-func (storage *Storage) UploadBuildAsset(origFile string, assetType Type, build *dashapi.Build) error {
-	baseName := filepath.Base(origFile)
+func (storage *Storage) UploadBuildAsset(reader io.Reader, fileName string, assetType dashapi.AssetType,
+	build *dashapi.Build) (dashapi.NewAsset, error) {
+	const commitPrefix = 8
+	commit := build.KernelCommit
+	if len(commit) > commitPrefix {
+		commit = commit[:commitPrefix]
+	}
+	baseName := filepath.Base(fileName)
 	fileExt := filepath.Ext(baseName)
 	name := fmt.Sprintf("%s-%s%s",
 		strings.TrimSuffix(baseName, fileExt),
-		build.KernelCommit,
+		commit,
 		fileExt)
-	url, err := storage.UploadFile(origFile, assetType, name)
+	url, err := storage.uploadFileStream(reader, assetType, name)
 	if err != nil {
-		return err
+		return dashapi.NewAsset{}, err
 	}
+	return dashapi.NewAsset{
+		Type:        assetType,
+		DownloadURL: url,
+	}, nil
+}
+func (storage *Storage) ReportBuildAssets(build *dashapi.Build, assets ...dashapi.NewAsset) error {
 	// If the server denies the reques, we'll delete the orphaned file during deprecated files
 	// deletion later.
-	return storage.dash.AddBuildAsset(&dashapi.AddBuildAssetReq{
-		BuildID:     build.ID,
-		AssetType:   string(assetType),
-		DownloadURL: url,
+	return storage.dash.AddBuildAssets(&dashapi.AddBuildAssetsReq{
+		BuildID: build.ID,
+		Assets:  assets,
 	})
-}
-
-func (storage *Storage) UploadBuildAssetStream(reader io.Reader, assetType Type, fileName string,
-	build *dashapi.Build) error {
-	dir, err := ioutil.TempDir("", "")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	tmpFile := filepath.Join(dir, fileName)
-	w, err := os.Create(tmpFile)
-	if err != nil {
-		return fmt.Errorf("failed to create a temp file: %w", err)
-	}
-	_, err = io.Copy(w, reader)
-	if err != nil {
-		return fmt.Errorf("failed to write the reader stream: %w", err)
-	}
-	w.Close()
-	defer os.Remove(tmpFile)
-	return storage.UploadBuildAsset(tmpFile, assetType, build)
-}
-
-func (storage *Storage) UploadBuildAssetCopy(origFile string, assetType Type, copyName string,
-	build *dashapi.Build) error {
-	dir, err := ioutil.TempDir("", "")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	tmpFile := filepath.Join(dir, copyName)
-	if err := osutil.CopyFile(origFile, tmpFile); err != nil {
-		return fmt.Errorf("failed to copy the file: %w", err)
-	}
-	defer os.Remove(tmpFile)
-	return storage.UploadBuildAsset(tmpFile, assetType, build)
 }
 
 var ErrAssetDoesNotExist = errors.New("the asset did not exist")
@@ -206,14 +213,15 @@ func (storage *Storage) DeprecateAssets() error {
 }
 
 type uploadRequest struct {
-	origFile        string
-	savePath        string
-	contentEncoding string
-	contentType     string
+	savePath          string
+	contentEncoding   string
+	contentType       string
+	preserveExtension bool
 }
 
 type uploadResponse struct {
-	downloadURL string
+	path   string
+	writer io.WriteCloser
 }
 
 type storedObject struct {
@@ -223,147 +231,129 @@ type storedObject struct {
 
 type StorageBackend interface {
 	upload(req *uploadRequest) (*uploadResponse, error)
+	downloadURL(path string, publicURL bool) (string, error)
 	list() ([]storedObject, error)
 	remove(path string) error
 }
 
-type PreprocessorCollection struct {
-	defaultOne Preprocessor
-	custom     map[Type]Preprocessor
-	// Map cannot be concurrently accessed.
-	mu sync.Mutex
-}
-
-func MakePreprocessorCollection(defaultOne Preprocessor,
-	custom map[Type]Preprocessor) *PreprocessorCollection {
-	ret := &PreprocessorCollection{
-		defaultOne: PreprocessGzip,
-		custom:     custom,
-	}
-	for t, p := range custom {
-		if p.Available == nil || p.Available() {
-			ret.custom[t] = p
-		}
-	}
-	return ret
-}
-
-func (ap *PreprocessorCollection) GetPreprocessor(assetType Type) Preprocessor {
-	ap.mu.Lock()
-	defer ap.mu.Unlock()
-	p, ok := ap.custom[assetType]
-	if ok {
-		return p
-	}
-	return ap.defaultOne
-}
-
-type Preprocessor struct {
-	Available func() bool
-	Do        func(req *uploadRequest,
-		next func(req *uploadRequest) (*uploadResponse, error)) (*uploadResponse, error)
-}
+type Compressor func(req *uploadRequest,
+	next func(req *uploadRequest) (*uploadResponse, error)) (*uploadResponse, error)
 
 var xzPresent bool
 var xzCheck sync.Once
 
-const xzTimeout = 5 * time.Minute
 const xzCompressionRatio = 0
 const xzThreadsCount = 6
 
-var PreprocessXz = Preprocessor{
-	Available: func() bool {
-		xzCheck.Do(func() {
-			_, err := osutil.RunCmd(time.Minute, "", "xz --version")
-			xzPresent = err != nil
-		})
-		return xzPresent
-	},
-	Do: func(req *uploadRequest,
-		next func(req *uploadRequest) (*uploadResponse, error)) (*uploadResponse, error) {
-		// Prepare the temporary file.
-		tmpFile, err := ioutil.TempFile("", "preproc-xz")
-		if err != nil {
-			return nil, fmt.Errorf("xz preprocess: failed to create a tmp file: %w", err)
-		}
-		defer os.Remove(tmpFile.Name())
-		cmd := osutil.Command("xz", fmt.Sprintf("-%d", xzCompressionRatio),
-			"-T", fmt.Sprintf("%d", xzThreadsCount), "-F", "xz",
-			"-c", req.origFile)
-		cmd.Stdout = tmpFile
-		_, err = osutil.Run(xzTimeout, cmd)
-		if err != nil {
-			return nil, fmt.Errorf("xz preprocess: command run failed: %w", err)
-		}
-		newReq := *req
-		newReq.origFile = tmpFile.Name()
+// TODO: switch to an xz library, so that we don't have to run commands.
+// Then, it'd probably be easier to wrap "writer" instead of "reader".
+
+func xzAvailable() bool {
+	xzCheck.Do(func() {
+		_, err := osutil.RunCmd(time.Minute, "", "xz --version")
+		xzPresent = err != nil
+	})
+	return xzPresent
+}
+
+func xzCompressor(req *uploadRequest,
+	next func(req *uploadRequest) (*uploadResponse, error)) (*uploadResponse, error) {
+	newReq := *req
+	if !req.preserveExtension {
 		newReq.savePath = fmt.Sprintf("%s.xz", newReq.savePath)
-		return next(&newReq)
-	},
+	}
+	// "gz" contentEncoding is not really supported so far, so let's just set contentType.
+	if newReq.contentType == "" {
+		newReq.contentType = "application/x-xz"
+	}
+	resp, err := next(&newReq)
+	if err != nil {
+		return nil, err
+	}
+	// Take source data from stdin, write compressed data to stdout.
+	cmd := osutil.Command("xz", fmt.Sprintf("-%d", xzCompressionRatio),
+		"-T", fmt.Sprintf("%d", xzThreadsCount), "-F", "xz", "-c")
+	stdinWriter, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	cmd.Stdout = resp.writer
+	err = cmd.Start()
+	if err != nil {
+		return nil, fmt.Errorf("xz preprocess: command start failed: %w", err)
+	}
+	return &uploadResponse{
+		path: resp.path,
+		writer: &wrappedWriteCloser{
+			writer: stdinWriter,
+			closeCallback: func() error {
+				// Once the writer which we return is closed, we want to
+				// also close the writer we're proxying.
+				err := cmd.Wait()
+				err2 := resp.writer.Close()
+				if err != nil {
+					return err
+				}
+				if err2 != nil {
+					return err2
+				}
+				return nil
+			},
+		},
+	}, nil
 }
 
 const gzipCompressionRatio = 4
 
-var PreprocessGzip = Preprocessor{
-	Do: func(req *uploadRequest,
-		next func(req *uploadRequest) (*uploadResponse, error)) (*uploadResponse, error) {
-		// Open the original file.
-		origFile, err := os.Open(req.origFile)
-		if err != nil {
-			return nil, fmt.Errorf("gzip preprocess: failed to open source file: %w", err)
-		}
-		defer origFile.Close()
-		// Prepare the temporary file.
-		tmpName, err := osutil.TempFile("preproc-gzip")
-		if err != nil {
-			return nil, fmt.Errorf("gzip preprocess: failed to create a tmp file: %w", err)
-		}
-		defer os.Remove(tmpName)
-		file, err := os.Create(tmpName)
-		if err != nil {
-			return nil, fmt.Errorf("gzip preprocess: failed to open the tmp file: %w", err)
-		}
-		defer file.Close()
-		writer := bufio.NewWriter(file)
-		// Compress the file.
-		gzip, err := gzip.NewWriterLevel(writer, gzipCompressionRatio)
-		if err != nil {
-			return nil, fmt.Errorf("gzip preprocess: NewWriterLevel failed: %w", err)
-		}
-		io.Copy(gzip, origFile)
-		gzip.Close()
-		writer.Flush()
-		// Pass control further.
-		newReq := *req
-		newReq.origFile = tmpName
+// This struct allows to attach a callback on the Close() method invocation of
+// an existing io.WriteCloser. Also, it can convert an io.Writer to an io.WriteCloser.
+type wrappedWriteCloser struct {
+	writer        io.Writer
+	closeCallback func() error
+}
+
+func (wwc *wrappedWriteCloser) Write(p []byte) (int, error) {
+	return wwc.writer.Write(p)
+}
+
+func (wwc *wrappedWriteCloser) Close() error {
+	var err error
+	closer, ok := wwc.writer.(io.Closer)
+	if ok {
+		err = closer.Close()
+	}
+	err2 := wwc.closeCallback()
+	if err != nil {
+		return err
+	} else if err2 != nil {
+		return err2
+	}
+	return nil
+}
+
+func gzipCompressor(req *uploadRequest,
+	next func(req *uploadRequest) (*uploadResponse, error)) (*uploadResponse, error) {
+	newReq := *req
+	if !req.preserveExtension {
 		newReq.savePath = fmt.Sprintf("%s.gz", newReq.savePath)
-		newReq.contentType = "application/gzip"
-		return next(&newReq)
-	},
-}
-
-var PreprocessHTML = Preprocessor{
-	Do: func(req *uploadRequest,
-		next func(req *uploadRequest) (*uploadResponse, error)) (*uploadResponse, error) {
-		return PreprocessGzip.Do(req, func(req *uploadRequest) (*uploadResponse, error) {
-			newReq := *req
-			// We don't need the .gz suffix.
-			newReq.savePath = strings.TrimSuffix(newReq.savePath, ".gz")
-			// See https://cloud.google.com/storage/docs/transcoding#good_practices
-			newReq.contentEncoding = "gzip"
-			newReq.contentType = "text/html"
-			return next(&newReq)
-		})
-	},
-}
-
-// TODO: set it in the config files.
-func DefaultPreprocessors() *PreprocessorCollection {
-	return MakePreprocessorCollection(PreprocessGzip, map[Type]Preprocessor{
-		HTMLCoverageReport: PreprocessHTML,
-		KernelImage:        PreprocessXz,
-		KernelObject:       PreprocessXz,
-		BootableDisk:       PreprocessXz,
-		NonBootableDisk:    PreprocessXz,
-	})
+	}
+	newReq.contentEncoding = "gzip"
+	resp, err := next(&newReq)
+	if err != nil {
+		return nil, err
+	}
+	gzip, err := gzip.NewWriterLevel(resp.writer, gzipCompressionRatio)
+	if err != nil {
+		resp.writer.Close()
+		return nil, err
+	}
+	return &uploadResponse{
+		path: resp.path,
+		writer: &wrappedWriteCloser{
+			writer: gzip,
+			closeCallback: func() error {
+				return resp.writer.Close()
+			},
+		},
+	}, nil
 }

@@ -5,43 +5,77 @@ package asset
 
 import (
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 
+	"github.com/google/syzkaller/pkg/debugtracer"
 	"github.com/google/syzkaller/pkg/gcs"
 )
 
-type CloudStorageBackend struct {
+type cloudStorageBackend struct {
 	client *gcs.Client
 	bucket string
+	tracer debugtracer.DebugTracer
 }
 
-func MakeCloudStorageBackend(bucket string) (*CloudStorageBackend, error) {
+func makeCloudStorageBackend(bucket string, tracer debugtracer.DebugTracer) (*cloudStorageBackend, error) {
+	tracer.Log("created gcs backend for bucket '%s'", bucket)
 	client, err := gcs.NewClient()
 	if err != nil {
 		return nil, fmt.Errorf("the call to NewClient failed: %w", err)
 	}
-	return &CloudStorageBackend{
+	return &cloudStorageBackend{
 		client: client,
 		bucket: bucket,
+		tracer: tracer,
 	}, nil
 }
 
-func (csb *CloudStorageBackend) upload(req *uploadRequest) (*uploadResponse, error) {
+// Actual write errors might be hidden, so we wrap the writer here
+// to ensure that they get logged.
+type writeErrorLogger struct {
+	writeCloser io.WriteCloser
+	tracer      debugtracer.DebugTracer
+}
+
+func (wel *writeErrorLogger) Write(p []byte) (n int, err error) {
+	n, err = wel.writeCloser.Write(p)
+	if err != nil {
+		wel.tracer.Log("cloud storage write error: %s", err)
+	}
+	return
+}
+
+func (wel *writeErrorLogger) Close() error {
+	err := wel.writeCloser.Close()
+	if err != nil {
+		wel.tracer.Log("cloud storage writer close error: %s", err)
+	}
+	return err
+}
+
+func (csb *cloudStorageBackend) upload(req *uploadRequest) (*uploadResponse, error) {
 	path := fmt.Sprintf("%s/%s", csb.bucket, req.savePath)
-	err := csb.client.UploadFile(req.origFile, req.savePath, req.contentType, req.contentEncoding)
+	w, err := csb.client.FileWriterExt(path, req.contentType, req.contentEncoding)
+	csb.tracer.Log("gcs upload: obtained a writer for %s, error %s", path, err)
 	if err != nil {
 		return nil, err
 	}
-	url, err := csb.client.GetDownloadURL(path)
-	if err != nil {
-		// The file would have been deleted later during clean up, but why not do it right away?
-		csb.client.DeleteFile(path)
-	}
-	return &uploadResponse{downloadURL: url}, nil
+	return &uploadResponse{
+		writer: &writeErrorLogger{
+			writeCloser: w,
+			tracer:      csb.tracer,
+		},
+		path: path,
+	}, nil
 }
 
-func (csb *CloudStorageBackend) list() ([]storedObject, error) {
+func (csb *cloudStorageBackend) downloadURL(path string, publicURL bool) (string, error) {
+	return csb.client.GetDownloadURL(path, publicURL), nil
+}
+
+func (csb *cloudStorageBackend) list() ([]storedObject, error) {
 	list, err := csb.client.ListObjects(csb.bucket)
 	if err != nil {
 		return nil, err
@@ -56,7 +90,7 @@ func (csb *CloudStorageBackend) list() ([]storedObject, error) {
 	return ret, nil
 }
 
-func (csb *CloudStorageBackend) remove(downloadURL string) error {
+func (csb *cloudStorageBackend) remove(downloadURL string) error {
 	// We need to fetch the file path from the URL.
 	u, err := url.Parse(downloadURL)
 	if err != nil {

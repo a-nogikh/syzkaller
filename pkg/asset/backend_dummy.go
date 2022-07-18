@@ -8,45 +8,58 @@ import (
 	"time"
 )
 
-type objectUploadCallback func(req *uploadRequest) error
+type objectUploadCallback func(req *uploadRequest) (*uploadResponse, error)
 type objectRemoveCallback func(url string) error
 
-type testObject struct {
+type dummyObject struct {
 	createdAt       time.Time
 	contentType     string
 	contentEncoding string
 }
 
-type testStorageBackend struct {
+type dummyStorageBackend struct {
 	currentTime  time.Time
-	objects      map[string]*testObject
+	objects      map[string]*dummyObject
 	objectUpload objectUploadCallback
 	objectRemove objectRemoveCallback
 }
 
-func makeTestStorageBackend() *testStorageBackend {
-	return &testStorageBackend{
+func makeDummyStorageBackend() *dummyStorageBackend {
+	return &dummyStorageBackend{
 		currentTime: time.Now(),
-		objects:     make(map[string]*testObject),
+		objects:     make(map[string]*dummyObject),
 	}
 }
 
-func (be *testStorageBackend) upload(req *uploadRequest) (*uploadResponse, error) {
-	if be.objectUpload != nil {
-		if err := be.objectUpload(req); err != nil {
-			return nil, err
-		}
-	}
-	url := "http://google.com/" + req.savePath
-	be.objects[url] = &testObject{
+type dummyWriteCloser struct {
+}
+
+func (dwc *dummyWriteCloser) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func (dwc *dummyWriteCloser) Close() error {
+	return nil
+}
+
+func (be *dummyStorageBackend) upload(req *uploadRequest) (*uploadResponse, error) {
+	url := "http://download/" + req.savePath
+	be.objects[url] = &dummyObject{
 		createdAt:       be.currentTime,
 		contentType:     req.contentType,
 		contentEncoding: req.contentEncoding,
 	}
-	return &uploadResponse{url}, nil
+	if be.objectUpload != nil {
+		return be.objectUpload(req)
+	}
+	return &uploadResponse{writer: &dummyWriteCloser{}}, nil
 }
 
-func (be *testStorageBackend) list() ([]storedObject, error) {
+func (be *dummyStorageBackend) downloadURL(path string, publicURL bool) (string, error) {
+	return "http://download/" + path, nil
+}
+
+func (be *dummyStorageBackend) list() ([]storedObject, error) {
 	ret := []storedObject{}
 	for url, obj := range be.objects {
 		ret = append(ret, storedObject{
@@ -57,7 +70,7 @@ func (be *testStorageBackend) list() ([]storedObject, error) {
 	return ret, nil
 }
 
-func (be *testStorageBackend) remove(url string) error {
+func (be *dummyStorageBackend) remove(url string) error {
 	if be.objectRemove != nil {
 		if err := be.objectRemove(url); err != nil {
 			return err
@@ -70,19 +83,17 @@ func (be *testStorageBackend) remove(url string) error {
 	return nil
 }
 
-func (be *testStorageBackend) hasOnly(urls []string) error {
-	notEqual := false
+func (be *dummyStorageBackend) hasOnly(urls []string) error {
+	makeError := func() error {
+		return fmt.Errorf("object sets are not equal; needed: %#v; uploaded: %#v", urls, be.objects)
+	}
 	if len(urls) != len(be.objects) {
-		notEqual = true
+		return makeError()
 	}
 	for _, url := range urls {
-		if _, ok := be.objects[url]; !ok {
-			notEqual = true
-			break
+		if be.objects[url] == nil {
+			return makeError()
 		}
-	}
-	if notEqual {
-		return fmt.Errorf("object sets are not equal; needed %#v", urls)
 	}
 	return nil
 }

@@ -8,8 +8,8 @@ import (
 	"compress/gzip"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,11 +20,11 @@ import (
 	"github.com/google/syzkaller/pkg/osutil"
 )
 
-type addBuildCallback func(req *dashapi.AddBuildAssetReq) error
+type addBuildAssetCallback func(obj dashapi.NewAsset) error
 
 type dashMock struct {
 	downloadURLs  map[string]bool
-	addBuildAsset addBuildCallback
+	addBuildAsset addBuildAssetCallback
 }
 
 func newDashMock() *dashMock {
@@ -33,14 +33,16 @@ func newDashMock() *dashMock {
 
 func (dm *dashMock) do(method string, req, mockReply interface{}) error {
 	switch method {
-	case "add_build_asset":
-		addBuildAsset := req.(*dashapi.AddBuildAssetReq)
-		if dm.addBuildAsset != nil {
-			if err := dm.addBuildAsset(addBuildAsset); err != nil {
-				return nil
+	case "add_build_assets":
+		addBuildAssets := req.(*dashapi.AddBuildAssetsReq)
+		for _, obj := range addBuildAssets.Assets {
+			if dm.addBuildAsset != nil {
+				if err := dm.addBuildAsset(obj); err != nil {
+					return err
+				}
 			}
+			dm.downloadURLs[obj.DownloadURL] = true
 		}
-		dm.downloadURLs[addBuildAsset.DownloadURL] = true
 		return nil
 	case "needed_assets":
 		resp := mockReply.(*dashapi.NeededAssetsResp)
@@ -56,38 +58,24 @@ func (dm *dashMock) getDashapi() *dashapi.Dashboard {
 	return dashapi.NewMock(dm.do)
 }
 
-func makeStorage(dash *dashapi.Dashboard) (*Storage, *testStorageBackend) {
-	be := makeTestStorageBackend()
+func makeStorage(t *testing.T, dash *dashapi.Dashboard) (*Storage, *dummyStorageBackend) {
+	be := makeDummyStorageBackend()
 	cfg := &Config{
-		UploadTo: "test://test",
-		Assets: map[Type]TypeConfig{
-			KernelObject:       {Always: true},
-			KernelImage:        {Always: true},
-			HTMLCoverageReport: {Always: true},
-		},
-	}
-	tracer := debugtracer.DebugTracer(&debugtracer.NullTracer{})
-	if testing.Verbose() {
-		tracer = &debugtracer.GenericTracer{
-			WithTime:    true,
-			TraceWriter: os.Stdout,
-		}
+		UploadTo: "dummy://test",
 	}
 	return &Storage{
-		dash:          dash,
-		cfg:           cfg,
-		backend:       be,
-		tracer:        tracer,
-		preprocessors: DefaultPreprocessors(),
+		dash:    dash,
+		cfg:     cfg,
+		backend: be,
+		tracer:  &debugtracer.TestTracer{T: t},
 	}, be
 }
 
-func validateGzipContent(req *uploadRequest, expected []byte) error {
-	file, err := os.Open(req.origFile)
-	if err != nil {
-		return fmt.Errorf("failed to open %s", req.origFile)
+func validateGzip(res *uploadedFile, expected []byte) error {
+	if res == nil {
+		return fmt.Errorf("no file was uploaded")
 	}
-	reader, err := gzip.NewReader(file)
+	reader, err := gzip.NewReader(bytes.NewReader(res.bytes))
 	if err != nil {
 		return fmt.Errorf("gzip.NewReader failed: %w", err)
 	}
@@ -102,66 +90,68 @@ func validateGzipContent(req *uploadRequest, expected []byte) error {
 	return nil
 }
 
-func validateXzContent(req *uploadRequest, expected []byte) error {
-	xzAvailable := PreprocessXz.Available()
-	xzUsed := strings.HasSuffix(req.savePath, ".xz")
+func validateXz(res *uploadedFile, expected []byte) error {
+	if res == nil {
+		return fmt.Errorf("no file was uploaded")
+	}
+	xzAvailable := xzAvailable()
+	xzUsed := strings.HasSuffix(res.req.savePath, ".xz")
 	if xzAvailable && !xzUsed {
 		return fmt.Errorf("xz was available, but didn't get used")
 	}
-	if xzUsed {
-		if !osutil.IsExist(req.origFile) {
-			return fmt.Errorf("origFile does not exist")
-		}
-		out, err := osutil.RunCmd(time.Minute, "",
-			"xz", "--decompress", "--to-stdout", req.origFile)
-		if err != nil {
-			return fmt.Errorf("xz invocation failed: %w", err)
-		}
-		if !reflect.DeepEqual(out, expected) {
-			return fmt.Errorf("decompressed: %#v, expected: %#v", out, expected)
-		}
-		return nil
+	if !xzUsed {
+		return validateGzip(res, expected)
 	}
-	return validateGzipContent(req, expected)
+	cmd := osutil.Command("xz", "--decompress", "--to-stdout")
+	cmd.Stdin = bytes.NewReader(res.bytes)
+	out, err := osutil.Run(time.Minute, cmd)
+	if err != nil {
+		return fmt.Errorf("xz invocation failed: %v", err)
+	}
+	if !reflect.DeepEqual(out, expected) {
+		return fmt.Errorf("decompressed: %#v, expected: %#v", out, expected)
+	}
+	return nil
+}
+
+func (storage *Storage) sendBuildAsset(reader io.Reader, fileName string, assetType dashapi.AssetType,
+	build *dashapi.Build) error {
+	asset, err := storage.UploadBuildAsset(reader, fileName, assetType, build)
+	if err != nil {
+		return err
+	}
+	return storage.ReportBuildAssets(build, asset)
 }
 
 func TestUploadBuildAsset(t *testing.T) {
 	dashMock := newDashMock()
-	storage, be := makeStorage(dashMock.getDashapi())
+	storage, be := makeStorage(t, dashMock.getDashapi())
 	be.currentTime = time.Now().Add(-2 * deletionEmbargo)
 	build := &dashapi.Build{ID: "1234", KernelCommit: "abcdef2134"}
 
 	// Upload two assets using different means.
 	vmLinuxContent := []byte{0xDE, 0xAD, 0xBE, 0xEF}
-	vmLinuxFile, err := osutil.WriteTempFile(vmLinuxContent)
-	if err != nil {
-		t.Fatalf("WriteTempFile failed: %s", err)
-	}
-	defer os.Remove(vmLinuxFile)
-
-	dashMock.addBuildAsset = func(req *dashapi.AddBuildAssetReq) error {
-		if req.AssetType != string(KernelObject) {
-			t.Fatalf("expected KernelObject, got %v", req.AssetType)
+	dashMock.addBuildAsset = func(newAsset dashapi.NewAsset) error {
+		if newAsset.Type != dashapi.KernelObject {
+			t.Fatalf("expected KernelObject, got %v", newAsset.Type)
 		}
-		if !strings.Contains(req.DownloadURL, "vmlinux") {
-			t.Fatalf("%#v was expected to mention vmlinux", req.DownloadURL)
+		if !strings.Contains(newAsset.DownloadURL, "vmlinux") {
+			t.Fatalf("%#v was expected to mention vmlinux", newAsset.DownloadURL)
 		}
 		return nil
 	}
-	be.objectUpload = func(req *uploadRequest) error {
-		err := validateXzContent(req, vmLinuxContent)
-		if err != nil {
-			t.Fatalf("file content verification for vmlinux failed: %s", err)
-		}
-		return nil
-	}
-	err = storage.UploadBuildAssetCopy(vmLinuxFile, KernelObject, "vmlinux", build)
+	var file *uploadedFile
+	be.objectUpload = collectBytes(&file)
+	err := storage.sendBuildAsset(bytes.NewReader(vmLinuxContent), "vmlinux",
+		dashapi.KernelObject, build)
 	if err != nil {
-		t.Errorf("UploadBuildAssetCopy failed: %s", err)
+		t.Fatalf("file upload failed: %s", err)
 	}
-
+	if err := validateXz(file, vmLinuxContent); err != nil {
+		t.Fatalf("vmlinux validation failed: %s", err)
+	}
 	// Upload the same file the second time.
-	storage.UploadBuildAssetCopy(vmLinuxFile, KernelObject, "vmlinux", build)
+	storage.sendBuildAsset(bytes.NewReader(vmLinuxContent), "vmlinux", dashapi.KernelObject, build)
 	// The currently expected behavior is that it will be uploaded twice and will have
 	// different names.
 	if len(dashMock.downloadURLs) < 2 {
@@ -169,30 +159,26 @@ func TestUploadBuildAsset(t *testing.T) {
 	}
 
 	diskImageContent := []byte{0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8}
-	dashMock.addBuildAsset = func(req *dashapi.AddBuildAssetReq) error {
-		if req.AssetType != string(KernelImage) {
-			t.Fatalf("expected KernelImage, got %v", req.AssetType)
+	dashMock.addBuildAsset = func(newAsset dashapi.NewAsset) error {
+		if newAsset.Type != dashapi.KernelImage {
+			t.Fatalf("expected KernelImage, got %v", newAsset.Type)
 		}
-		if !strings.Contains(req.DownloadURL, "disk") ||
-			!strings.Contains(req.DownloadURL, ".img") {
-			t.Fatalf("%#v was expected to mention disk.img", req.DownloadURL)
+		if !strings.Contains(newAsset.DownloadURL, "disk") ||
+			!strings.Contains(newAsset.DownloadURL, ".img") {
+			t.Fatalf("%#v was expected to mention disk.img", newAsset.DownloadURL)
 		}
-		if !strings.Contains(req.DownloadURL, build.KernelCommit) {
-			t.Fatalf("%#v was expected to mention build commit", req.DownloadURL)
-		}
-		return nil
-	}
-	be.objectUpload = func(req *uploadRequest) error {
-		err := validateXzContent(req, diskImageContent)
-		if err != nil {
-			t.Fatalf("file content verification for disk.raw failed: %s", err)
+		if !strings.Contains(newAsset.DownloadURL, build.KernelCommit[:6]) {
+			t.Fatalf("%#v was expected to mention build commit", newAsset.DownloadURL)
 		}
 		return nil
 	}
-	storage.UploadBuildAssetStream(bytes.NewReader(diskImageContent), KernelImage,
-		"disk.img", build)
+	file = nil
+	be.objectUpload = collectBytes(&file)
+	storage.sendBuildAsset(bytes.NewReader(diskImageContent), "disk.img", dashapi.KernelImage, build)
+	if err := validateXz(file, diskImageContent); err != nil {
+		t.Fatalf("disk.img validation failed: %s", err)
+	}
 
-	// First try to remove two assets.
 	allUrls := []string{}
 	for url := range dashMock.downloadURLs {
 		allUrls = append(allUrls, url)
@@ -200,6 +186,7 @@ func TestUploadBuildAsset(t *testing.T) {
 	if len(allUrls) != 3 {
 		t.Fatalf("invalid dashMock state: expected 3 assets, got %d", len(allUrls))
 	}
+	// First try to remove two assets.
 	dashMock.downloadURLs = map[string]bool{allUrls[2]: true, "http://non-related-asset.com": true}
 
 	// Pretend there's an asset deletion error.
@@ -229,42 +216,59 @@ func TestUploadBuildAsset(t *testing.T) {
 	}
 }
 
+type uploadedFile struct {
+	req   uploadRequest
+	bytes []byte
+}
+
+func collectBytes(saveTo **uploadedFile) objectUploadCallback {
+	return func(req *uploadRequest) (*uploadResponse, error) {
+		buf := &bytes.Buffer{}
+		wwc := &wrappedWriteCloser{
+			writer: buf,
+			closeCallback: func() error {
+				*saveTo = &uploadedFile{req: *req, bytes: buf.Bytes()}
+				return nil
+			},
+		}
+		return &uploadResponse{path: req.savePath, writer: wwc}, nil
+	}
+}
+
 func TestUploadHtmlAsset(t *testing.T) {
 	dashMock := newDashMock()
-	storage, be := makeStorage(dashMock.getDashapi())
+	storage, be := makeStorage(t, dashMock.getDashapi())
 	build := &dashapi.Build{ID: "1234", KernelCommit: "abcdef2134"}
 	htmlContent := []byte("<html><head><title>Hi!</title></head></html>")
-	dashMock.addBuildAsset = func(req *dashapi.AddBuildAssetReq) error {
-		if req.AssetType != string(HTMLCoverageReport) {
-			t.Fatalf("expected HtmlCoverageReport, got %v", req.AssetType)
+	dashMock.addBuildAsset = func(newAsset dashapi.NewAsset) error {
+		if newAsset.Type != dashapi.HTMLCoverageReport {
+			t.Fatalf("expected HtmlCoverageReport, got %v", newAsset.Type)
 		}
-		if !strings.Contains(req.DownloadURL, "cover_report") {
-			t.Fatalf("%#v was expected to mention cover_report", req.DownloadURL)
+		if !strings.Contains(newAsset.DownloadURL, "cover_report") {
+			t.Fatalf("%#v was expected to mention cover_report", newAsset.DownloadURL)
 		}
-		if !strings.HasSuffix(req.DownloadURL, ".html") {
-			t.Fatalf("%#v was expected to have .html extension", req.DownloadURL)
-		}
-		return nil
-	}
-	be.objectUpload = func(req *uploadRequest) error {
-		err := validateGzipContent(req, htmlContent)
-		if err != nil {
-			t.Fatalf("file content verification for cover_report.html failed: %s", err)
+		if !strings.HasSuffix(newAsset.DownloadURL, ".html") {
+			t.Fatalf("%#v was expected to have .html extension", newAsset.DownloadURL)
 		}
 		return nil
 	}
-	storage.UploadBuildAssetStream(bytes.NewReader(htmlContent), HTMLCoverageReport,
-		"cover_report.html", build)
+	var file *uploadedFile
+	be.objectUpload = collectBytes(&file)
+	storage.sendBuildAsset(bytes.NewReader(htmlContent), "cover_report.html",
+		dashapi.HTMLCoverageReport, build)
+	if err := validateGzip(file, htmlContent); err != nil {
+		t.Fatalf("cover_report.html validation failed: %s", err)
+	}
 }
 
 func TestRecentAssetDeletionProtection(t *testing.T) {
 	dashMock := newDashMock()
-	storage, be := makeStorage(dashMock.getDashapi())
+	storage, be := makeStorage(t, dashMock.getDashapi())
 	build := &dashapi.Build{ID: "1234", KernelCommit: "abcdef2134"}
 	htmlContent := []byte("<html><head><title>Hi!</title></head></html>")
 	be.currentTime = time.Now().Add(-time.Hour * 24 * 6)
-	err := storage.UploadBuildAssetStream(bytes.NewReader(htmlContent), HTMLCoverageReport,
-		"cover_report.html", build)
+	err := storage.sendBuildAsset(bytes.NewReader(htmlContent), "cover_report.html",
+		dashapi.HTMLCoverageReport, build)
 	if err != nil {
 		t.Fatalf("failed to upload a file: %v", err)
 	}
@@ -282,10 +286,10 @@ func TestRecentAssetDeletionProtection(t *testing.T) {
 func TestAssetStorageConfiguration(t *testing.T) {
 	dashMock := newDashMock()
 	cfg := &Config{
-		UploadTo: "test://test",
-		Assets: map[Type]TypeConfig{
-			BootableDisk:       {Always: true},
-			HTMLCoverageReport: {Never: true},
+		UploadTo: "dummy://",
+		Assets: map[dashapi.AssetType]TypeConfig{
+			dashapi.HTMLCoverageReport: {Never: true},
+			dashapi.KernelObject:       {},
 		},
 	}
 	storage, err := StorageFromConfig(cfg, dashMock.getDashapi())
@@ -296,24 +300,22 @@ func TestAssetStorageConfiguration(t *testing.T) {
 
 	// Uploading a file of a disabled asset type.
 	htmlContent := []byte("<html><head><title>Hi!</title></head></html>")
-	err = storage.UploadBuildAssetStream(bytes.NewReader(htmlContent), HTMLCoverageReport,
-		"cover_report.html", build)
+	err = storage.sendBuildAsset(bytes.NewReader(htmlContent), "cover_report.html",
+		dashapi.HTMLCoverageReport, build)
 	if !errors.Is(err, ErrAssetTypeDisabled) {
 		t.Fatalf("UploadBuildAssetStream expected to fail with ErrAssetTypeDisabled, but got %v", err)
 	}
 
-	// Uploading a file of an enabled asset type.
+	// Uploading a file of an unspecified asset type.
 	testContent := []byte{0x1, 0x2, 0x3, 0x4}
-	err = storage.UploadBuildAssetStream(bytes.NewReader(testContent), BootableDisk,
-		"disk.raw", build)
+	err = storage.sendBuildAsset(bytes.NewReader(testContent), "disk.raw", dashapi.BootableDisk, build)
 	if err != nil {
 		t.Fatalf("UploadBuildAssetStream of BootableDisk expected to succeed, got %v", err)
 	}
 
-	// Uploading a file of an unspecified asset type.
-	err = storage.UploadBuildAssetStream(bytes.NewReader(testContent), KernelImage,
-		"disk.raw", build)
-	if !errors.Is(err, ErrAssetTypeDisabled) {
-		t.Fatalf("UploadBuildAssetStream expected to fail with ErrAssetTypeDisabled, but got %v", err)
+	// Uploading a file of a specified asset type.
+	err = storage.sendBuildAsset(bytes.NewReader(testContent), "vmlinux", dashapi.KernelObject, build)
+	if err != nil {
+		t.Fatalf("UploadBuildAssetStream of BootableDisk expected to succeed, got %v", err)
 	}
 }

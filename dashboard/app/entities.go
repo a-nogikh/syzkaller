@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/dashboard/dashapi"
-	"github.com/google/syzkaller/pkg/asset"
 	"github.com/google/syzkaller/pkg/hash"
 	"golang.org/x/net/context"
 	db "google.golang.org/appengine/v2/datastore"
@@ -52,7 +51,7 @@ type ManagerStats struct {
 }
 
 type Asset struct {
-	Type        asset.Type
+	Type        dashapi.AssetType
 	DownloadURL string
 	CreateDate  time.Time
 }

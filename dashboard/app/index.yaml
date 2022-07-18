@@ -111,6 +111,7 @@ indexes:
 
 - kind: Build
   properties:
+  - name: Namespace
   - name: Assets.Type
   - name: Assets.CreateDate
 
