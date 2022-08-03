@@ -1,0 +1,8 @@
+# Copyright 2022 syzkaller project authors. All rights reserved.
+# Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+config:
+ - CMDLINE: [append, "smp.csd_lock_timeout=100000 watchdog_thresh=55 workqueue.watchdog_thresh=140 sysctl.net.core.netdev_unregister_timeout_secs=140 dummy_hcd.num=8"]
+ # See the comment in x86_64.yml re these numbers.
+ - RCU_CPU_STALL_TIMEOUT: 100
+ - DEFAULT_HUNG_TASK_TIMEOUT: 140
