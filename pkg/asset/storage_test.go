@@ -76,8 +76,11 @@ func makeStorage(t *testing.T, dash *dashapi.Dashboard) (*Storage, *dummyStorage
 	}, be
 }
 
-func validateGzipContent(req *uploadRequest, expected []byte) error {
-	reader, err := gzip.NewReader(req.reader)
+func validateGzip(res *uploadedFile, expected []byte) error {
+	if res == nil {
+		return fmt.Errorf("no file was uploaded")
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(res.bytes))
 	if err != nil {
 		return fmt.Errorf("gzip.NewReader failed: %w", err)
 	}
@@ -92,25 +95,28 @@ func validateGzipContent(req *uploadRequest, expected []byte) error {
 	return nil
 }
 
-func validateXzContent(req *uploadRequest, expected []byte) error {
+func validateXz(res *uploadedFile, expected []byte) error {
+	if res == nil {
+		return fmt.Errorf("no file was uploaded")
+	}
 	xzAvailable := xzAvailable()
-	xzUsed := strings.HasSuffix(req.savePath, ".xz")
+	xzUsed := strings.HasSuffix(res.req.savePath, ".xz")
 	if xzAvailable && !xzUsed {
 		return fmt.Errorf("xz was available, but didn't get used")
 	}
-	if xzUsed {
-		cmd := osutil.Command("xz", "--decompress", "--to-stdout")
-		cmd.Stdin = req.reader
-		out, err := osutil.Run(time.Minute, cmd)
-		if err != nil {
-			return fmt.Errorf("xz invocation failed: %w", err)
-		}
-		if !reflect.DeepEqual(out, expected) {
-			return fmt.Errorf("decompressed: %#v, expected: %#v", out, expected)
-		}
-		return nil
+	if !xzUsed {
+		return validateGzip(res, expected)
 	}
-	return validateGzipContent(req, expected)
+	cmd := osutil.Command("xz", "--decompress", "--to-stdout")
+	cmd.Stdin = bytes.NewReader(res.bytes)
+	out, err := osutil.Run(time.Minute, cmd)
+	if err != nil {
+		return fmt.Errorf("xz invocation failed: %v", err)
+	}
+	if !reflect.DeepEqual(out, expected) {
+		return fmt.Errorf("decompressed: %#v, expected: %#v", out, expected)
+	}
+	return nil
 }
 
 func (storage *Storage) sendBuildAsset(reader io.Reader, fileName string, assetType dashapi.AssetType,
@@ -139,18 +145,16 @@ func TestUploadBuildAsset(t *testing.T) {
 		}
 		return nil
 	}
-	be.objectUpload = func(req *uploadRequest) error {
-		err := validateXzContent(req, vmLinuxContent)
-		if err != nil {
-			t.Fatalf("file content verification for vmlinux failed: %s", err)
-		}
-		return nil
-	}
-	err := storage.sendBuildAsset(bytes.NewReader(vmLinuxContent), "vmlinux", dashapi.KernelObject, build)
+	var file *uploadedFile
+	be.objectUpload = collectBytes(&file)
+	err := storage.sendBuildAsset(bytes.NewReader(vmLinuxContent), "vmlinux",
+		dashapi.KernelObject, build)
 	if err != nil {
-		t.Errorf("UploadBuildAssetCopy failed: %s", err)
+		t.Fatalf("file upload failed: %s", err)
 	}
-
+	if err := validateXz(file, vmLinuxContent); err != nil {
+		t.Fatalf("vmlinux validation failed: %s", err)
+	}
 	// Upload the same file the second time.
 	storage.sendBuildAsset(bytes.NewReader(vmLinuxContent), "vmlinux", dashapi.KernelObject, build)
 	// The currently expected behavior is that it will be uploaded twice and will have
@@ -173,14 +177,12 @@ func TestUploadBuildAsset(t *testing.T) {
 		}
 		return nil
 	}
-	be.objectUpload = func(req *uploadRequest) error {
-		err := validateXzContent(req, diskImageContent)
-		if err != nil {
-			t.Fatalf("file content verification for disk.raw failed: %s", err)
-		}
-		return nil
-	}
+	file = nil
+	be.objectUpload = collectBytes(&file)
 	storage.sendBuildAsset(bytes.NewReader(diskImageContent), "disk.img", dashapi.KernelImage, build)
+	if err := validateXz(file, diskImageContent); err != nil {
+		t.Fatalf("disk.img validation failed: %s", err)
+	}
 
 	allUrls := []string{}
 	for url := range dashMock.downloadURLs {
@@ -219,6 +221,25 @@ func TestUploadBuildAsset(t *testing.T) {
 	}
 }
 
+type uploadedFile struct {
+	req   uploadRequest
+	bytes []byte
+}
+
+func collectBytes(saveTo **uploadedFile) objectUploadCallback {
+	return func(req *uploadRequest) (*uploadResponse, error) {
+		buf := &bytes.Buffer{}
+		wwc := &wrappedWriteCloser{
+			writer: buf,
+			closeCallback: func() error {
+				*saveTo = &uploadedFile{req: *req, bytes: buf.Bytes()}
+				return nil
+			},
+		}
+		return &uploadResponse{path: req.savePath, writer: wwc}, nil
+	}
+}
+
 func TestUploadHtmlAsset(t *testing.T) {
 	dashMock := newDashMock()
 	storage, be := makeStorage(t, dashMock.getDashapi())
@@ -236,15 +257,13 @@ func TestUploadHtmlAsset(t *testing.T) {
 		}
 		return nil
 	}
-	be.objectUpload = func(req *uploadRequest) error {
-		err := validateGzipContent(req, htmlContent)
-		if err != nil {
-			t.Fatalf("file content verification for cover_report.html failed: %s", err)
-		}
-		return nil
-	}
+	var file *uploadedFile
+	be.objectUpload = collectBytes(&file)
 	storage.sendBuildAsset(bytes.NewReader(htmlContent), "cover_report.html",
 		dashapi.HTMLCoverageReport, build)
+	if err := validateGzip(file, htmlContent); err != nil {
+		t.Fatalf("cover_report.html validation failed: %s", err)
+	}
 }
 
 func TestRecentAssetDeletionProtection(t *testing.T) {

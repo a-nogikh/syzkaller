@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-type objectUploadCallback func(req *uploadRequest) error
+type objectUploadCallback func(req *uploadRequest) (*uploadResponse, error)
 type objectRemoveCallback func(url string) error
 
 type dummyObject struct {
@@ -31,19 +31,32 @@ func makeDummyStorageBackend() *dummyStorageBackend {
 	}
 }
 
+type dummyWriteCloser struct {
+}
+
+func (dwc *dummyWriteCloser) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func (dwc *dummyWriteCloser) Close() error {
+	return nil
+}
+
 func (be *dummyStorageBackend) upload(req *uploadRequest) (*uploadResponse, error) {
-	if be.objectUpload != nil {
-		if err := be.objectUpload(req); err != nil {
-			return nil, err
-		}
-	}
 	url := "http://download/" + req.savePath
 	be.objects[url] = &dummyObject{
 		createdAt:       be.currentTime,
 		contentType:     req.contentType,
 		contentEncoding: req.contentEncoding,
 	}
-	return &uploadResponse{url}, nil
+	if be.objectUpload != nil {
+		return be.objectUpload(req)
+	}
+	return &uploadResponse{writer: &dummyWriteCloser{}}, nil
+}
+
+func (be *dummyStorageBackend) downloadURL(path string) (string, error) {
+	return "http://download/" + path, nil
 }
 
 func (be *dummyStorageBackend) list() ([]storedObject, error) {

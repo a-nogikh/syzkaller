@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -91,7 +92,6 @@ func (storage *Storage) uploadFileStream(reader io.Reader, assetType dashapi.Ass
 	folderName := sha256.Sum256([]byte(fmt.Sprintf("%v", time.Now().UnixNano())))
 	path := fmt.Sprintf("%x/%s", folderName[0:folderPrefix], name)
 	req := &uploadRequest{
-		reader:            reader,
 		savePath:          path,
 		contentType:       typeDescr.ContentType,
 		preserveExtension: typeDescr.preserveExtension,
@@ -103,13 +103,25 @@ func (storage *Storage) uploadFileStream(reader io.Reader, assetType dashapi.Ass
 	if typeDescr.customCompressor != nil {
 		compressor = typeDescr.customCompressor
 	}
-	res, err := compressor(req, func(req *uploadRequest) (*uploadResponse, error) {
-		return storage.backend.upload(req)
-	})
+	res, err := compressor(req, storage.backend.upload)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to query writer: %w", err)
 	}
-	return res.downloadURL, nil
+	written, err := io.Copy(res.writer, reader)
+	if err != nil {
+		more := ""
+		closeErr := res.writer.Close()
+		if exiterr, ok := closeErr.(*exec.ExitError); ok {
+			more = fmt.Sprintf(", process state '%s'", exiterr.ProcessState)
+		}
+		return "", fmt.Errorf("failed to redirect byte stream: copied %d bytes, error %w%s",
+			written, err, more)
+	}
+	err = res.writer.Close()
+	if err != nil {
+		return "", fmt.Errorf("failed to close writer: %w", err)
+	}
+	return storage.backend.downloadURL(res.path)
 }
 
 func (storage *Storage) UploadBuildAsset(reader io.Reader, fileName string, assetType dashapi.AssetType,
@@ -203,11 +215,11 @@ type uploadRequest struct {
 	contentEncoding   string
 	contentType       string
 	preserveExtension bool
-	reader            io.Reader
 }
 
 type uploadResponse struct {
-	downloadURL string
+	path   string
+	writer io.WriteCloser
 }
 
 type storedObject struct {
@@ -217,6 +229,7 @@ type storedObject struct {
 
 type StorageBackend interface {
 	upload(req *uploadRequest) (*uploadResponse, error)
+	downloadURL(path string) (string, error)
 	list() ([]storedObject, error)
 	remove(path string) error
 }
@@ -243,15 +256,7 @@ func xzAvailable() bool {
 
 func xzCompressor(req *uploadRequest,
 	next func(req *uploadRequest) (*uploadResponse, error)) (*uploadResponse, error) {
-	cmd := osutil.Command("xz", fmt.Sprintf("-%d", xzCompressionRatio),
-		"-T", fmt.Sprintf("%d", xzThreadsCount), "-F", "xz", "-c")
-	cmd.Stdin = req.reader
-	var err error
 	newReq := *req
-	newReq.reader, err = cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
 	if !req.preserveExtension {
 		newReq.savePath = fmt.Sprintf("%s.xz", newReq.savePath)
 	}
@@ -259,51 +264,94 @@ func xzCompressor(req *uploadRequest,
 	if newReq.contentType == "" {
 		newReq.contentType = "application/x-xz"
 	}
+	resp, err := next(&newReq)
+	if err != nil {
+		return nil, err
+	}
+	// Take source data from stdin, write compressed data to stdout.
+	cmd := osutil.Command("xz", fmt.Sprintf("-%d", xzCompressionRatio),
+		"-T", fmt.Sprintf("%d", xzThreadsCount), "-F", "xz", "-c")
+	stdinWriter, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	cmd.Stdout = resp.writer
 	err = cmd.Start()
 	if err != nil {
 		return nil, fmt.Errorf("xz preprocess: command start failed: %w", err)
 	}
-	resp, err := next(&newReq)
-	waitErr := cmd.Wait()
-	if err == nil {
-		err = waitErr
-	}
-	return resp, err
+	return &uploadResponse{
+		path: resp.path,
+		writer: &wrappedWriteCloser{
+			writer: stdinWriter,
+			closeCallback: func() error {
+				// Once the writer which we return is closed, we want to
+				// also close the writer we're proxying.
+				err := cmd.Wait()
+				err2 := resp.writer.Close()
+				if err != nil {
+					return err
+				}
+				if err2 != nil {
+					return err2
+				}
+				return nil
+			},
+		},
+	}, nil
 }
 
 const gzipCompressionRatio = 4
 
+// This struct allows to attach a callback on the Close() method invocation of
+// an existing io.WriteCloser. Also, it can convert an io.Writer to an io.WriteCloser.
+type wrappedWriteCloser struct {
+	writer        io.Writer
+	closeCallback func() error
+}
+
+func (wwc *wrappedWriteCloser) Write(p []byte) (int, error) {
+	return wwc.writer.Write(p)
+}
+
+func (wwc *wrappedWriteCloser) Close() error {
+	var err error
+	closer, ok := wwc.writer.(io.Closer)
+	if ok {
+		err = closer.Close()
+	}
+	err2 := wwc.closeCallback()
+	if err != nil {
+		return err
+	} else if err2 != nil {
+		return err2
+	}
+	return nil
+}
+
 func gzipCompressor(req *uploadRequest,
 	next func(req *uploadRequest) (*uploadResponse, error)) (*uploadResponse, error) {
-	pipeRead, pipeWrite, err := osutil.LongPipe()
-	if err != nil {
-		return nil, err
-	}
-	defer pipeRead.Close()
-	// Compress the file.
-	gzip, err := gzip.NewWriterLevel(pipeWrite, gzipCompressionRatio)
-	if err != nil {
-		return nil, fmt.Errorf("gzip preprocess: NewWriterLevel failed: %w", err)
-	}
-	retChan := make(chan []error)
-	go func() {
-		_, err := io.Copy(gzip, req.reader)
-		errors := append([]error{}, err)
-		errors = append(errors, gzip.Close())
-		errors = append(errors, pipeWrite.Close())
-		retChan <- errors
-	}()
 	newReq := *req
-	newReq.reader = pipeRead
 	if !req.preserveExtension {
 		newReq.savePath = fmt.Sprintf("%s.gz", newReq.savePath)
 	}
 	newReq.contentEncoding = "application/gzip"
 	resp, err := next(&newReq)
-	for _, err := range <-retChan {
-		if err != nil {
-			return nil, err
-		}
+	if err != nil {
+		return nil, err
 	}
-	return resp, err
+	gzip, err := gzip.NewWriterLevel(resp.writer, gzipCompressionRatio)
+	if err != nil {
+		resp.writer.Close()
+		return nil, err
+	}
+	return &uploadResponse{
+		path: resp.path,
+		writer: &wrappedWriteCloser{
+			writer: gzip,
+			closeCallback: func() error {
+				return resp.writer.Close()
+			},
+		},
+	}, nil
 }
