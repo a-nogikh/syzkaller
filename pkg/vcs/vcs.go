@@ -86,6 +86,10 @@ type ConfigMinimizer interface {
 		pred func(test []byte) (BisectResult, error)) ([]byte, error)
 }
 
+type CommitFetcher interface {
+	QueryCommit(commit string) (*Commit, error)
+}
+
 type Commit struct {
 	Hash       string
 	Title      string

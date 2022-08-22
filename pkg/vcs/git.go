@@ -220,6 +220,10 @@ func (git *git) HeadCommit() (*Commit, error) {
 	return git.getCommit("HEAD")
 }
 
+func (git *git) QueryCommit(commit string) (*Commit, error) {
+	return git.getCommit(commit)
+}
+
 func (git *git) getCommit(commit string) (*Commit, error) {
 	output, err := git.git("log", "--format=%H%n%s%n%ae%n%an%n%ad%n%P%n%cd%n%b", "-n", "1", commit)
 	if err != nil {

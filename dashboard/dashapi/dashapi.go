@@ -391,14 +391,23 @@ type BugReport struct {
 	NumCrashes        int64
 	HappenedOn        []string // list of kernel repo aliases
 
-	CrashTitle     string // job execution crash title
-	Error          []byte // job execution error
-	ErrorLink      string
-	ErrorTruncated bool // full Error text is too large and was truncated
-	PatchLink      string
-	BisectCause    *BisectResult
-	BisectFix      *BisectResult
-	Assets         []Asset
+	CrashTitle      string // job execution crash title
+	Error           []byte // job execution error
+	ErrorLink       string
+	ErrorTruncated  bool // full Error text is too large and was truncated
+	PatchLink       string
+	BisectCause     *BisectResult
+	BisectFix       *BisectResult
+	Assets          []Asset
+	FixCommits      []*BugReportCommit
+	FixCommitTitles []string
+	CloseTime       time.Time
+	AutoClosed      bool
+}
+
+type BugReportCommit struct {
+	Hash  string
+	Title string
 }
 
 type Asset struct {

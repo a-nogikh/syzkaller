@@ -528,6 +528,9 @@ func fillBugReport(c context.Context, rep *dashapi.BugReport, bug *Bug, bugRepor
 		rep.BugStatus = dashapi.BugStatusFixed
 	case BugStatusInvalid:
 		rep.BugStatus = dashapi.BugStatusInvalid
+		if bugReporting.Auto {
+			rep.AutoClosed = true
+		}
 	case BugStatusDup:
 		rep.BugStatus = dashapi.BugStatusDup
 	default:
@@ -555,9 +558,17 @@ func fillBugReport(c context.Context, rep *dashapi.BugReport, bug *Bug, bugRepor
 	rep.KernelConfigLink = externalLink(c, textKernelConfig, build.KernelConfig)
 	rep.SyzkallerCommit = build.SyzkallerCommit
 	rep.NoRepro = build.Type == BuildFailed
+	rep.CloseTime = bug.Closed
 	for _, addr := range bug.UNCC {
 		rep.CC = email.RemoveFromEmailList(rep.CC, addr)
 		rep.Maintainers = email.RemoveFromEmailList(rep.Maintainers, addr)
+	}
+	rep.FixCommitTitles = bug.Commits
+	for _, info := range bug.CommitInfo {
+		rep.FixCommits = append(rep.FixCommits, &dashapi.BugReportCommit{
+			Hash:  info.Hash,
+			Title: info.Title,
+		})
 	}
 	return nil
 }

@@ -371,9 +371,10 @@ func (ctx *linux) Symbolize(rep *Report) error {
 
 	// We still do this even if we did not symbolize,
 	// because tests pass in already symbolized input.
-	rep.guiltyFile = ctx.extractGuiltyFile(rep)
-	if rep.guiltyFile != "" {
-		maintainers, err := ctx.getMaintainers(rep.guiltyFile)
+	// TODO: update it to e.g. GuiltyFrame? Parse and output all frames and specify the guity one?
+	rep.GuiltyFile = ctx.extractGuiltyFile(rep)
+	if rep.GuiltyFile != "" {
+		maintainers, err := ctx.getMaintainers(rep.GuiltyFile)
 		if err != nil {
 			return err
 		}
@@ -684,7 +685,7 @@ func (ctx *linux) decompileOpcodes(text []byte, report *Report) []byte {
 }
 
 func (ctx *linux) extractGuiltyFile(rep *Report) string {
-	report := rep.Report[rep.reportPrefixLen:]
+	report := rep.Report //[rep.reportPrefixLen:]
 	if strings.HasPrefix(rep.Title, "INFO: rcu detected stall") {
 		// Special case for rcu stalls.
 		// There are too many frames that we want to skip before actual guilty frames,
