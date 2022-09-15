@@ -4,11 +4,42 @@
 package linux
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/google/syzkaller/prog"
 )
+
+func (arch *arch) extractSyzMountImage(c *prog.Call) (io.Reader, error) {
+	// In order to reduce the size of syzlang programs, disk imags are de facto compressed.
+	// Here we do the uncompression.
+	if c.Meta.CallName != "syz_mount_image" {
+		return nil, nil
+	}
+	ret, err := parseSyzMountImage(c)
+	if err != nil {
+		// Parsing failed --> do not try to recover, just ignore.
+		return nil, err
+	}
+	readers := []io.Reader{}
+	nextPos := 0
+	// Add fake zero readers between segments, so that we can combine them to read the whole image.
+	for _, segment := range ret.segments {
+		offset := int(segment.offset.Val)
+		if offset > nextPos {
+			readers = append(readers, &zeroReader{left: offset - nextPos})
+		}
+		size := int(segment.size.Val)
+		readers = append(readers, bytes.NewReader(segment.data.Data()[0:size]))
+		nextPos = offset + size
+	}
+	if int(ret.size.Val) > nextPos {
+		readers = append(readers, &zeroReader{left: int(ret.size.Val) - nextPos})
+	}
+	return io.MultiReader(readers...), nil
+}
 
 type zeroReader struct {
 	left int
@@ -25,11 +56,8 @@ func (zr *zeroReader) Read(p []byte) (n int, err error) {
 	for i := 0; i < toRead; i++ {
 		p[i] = 0
 	}
+	zr.left -= toRead
 	return toRead, nil
-}
-
-func newZeroReader(size int) io.Reader {
-	return &zeroReader{left: size}
 }
 
 const imageMaxSize = 129 << 20
@@ -41,14 +69,29 @@ func fixUpImageSegments(parsed *mountImageArgs) {
 		}
 		return segment.offset.Val < imageMaxSize && segment.size.Val < imageMaxSize
 	})
+	// Overwriting of the image multiple times is not efficient and complicates image extraction in Go.
+	// So let's make segments non-overlapping.
+	sort.Stable(&sortSegments{parsed: parsed})
+	resizeSegment := func(s *mountImageSegment, size uint64) {
+		s.size.Val = size
+		s.data.SetData(s.data.Data()[0:size])
+	}
+
 	newSize := parsed.size.Val
-	for _, segment := range parsed.segments {
+	for idx, segment := range parsed.segments {
 		actualSize := uint64(len(segment.data.Data()))
-		if segment.size.Val > actualSize {
+		if segment.size.Val != actualSize {
 			segment.size.Val = actualSize
 		}
+		if idx > 0 {
+			// Adjust the end of the previous segment.
+			prevSegment := parsed.segments[idx-1]
+			if prevSegment.offset.Val+prevSegment.size.Val > segment.offset.Val {
+				resizeSegment(prevSegment, segment.offset.Val-prevSegment.offset.Val)
+			}
+		}
 		if segment.offset.Val+segment.size.Val > imageMaxSize {
-			segment.offset.Val = imageMaxSize - segment.size.Val
+			resizeSegment(segment, imageMaxSize-segment.offset.Val)
 		}
 		if segment.offset.Val+segment.size.Val > newSize {
 			newSize = segment.offset.Val + segment.size.Val
@@ -58,6 +101,29 @@ func fixUpImageSegments(parsed *mountImageArgs) {
 		newSize = imageMaxSize
 	}
 	parsed.size.Val = newSize
+
+	// Drop 0-size segments.
+	parsed.filterSegments(func(i int, segment *mountImageSegment) bool {
+		return segment.size.Val > 0
+	})
+}
+
+type sortSegments struct {
+	parsed *mountImageArgs
+}
+
+func (s sortSegments) Len() int { return len(s.parsed.segments) }
+func (s sortSegments) Swap(i, j int) {
+	inner := s.parsed.segmentsGroup.Inner
+	inner[i], inner[j] = inner[j], inner[i]
+	s.parsed.segments[i], s.parsed.segments[j] = s.parsed.segments[j], s.parsed.segments[i]
+}
+func (s sortSegments) Less(i, j int) bool {
+	segments := s.parsed.segments
+	if segments[i].offset.Val != segments[j].offset.Val {
+		return segments[i].offset.Val < segments[j].offset.Val
+	}
+	return segments[i].size.Val < segments[j].size.Val
 }
 
 func (arch *arch) fixUpSyzMountImage(c *prog.Call) {

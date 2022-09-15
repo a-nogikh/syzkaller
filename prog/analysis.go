@@ -10,6 +10,7 @@ package prog
 
 import (
 	"fmt"
+	"io"
 )
 
 type state struct {
@@ -336,4 +337,23 @@ func checkMaxCallID(id int) {
 	if id & ^fallbackCallMask != 0 {
 		panic(fmt.Sprintf("too many syscalls, have %v, max supported %v", id, fallbackCallMask+1))
 	}
+}
+
+type MountInProg struct {
+	Reader io.Reader
+	Error  error
+}
+
+func (p *Prog) MountedImages() []MountInProg {
+	handler := p.Target.ExtractMountedImage
+	if handler == nil {
+		// Such an operation is not supported by the target.
+		return nil
+	}
+	ret := []MountInProg{}
+	for _, c := range p.Calls {
+		reader, err := handler(c)
+		ret = append(ret, MountInProg{Reader: reader, Error: err})
+	}
+	return ret
 }
