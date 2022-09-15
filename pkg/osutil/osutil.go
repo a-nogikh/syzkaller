@@ -6,6 +6,7 @@ package osutil
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -258,6 +259,16 @@ func MkdirAll(dir string) error {
 
 func WriteFile(filename string, data []byte) error {
 	return ioutil.WriteFile(filename, data, DefaultFilePerm)
+}
+
+func WriteFileStream(filename string, reader io.Reader) error {
+	f, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, reader)
+	return err
 }
 
 func WriteExecFile(filename string, data []byte) error {

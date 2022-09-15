@@ -1084,6 +1084,12 @@ func (mgr *Manager) saveRepro(res *ReproResult) {
 	if len(cprogText) > 0 {
 		osutil.WriteFile(filepath.Join(dir, "repro.cprog"), cprogText)
 	}
+	for idx, mount := range repro.Prog.MountedImages() {
+		if mount.Reader != nil {
+			osutil.WriteFileStream(filepath.Join(dir, fmt.Sprintf("repro.mount%d", idx)),
+				mount.Reader)
+		}
+	}
 	if res.strace != nil {
 		// Unlike dashboard reporting, we save strace output separately from the original log.
 		if res.strace.Error != nil {
