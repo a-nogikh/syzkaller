@@ -624,15 +624,26 @@ func fetchFixPendingBugs(c context.Context, ns, manager string) ([]*Bug, error) 
 }
 
 func fetchNamespaceBugs(c context.Context, accessLevel AccessLevel, ns, manager string) ([]*uiBugGroup, error) {
-	bugs, err := loadVisibleBugs(c, accessLevel, ns, manager)
-	if err != nil {
-		return nil, err
-	}
-	state, err := loadReportingState(c)
-	if err != nil {
-		return nil, err
-	}
-	managers, err := managerList(c, ns)
+	var bugs []*Bug
+	var state *ReportingState
+	var managers []string
+	g, _ := errgroup.WithContext(context.Background())
+	g.Go(func() error {
+		var err error
+		bugs, err = loadVisibleBugs(c, accessLevel, ns, manager)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		state, err = loadReportingState(c)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		managers, err = managerList(c, ns)
+		return err
+	})
+	err := g.Wait()
 	if err != nil {
 		return nil, err
 	}
