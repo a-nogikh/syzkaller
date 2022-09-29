@@ -6,8 +6,10 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"golang.org/x/net/context"
+	"google.golang.org/appengine/v2"
 	db "google.golang.org/appengine/v2/datastore"
 	"google.golang.org/appengine/v2/log"
 )
@@ -210,6 +212,90 @@ func updateBugBatch(c context.Context, keys []*db.Key, transform func(bug *Bug))
 		log.Warningf(c, "updated %v bugs", len(batchKeys))
 	}
 	return nil
+}
+
+func fixUpAssets(assets []Asset) ([]Asset, bool) {
+	newAssets := []Asset{}
+	hasChanged := false
+	for _, asset := range assets {
+		if strings.Contains(asset.DownloadURL, "syzbot-assets") {
+			newAssets = append(newAssets, asset)
+		} else {
+			asset2 := asset
+			asset2.DownloadURL = strings.ReplaceAll(asset2.DownloadURL, "https://storage.googleapis.com/", "https://storage.googleapis.com/syzbot-assets/")
+			newAssets = append(newAssets, asset2)
+			hasChanged = true
+		}
+	}
+	return newAssets, hasChanged
+}
+
+func handleFixBuildURLs(w http.ResponseWriter, r *http.Request) {
+	c := appengine.NewContext(r)
+	fixKeys := []*db.Key{}
+	foreachBuild(c, func(build *Build, key *db.Key) error {
+		_, changed := fixUpAssets(build.Assets)
+		if changed {
+			fixKeys = append(fixKeys, key)
+		}
+		return nil
+	})
+
+	for _, key := range fixKeys {
+		tx := func(c context.Context) error {
+			build := new(Build)
+			err := db.Get(c, key, build)
+			if err != nil {
+				return err
+			}
+			newAssets, changed := fixUpAssets(build.Assets)
+			if changed == false {
+				return fmt.Errorf("no change")
+			}
+			fmt.Fprintf(w, "Before: %v\nAfter: %v\n--------\n", build.Assets, newAssets)
+			build.Assets = newAssets
+			if _, err := db.Put(c, key, build); err != nil {
+				return fmt.Errorf("failed to save build: %w", err)
+			}
+			return err
+		}
+		if err := db.RunInTransaction(c, tx, &db.TransactionOptions{XG: true}); err != nil {
+			fmt.Fprintf(w, "transaction error: %s", err)
+		}
+	}
+}
+
+func foreachBuild(c context.Context, fn func(build *Build, key *db.Key) error) error {
+	const batchSize = 1000
+	var cursor *db.Cursor
+	for {
+		query := db.NewQuery("Build").Limit(batchSize)
+		if cursor != nil {
+			query = query.Start(*cursor)
+		}
+		iter := query.Run(c)
+		for i := 0; ; i++ {
+			bug := new(Build)
+			key, err := iter.Next(bug)
+			if err == db.Done {
+				if i < batchSize {
+					return nil
+				}
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("failed to fetch bugs: %v", err)
+			}
+			if err := fn(bug, key); err != nil {
+				return err
+			}
+		}
+		cur, err := iter.Cursor()
+		if err != nil {
+			return fmt.Errorf("cursor failed while fetching bugs: %v", err)
+		}
+		cursor = &cur
+	}
 }
 
 // Prevent warnings about dead code.
