@@ -6,6 +6,8 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"golang.org/x/net/context"
 	db "google.golang.org/appengine/v2/datastore"
@@ -117,6 +119,73 @@ func dropEntities(c context.Context, keys []*db.Key, dryRun bool) error {
 		}
 		keys = keys[batch:]
 	}
+	return nil
+}
+
+func restartFailedJobs(c context.Context, w http.ResponseWriter, r *http.Request) error {
+	if accessLevel(c, r) != AccessAdmin {
+		return fmt.Errorf("admin only")
+	}
+
+	var jobs []*Job
+	var jobKeys []*db.Key
+	jobKeys, err := db.NewQuery("Job").
+		Filter("Finished>", time.Time{}).
+		GetAll(c, &jobs)
+	if err != nil {
+		return fmt.Errorf("failed to query jobs: %w", err)
+	}
+	now := timeNow(c)
+	period := time.Hour * 24 * 200
+
+	toReset := []*db.Key{}
+	for i, job := range jobs {
+		if now.Sub(job.Finished) > period {
+			continue
+		}
+		if job.Error == 0 {
+			continue
+		}
+		if job.Type != JobBisectCause && job.Type != JobBisectFix {
+			continue
+		}
+		errorTextBytes, _, err := getText(c, textError, job.Error)
+		if err != nil {
+			return fmt.Errorf("failed to query error text: %w", err)
+		}
+		errorText := string(errorTextBytes)
+		if !strings.Contains(errorText, "failed to start /usr/bin/make") {
+			continue
+		}
+		fmt.Fprintf(w, "job type %v, ns %s, finished at %s, error:%s\n========\n",
+			job.Type, job.Namespace, job.Finished, errorText)
+		toReset = append(toReset, jobKeys[i])
+	}
+
+	for idx, key := range toReset {
+		tx := func(c context.Context) error {
+			job := new(Job)
+			if err := db.Get(c, key, job); err != nil {
+				return fmt.Errorf("job %v: failed to get in tx: %v", idx, err)
+			}
+			job.Started = time.Time{}
+			job.Finished = time.Time{}
+			job.Log = 0
+			job.Error = 0
+			job.CrashLog = 0
+			job.Flags = JobFlags(0)
+			if _, err := db.Put(c, key, job); err != nil {
+				return fmt.Errorf("job %v: failed to put: %v", idx, err)
+			}
+			return nil
+		}
+		if err := db.RunInTransaction(c, tx, nil); err != nil {
+			fmt.Fprintf(w, "update failed: %s", err)
+			return nil
+		}
+	}
+
+	fmt.Fprintf(w, "ran to the end")
 	return nil
 }
 

@@ -40,6 +40,7 @@ func initHTTPHandlers() {
 	http.Handle("/bug", handlerWrapper(handleBug))
 	http.Handle("/text", handlerWrapper(handleText))
 	http.Handle("/admin", handlerWrapper(handleAdmin))
+	http.Handle("/restart-failed", handlerWrapper(restartFailedJobs))
 	http.Handle("/x/.config", handlerWrapper(handleTextX(textKernelConfig)))
 	http.Handle("/x/log.txt", handlerWrapper(handleTextX(textCrashLog)))
 	http.Handle("/x/report.txt", handlerWrapper(handleTextX(textCrashReport)))
