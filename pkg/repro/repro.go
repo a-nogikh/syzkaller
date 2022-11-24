@@ -304,16 +304,6 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 		if len(entries) == 1 {
 			continue
 		}
-
-		// Execute all programs and bisect the log to find multiple guilty programs.
-		res, err = ctx.extractProgBisect(entries, timeout)
-		if err != nil {
-			return nil, err
-		}
-		if res != nil {
-			ctx.reproLogf(3, "found reproducer with %d syscalls", len(res.Prog.Calls))
-			return res, nil
-		}
 	}
 
 	ctx.reproLogf(0, "failed to extract reproducer")
