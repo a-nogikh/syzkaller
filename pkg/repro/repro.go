@@ -543,6 +543,10 @@ func (ctx *context) testWithInstance(callback func(inst *instance.ExecProgInstan
 		ctx.reproLogf(2, "not a leak crash: %v", rep.Title)
 		return false, nil
 	}
+	if rep.Title != ctx.crashTitle {
+		ctx.reproLogf(2, "got a %#v crash, but expected %#v", rep.Title, ctx.crashTitle)
+		return false, nil
+	}
 	ctx.report = rep
 	return true, nil
 }
