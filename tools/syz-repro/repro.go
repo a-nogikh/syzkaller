@@ -23,8 +23,9 @@ var (
 	flagConfig = flag.String("config", "", "manager configuration file (manager.cfg)")
 	flagCount  = flag.Int("count", 0, "number of VMs to use (overrides config count param)")
 	flagDebug  = flag.Bool("debug", false, "print debug output")
-	flagOutput = flag.String("output", filepath.Join(".", "repro.txt"), "output description file (output.txt)")
+	flagOutput = flag.String("output", filepath.Join(".", "repro.txt"), "output syz repro file (output.txt)")
 	flagCRepro = flag.String("crepro", filepath.Join(".", "repro.c"), "output c file (repro.c)")
+	flagTitle  = flag.String("title", filepath.Join(".", "title.txt"), "the title of the reproduced bug (bug_title.txt)")
 	flagStrace = flag.String("strace", "", "output strace log (strace_bin must be set)")
 )
 
@@ -89,6 +90,14 @@ func main() {
 		log.Logf(0, "failed to write prog to file: %v", err)
 	}
 
+	if res.Report != nil && *flagTitle != "" {
+		if err = osutil.WriteFile(*flagTitle, []byte(res.Report.Title)); err == nil {
+			fmt.Printf("bug title saved to %s\n", *flagTitle)
+		} else {
+			log.Logf(0, "failed to write bug title to file: %v", err)
+		}
+	}
+
 	if res.CRepro {
 		src, err := csource.Write(res.Prog, res.Opts)
 		if err != nil {
@@ -105,6 +114,7 @@ func main() {
 			log.Logf(0, "failed to write C repro to file: %v", err)
 		}
 	}
+
 	if *flagStrace != "" {
 		result := repro.RunStrace(res, cfg, reporter, vmPool, vmIndexes[0])
 		if result.Error != nil {
