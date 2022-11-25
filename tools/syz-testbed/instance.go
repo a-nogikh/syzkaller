@@ -5,9 +5,11 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/syzkaller/pkg/config"
@@ -194,16 +196,26 @@ type SyzReproInstance struct {
 	Input      *SyzReproInput
 	ReproFile  string
 	CReproFile string
-	// TODO: we also want to extract source and new bug titles
+	TitleFile  string
 }
 
 func (inst *SyzReproInstance) FetchResult() (RunResult, error) {
-	return &SyzReproResult{
+	result := &SyzReproResult{
 		Input:       inst.Input,
 		ReproFound:  osutil.IsExist(inst.ReproFile),
 		CReproFound: osutil.IsExist(inst.CReproFile),
 		Duration:    inst.Uptime(),
-	}, nil
+	}
+	outTitle, _ := ioutil.ReadFile(inst.TitleFile)
+	if outTitle != nil {
+		result.ReproTitle = strings.TrimSpace(string(outTitle))
+		if result.ReproTitle != inst.Input.origTitle {
+			// If we found a different bug, treat the reproduction as unsuccessful.
+			result.ReproFound = false
+			result.CReproFound = false
+		}
+	}
+	return result, nil
 }
 
 func (t *SyzReproTarget) newSyzReproInstance(slotName, uniqName string, input *SyzReproInput,
@@ -216,6 +228,7 @@ func (t *SyzReproTarget) newSyzReproInstance(slotName, uniqName string, input *S
 
 	reproFile := filepath.Join(folder, "repro.txt")
 	cReproFile := filepath.Join(folder, "crepro.txt")
+	titleFile := filepath.Join(folder, "title.txt")
 	newExecLog := filepath.Join(folder, "execution-log.txt")
 	err = osutil.CopyFile(input.Path, newExecLog)
 	if err != nil {
@@ -238,5 +251,6 @@ func (t *SyzReproTarget) newSyzReproInstance(slotName, uniqName string, input *S
 		Input:         input,
 		ReproFile:     reproFile,
 		CReproFile:    cReproFile,
+		TitleFile:     titleFile,
 	}, nil
 }
