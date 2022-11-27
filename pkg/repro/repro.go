@@ -352,12 +352,37 @@ func (ctx *context) extractProgSingle(entries []*prog.LogEntry, duration time.Du
 	return nil, nil
 }
 
-func (ctx *context) extractProgBisect(entries []*prog.LogEntry, baseDuration time.Duration) (*Result, error) {
-	ctx.reproLogf(3, "bisect: bisecting %d programs with base timeout %s", len(entries), baseDuration)
+func (ctx *context) extractProgBisect(allEntries []*prog.LogEntry, baseDuration time.Duration) (*Result, error) {
+	ctx.reproLogf(3, "bisect: bisecting %d programs with base timeout %s", len(allEntries), baseDuration)
 
 	opts := ctx.startOpts
 	duration := func(entries int) time.Duration {
 		return baseDuration + time.Duration(entries/4)*time.Second
+	}
+
+	takeLast := 8
+	entries := []*prog.LogEntry{}
+	for {
+		if takeLast > len(allEntries) {
+			takeLast = len(allEntries)
+		}
+		progs := allEntries[len(allEntries)-takeLast:]
+		crashed, err := ctx.testProgs(progs, duration(len(progs)), opts)
+		if err != nil {
+			return nil, err
+		}
+		if crashed {
+			entries = progs
+			break
+		}
+		if takeLast >= len(allEntries) {
+			break
+		}
+		takeLast *= 2
+	}
+
+	if len(entries) == 0 {
+		return nil, nil
 	}
 
 	// Bisect the log to find multiple guilty programs.
