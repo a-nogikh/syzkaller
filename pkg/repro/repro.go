@@ -288,6 +288,12 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 	for i := len(indices) - 1; i >= 0; i-- {
 		lastEntries = append(lastEntries, entries[indices[i]])
 	}
+
+	perProc := map[int][]*prog.LogEntry{}
+	for _, ent := range entries {
+		perProc[ent.Proc] = append(perProc[ent.Proc], ent)
+	}
+
 	for _, timeout := range ctx.testTimeouts {
 		// Execute each program separately to detect simple crashes caused by a single program.
 		// Programs are executed in reverse order, usually the last program is the guilty one.
@@ -300,19 +306,21 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 			return res, nil
 		}
 
-		// Don't try bisecting if there's only one entry.
-		if len(entries) == 1 {
-			continue
-		}
+		for _, procEntries := range perProc {
+			// Don't try bisecting if there's only one entry.
+			if len(procEntries) == 1 {
+				continue
+			}
 
-		// Execute all programs and bisect the log to find multiple guilty programs.
-		res, err = ctx.extractProgBisect(entries, timeout)
-		if err != nil {
-			return nil, err
-		}
-		if res != nil {
-			ctx.reproLogf(3, "found reproducer with %d syscalls", len(res.Prog.Calls))
-			return res, nil
+			// Execute all programs and bisect the log to find multiple guilty programs.
+			res, err = ctx.extractProgBisect(procEntries, timeout)
+			if err != nil {
+				return nil, err
+			}
+			if res != nil {
+				ctx.reproLogf(3, "found reproducer with %d syscalls", len(res.Prog.Calls))
+				return res, nil
+			}
 		}
 	}
 
