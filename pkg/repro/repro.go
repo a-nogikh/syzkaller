@@ -93,6 +93,8 @@ func Run(crashLog []byte, cfg *mgrconfig.Config, features *host.Features, report
 		testTimeouts = testTimeouts[1:]
 	case crashType == report.Hang:
 		testTimeouts = testTimeouts[2:]
+	default:
+		testTimeouts = append([]time.Duration{}, testTimeouts[0], testTimeouts[2])
 	}
 	ctx := &context{
 		target:       cfg.SysTarget,
@@ -318,6 +320,8 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 	}
 
 	for _, timeout := range ctx.testTimeouts {
+		timeout = timeout * 2
+
 		// Execute each program separately to detect simple crashes caused by a single program.
 		// Programs are executed in reverse order, usually the last program is the guilty one.
 		res, err := ctx.extractProgSingle(lastEntries, timeout)
@@ -385,7 +389,7 @@ func (ctx *context) extractProgBisect(entries []*prog.LogEntry, baseDuration tim
 
 	opts := ctx.startOpts
 	duration := func(entries int) time.Duration {
-		return baseDuration + time.Duration(entries/4)*time.Second
+		return baseDuration + time.Duration(entries)*time.Second*2
 	}
 
 	// Bisect the log to find multiple guilty programs.
