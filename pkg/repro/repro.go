@@ -294,6 +294,29 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 		perProc[ent.Proc] = append(perProc[ent.Proc], ent)
 	}
 
+	type BisectJob struct {
+		logs    []*prog.LogEntry
+		timeout time.Duration
+	}
+
+	jobs := make(chan *BisectJob, len(perProc))
+	defer close(jobs)
+	jobsRet := make(chan *Result)
+	defer close(jobsRet)
+	for i := 0; i < 2; i++ {
+		go func() {
+			for job := range jobs {
+				// Execute all programs and bisect the log to find multiple guilty programs.
+				res, err := ctx.extractProgBisect(job.logs, job.timeout)
+				if err != nil {
+					jobsRet <- nil
+					continue
+				}
+				jobsRet <- res
+			}
+		}()
+	}
+
 	for _, timeout := range ctx.testTimeouts {
 		// Execute each program separately to detect simple crashes caused by a single program.
 		// Programs are executed in reverse order, usually the last program is the guilty one.
@@ -306,21 +329,26 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 			return res, nil
 		}
 
+		started := 0
 		for _, procEntries := range perProc {
 			// Don't try bisecting if there's only one entry.
 			if len(procEntries) == 1 {
 				continue
 			}
 
-			// Execute all programs and bisect the log to find multiple guilty programs.
-			res, err = ctx.extractProgBisect(procEntries, timeout)
-			if err != nil {
-				return nil, err
+			started++
+			jobs <- &BisectJob{logs: procEntries, timeout: timeout}
+		}
+		for started > 0 {
+			started--
+			ret := <-jobsRet
+			if ret != nil {
+				res = ret
 			}
-			if res != nil {
-				ctx.reproLogf(3, "found reproducer with %d syscalls", len(res.Prog.Calls))
-				return res, nil
-			}
+		}
+		if res != nil {
+			ctx.reproLogf(3, "found reproducer with %d syscalls", len(res.Prog.Calls))
+			return res, nil
 		}
 	}
 
@@ -602,7 +630,11 @@ func (ctx *context) returnInstance(inst *reproInstance) {
 	inst.execProg.VMInstance.Close()
 }
 
+var mu sync.Mutex
+
 func (ctx *context) reproLogf(level int, format string, args ...interface{}) {
+	mu.Lock()
+	defer mu.Unlock()
 	prefix := fmt.Sprintf("reproducing crash '%v': ", ctx.crashTitle)
 	log.Logf(level, prefix+format, args...)
 	ctx.stats.Log = append(ctx.stats.Log, []byte(fmt.Sprintf(format, args...)+"\n")...)
