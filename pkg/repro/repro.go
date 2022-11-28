@@ -46,17 +46,18 @@ type reproInstance struct {
 }
 
 type context struct {
-	target       *targets.Target
-	reporter     *report.Reporter
-	crashTitle   string
-	crashType    report.Type
-	instances    chan *reproInstance
-	bootRequests chan int
-	testTimeouts []time.Duration
-	startOpts    csource.Options
-	stats        *Stats
-	report       *report.Report
-	timeouts     targets.Timeouts
+	target         *targets.Target
+	reporter       *report.Reporter
+	crashTitle     string
+	crashType      report.Type
+	instances      chan *reproInstance
+	bootRequests   chan int
+	testTimeouts   []time.Duration
+	bisectTimeouts []time.Duration
+	startOpts      csource.Options
+	stats          *Stats
+	report         *report.Report
+	timeouts       targets.Timeouts
 }
 
 func Run(crashLog []byte, cfg *mgrconfig.Config, features *host.Features, reporter *report.Reporter,
@@ -94,17 +95,22 @@ func Run(crashLog []byte, cfg *mgrconfig.Config, features *host.Features, report
 	case crashType == report.Hang:
 		testTimeouts = testTimeouts[2:]
 	}
+	bisectTimeouts := []time.Duration{
+		10 * cfg.Timeouts.Program,
+		cfg.Timeouts.NoOutputRunningTime, // to catch "no output", races and hangs
+	}
 	ctx := &context{
-		target:       cfg.SysTarget,
-		reporter:     reporter,
-		crashTitle:   crashTitle,
-		crashType:    crashType,
-		instances:    make(chan *reproInstance, len(vmIndexes)),
-		bootRequests: make(chan int, len(vmIndexes)),
-		testTimeouts: testTimeouts,
-		startOpts:    createStartOptions(cfg, features, crashType),
-		stats:        new(Stats),
-		timeouts:     cfg.Timeouts,
+		target:         cfg.SysTarget,
+		reporter:       reporter,
+		crashTitle:     crashTitle,
+		crashType:      crashType,
+		instances:      make(chan *reproInstance, len(vmIndexes)),
+		bootRequests:   make(chan int, len(vmIndexes)),
+		testTimeouts:   testTimeouts,
+		bisectTimeouts: bisectTimeouts,
+		startOpts:      createStartOptions(cfg, features, crashType),
+		stats:          new(Stats),
+		timeouts:       cfg.Timeouts,
 	}
 	ctx.reproLogf(0, "%v programs, %v VMs, timeouts %v", len(entries), len(vmIndexes), testTimeouts)
 	var wg sync.WaitGroup
@@ -294,6 +300,19 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 		perProc[ent.Proc] = append(perProc[ent.Proc], ent)
 	}
 
+	for _, timeout := range ctx.testTimeouts {
+		// Execute each program separately to detect simple crashes caused by a single program.
+		// Programs are executed in reverse order, usually the last program is the guilty one.
+		res, err := ctx.extractProgSingle(lastEntries, timeout)
+		if err != nil {
+			return nil, err
+		}
+		if res != nil {
+			ctx.reproLogf(3, "found reproducer with %d syscalls", len(res.Prog.Calls))
+			return res, nil
+		}
+	}
+
 	type BisectJob struct {
 		logs    []*prog.LogEntry
 		timeout time.Duration
@@ -317,18 +336,8 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 		}()
 	}
 
-	for _, timeout := range ctx.testTimeouts {
-		// Execute each program separately to detect simple crashes caused by a single program.
-		// Programs are executed in reverse order, usually the last program is the guilty one.
-		res, err := ctx.extractProgSingle(lastEntries, timeout)
-		if err != nil {
-			return nil, err
-		}
-		if res != nil {
-			ctx.reproLogf(3, "found reproducer with %d syscalls", len(res.Prog.Calls))
-			return res, nil
-		}
-
+	for _, timeout := range ctx.bisectTimeouts {
+		var res *Result
 		started := 0
 		for _, procEntries := range perProc {
 			// Don't try bisecting if there's only one entry.
@@ -384,8 +393,9 @@ func (ctx *context) extractProgBisect(entries []*prog.LogEntry, baseDuration tim
 	ctx.reproLogf(3, "bisect: bisecting %d programs with base timeout %s", len(entries), baseDuration)
 
 	opts := ctx.startOpts
+	opts.Procs = 1
 	duration := func(entries int) time.Duration {
-		return baseDuration + time.Duration(entries/4)*time.Second
+		return baseDuration + time.Duration(entries)*time.Second*3
 	}
 
 	// Bisect the log to find multiple guilty programs.
