@@ -58,6 +58,8 @@ type context struct {
 	stats          *Stats
 	report         *report.Report
 	timeouts       targets.Timeouts
+	// This is very bad, but let's follow this way to speed up coding for experiments.
+	wrongCrashLastTime bool
 }
 
 func Run(crashLog []byte, cfg *mgrconfig.Config, features *host.Features, reporter *report.Reporter,
@@ -316,17 +318,23 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 	type BisectJob struct {
 		logs    []*prog.LogEntry
 		timeout time.Duration
+		procs   int
 	}
 
-	jobs := make(chan *BisectJob, len(perProc))
-	defer close(jobs)
-	jobsRet := make(chan *Result)
-	defer close(jobsRet)
+	jobs := make(chan *BisectJob, 1+len(perProc))
+	jobsRet := make(chan *Result, 1+len(perProc))
+
+	wg := sync.WaitGroup{}
 	for i := 0; i < 2; i++ {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for job := range jobs {
+				if job == nil {
+					break
+				}
 				// Execute all programs and bisect the log to find multiple guilty programs.
-				res, err := ctx.extractProgBisect(job.logs, job.timeout)
+				res, err := ctx.extractProgBisect(job.logs, job.timeout, job.procs)
 				if err != nil {
 					jobsRet <- nil
 					continue
@@ -335,24 +343,32 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 			}
 		}()
 	}
+	defer wg.Wait()
+	defer close(jobs)
 
 	for _, timeout := range ctx.bisectTimeouts {
 		var res *Result
 		started := 0
+		if len(entries) > 1 {
+			started++
+			// Try to bisect the log as a whole
+			jobs <- &BisectJob{logs: entries, timeout: timeout, procs: 6}
+		}
+		// Try per-proc bisections.
 		for _, procEntries := range perProc {
 			// Don't try bisecting if there's only one entry.
 			if len(procEntries) == 1 {
 				continue
 			}
-
 			started++
-			jobs <- &BisectJob{logs: procEntries, timeout: timeout}
+			jobs <- &BisectJob{logs: procEntries, timeout: timeout, procs: 1}
 		}
 		for started > 0 {
 			started--
 			ret := <-jobsRet
 			if ret != nil {
 				res = ret
+				break
 			}
 		}
 		if res != nil {
@@ -368,11 +384,19 @@ func (ctx *context) extractProg(entries []*prog.LogEntry) (*Result, error) {
 func (ctx *context) extractProgSingle(entries []*prog.LogEntry, duration time.Duration) (*Result, error) {
 	ctx.reproLogf(3, "single: executing %d programs separately with timeout %s", len(entries), duration)
 
-	opts := ctx.startOpts
 	for _, ent := range entries {
+		opts := ctx.startOpts
 		crashed, err := ctx.testProg(ent.P, duration, opts)
 		if err != nil {
 			return nil, err
+		}
+		if !crashed && ctx.wrongCrashLastTime {
+			opts.Procs = 1
+			ctx.reproLogf(3, "single: try one more execution with reduced procs")
+			crashed, err = ctx.testProg(ent.P, duration, opts)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if crashed {
 			res := &Result{
@@ -389,13 +413,16 @@ func (ctx *context) extractProgSingle(entries []*prog.LogEntry, duration time.Du
 	return nil, nil
 }
 
-func (ctx *context) extractProgBisect(entries []*prog.LogEntry, baseDuration time.Duration) (*Result, error) {
+func (ctx *context) extractProgBisect(entries []*prog.LogEntry, baseDuration time.Duration, procs int) (*Result, error) {
 	ctx.reproLogf(3, "bisect: bisecting %d programs with base timeout %s", len(entries), baseDuration)
 
 	opts := ctx.startOpts
-	opts.Procs = 1
+	if procs > 0 {
+		opts.Procs = procs
+	}
+
 	duration := func(entries int) time.Duration {
-		return baseDuration + time.Duration(entries)*time.Second*3
+		return baseDuration + time.Duration(entries)*time.Second*3/time.Duration(opts.Procs)
 	}
 
 	// Bisect the log to find multiple guilty programs.
@@ -566,35 +593,52 @@ func (ctx *context) testProg(p *prog.Prog, duration time.Duration, opts csource.
 	return ctx.testProgs([]*prog.LogEntry{&entry}, duration, opts)
 }
 
-func (ctx *context) testWithInstance(callback func(inst *instance.ExecProgInstance) (rep *instance.RunResult,
-	err error)) (bool, error) {
+func (ctx *context) testWithInstanceInner(callback func(inst *instance.ExecProgInstance) (rep *instance.RunResult,
+	err error)) (bool, bool, error) {
 	inst := <-ctx.instances
 	if inst == nil {
-		return false, fmt.Errorf("all VMs failed to boot")
+		return false, false, fmt.Errorf("all VMs failed to boot")
 	}
 	defer ctx.returnInstance(inst)
+
 	result, err := callback(inst.execProg)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	rep := result.Report
 	if rep == nil {
-		return false, nil
+		return false, false, nil
 	}
 	if rep.Suppressed {
 		ctx.reproLogf(2, "suppressed program crash: %v", rep.Title)
-		return false, nil
+		return false, false, nil
 	}
 	if ctx.crashType == report.MemoryLeak && rep.Type != report.MemoryLeak {
 		ctx.reproLogf(2, "not a leak crash: %v", rep.Title)
-		return false, nil
+		return false, false, nil
 	}
 	if rep.Title != ctx.crashTitle {
-		ctx.reproLogf(2, "got a %#v crash, but expected %#v", rep.Title, ctx.crashTitle)
-		return false, nil
+		ctx.reproLogf(2, "got a %#v crash, but expected %#v, trying again", rep.Title, ctx.crashTitle)
+		return false, true, nil
 	}
+
 	ctx.report = rep
-	return true, nil
+	return true, false, nil
+}
+
+func (ctx *context) testWithInstance(callback func(inst *instance.ExecProgInstance) (rep *instance.RunResult,
+	err error)) (bool, error) {
+	for i := 0; i < 3; i++ {
+		ctx.wrongCrashLastTime = false
+		found, retry, err := ctx.testWithInstanceInner(callback)
+		if !retry || err != nil {
+			return found, err
+		}
+		ctx.reproLogf(2, "retrying the execution, maybe we'll trigger the right crash")
+		ctx.wrongCrashLastTime = true
+	}
+
+	return false, nil
 }
 
 func encodeEntries(entries []*prog.LogEntry) []byte {
