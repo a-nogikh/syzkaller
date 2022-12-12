@@ -100,6 +100,17 @@ type Config struct {
 	Repos []KernelRepo
 	// If not nil, bugs in this namespace will be exported to the specified Kcidb.
 	Kcidb *KcidbConfig
+	// Subsystems config.
+	Subsystems *SubsystemsConfig
+}
+
+// SubsystemsConfig describes how to generate the list of kernel subsystems and the rules of
+// bug-into-subsystem mapping.
+type SubsystemsConfig struct {
+	// From where to take the MAINTAINERS file for Linux-based OSes.
+	LinuxMaintainersFile string
+	// ReproToPaths should return extra affected source code paths given a syz repro.
+	ReproToPaths func(syzRepro string) []string
 }
 
 // ObsoletingConfig describes how bugs without reproducer should be obsoleted.
