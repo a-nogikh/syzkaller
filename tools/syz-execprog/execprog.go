@@ -73,7 +73,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	progs := loadPrograms(target, flag.Args())
+	progs, progProcs := loadPrograms(target, flag.Args())
 	if len(progs) == 0 {
 		return
 	}
@@ -113,13 +113,44 @@ func main() {
 	}
 	var wg sync.WaitGroup
 	wg.Add(*flagProcs)
+
+	anyProc := make(chan int)
+	perProc := map[int]chan int{}
+
 	for p := 0; p < *flagProcs; p++ {
 		pid := p
+		ch := make(chan int)
+		perProc[p] = ch
 		go func() {
 			defer wg.Done()
-			ctx.run(pid)
+			ctx.run(pid, ch, anyProc)
 		}()
 	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for {
+			idx := ctx.pos
+			ctx.pos++
+			if idx%len(ctx.progs) == 0 && time.Since(ctx.lastPrint) > 5*time.Second {
+				log.Logf(0, "executed programs: %v", idx)
+				ctx.lastPrint = time.Now()
+			}
+			if ctx.repeat > 0 && idx >= len(ctx.progs)*ctx.repeat {
+				close(anyProc)
+				return
+			}
+			progNum := idx % len(ctx.progs)
+			if progProcs[progNum] < 0 || progProcs[progNum] >= *flagProcs {
+				anyProc <- progNum
+			} else {
+				perProc[progProcs[progNum]] <- progNum
+			}
+		}
+	}()
+
 	osutil.HandleInterrupts(ctx.shutdown)
 	wg.Wait()
 }
@@ -137,24 +168,25 @@ type Context struct {
 	lastPrint time.Time
 }
 
-func (ctx *Context) run(pid int) {
+func (ctx *Context) run(pid int, my chan int, anyProc chan int) {
 	env, err := ipc.MakeEnv(ctx.config, pid)
 	if err != nil {
 		log.Fatalf("failed to create ipc env: %v", err)
 	}
 	defer env.Close()
 	for {
+		var progId int
+		var ok bool
 		select {
 		case <-ctx.shutdown:
 			return
-		default:
+		case progId = <-my:
+		case progId, ok = <-anyProc:
+			if !ok {
+				return
+			}
 		}
-		idx := ctx.getProgramIndex()
-		if ctx.repeat > 0 && idx >= len(ctx.progs)*ctx.repeat {
-			return
-		}
-		entry := ctx.progs[idx%len(ctx.progs)]
-		ctx.execute(pid, env, entry)
+		ctx.execute(pid, env, ctx.progs[progId])
 	}
 }
 
@@ -274,20 +306,9 @@ func (ctx *Context) dumpCoverage(coverFile string, info *ipc.ProgInfo) {
 	ctx.dumpCallCoverage(fmt.Sprintf("%v.extra", coverFile), &info.Extra)
 }
 
-func (ctx *Context) getProgramIndex() int {
-	ctx.posMu.Lock()
-	idx := ctx.pos
-	ctx.pos++
-	if idx%len(ctx.progs) == 0 && time.Since(ctx.lastPrint) > 5*time.Second {
-		log.Logf(0, "executed programs: %v", idx)
-		ctx.lastPrint = time.Now()
-	}
-	ctx.posMu.Unlock()
-	return idx
-}
-
-func loadPrograms(target *prog.Target, files []string) []*prog.Prog {
+func loadPrograms(target *prog.Target, files []string) ([]*prog.Prog, []int) {
 	var progs []*prog.Prog
+	procs := []int{}
 	for _, fn := range files {
 		if corpus, err := db.Open(fn, false); err == nil {
 			for _, rec := range corpus.Records {
@@ -296,6 +317,7 @@ func loadPrograms(target *prog.Target, files []string) []*prog.Prog {
 					continue
 				}
 				progs = append(progs, p)
+				procs = append(procs, -1)
 			}
 			continue
 		}
@@ -305,10 +327,11 @@ func loadPrograms(target *prog.Target, files []string) []*prog.Prog {
 		}
 		for _, entry := range target.ParseLog(data) {
 			progs = append(progs, entry.P)
+			procs = append(procs, entry.Proc)
 		}
 	}
 	log.Logf(0, "parsed %v programs", len(progs))
-	return progs
+	return progs, procs
 }
 
 func createConfig(target *prog.Target, features *host.Features, featuresFlags csource.Features) (
