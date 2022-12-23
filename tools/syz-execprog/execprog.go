@@ -143,10 +143,19 @@ func main() {
 				return
 			}
 			progNum := idx % len(ctx.progs)
-			if progProcs[progNum] < 0 || progProcs[progNum] >= *flagProcs {
+			progProc := progProcs[progNum]
+			const resetProc = 100
+			if progProc == resetProc {
+				for _, ch := range perProc {
+					ch <- -1
+				}
+				continue
+			}
+
+			if progProc < 0 || progProc >= *flagProcs {
 				anyProc <- progNum
 			} else {
-				perProc[progProcs[progNum]] <- progNum
+				perProc[progProc] <- progNum
 			}
 		}
 	}()
@@ -185,6 +194,9 @@ func (ctx *Context) run(pid int, my chan int, anyProc chan int) {
 			if !ok {
 				return
 			}
+		}
+		if progId < 0 {
+			continue
 		}
 		ctx.execute(pid, env, ctx.progs[progId])
 	}

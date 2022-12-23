@@ -46,6 +46,7 @@ type reproInstance struct {
 }
 
 type context struct {
+	progTarget   *prog.Target
 	target       *targets.Target
 	reporter     *report.Reporter
 	crashTitle   string
@@ -95,6 +96,7 @@ func Run(crashLog []byte, cfg *mgrconfig.Config, features *host.Features, report
 		testTimeouts = testTimeouts[2:]
 	}
 	ctx := &context{
+		progTarget:   cfg.Target,
 		target:       cfg.SysTarget,
 		reporter:     reporter,
 		crashTitle:   crashTitle,
@@ -635,7 +637,7 @@ again:
 			len(chunk), len(chunk1), len(chunk2))
 
 		ctx.reproLogf(3, "bisect: triggering crash without chunk #1")
-		progs = flatenChunks(guilty1, guilty2, chunk2)
+		progs = ctx.flatenChunks(guilty1, guilty2, chunk2)
 		crashed, err := pred(progs)
 		if err != nil {
 			return nil, err
@@ -651,7 +653,7 @@ again:
 		}
 
 		ctx.reproLogf(3, "bisect: triggering crash without chunk #2")
-		progs = flatenChunks(guilty1, guilty2, chunk1)
+		progs = ctx.flatenChunks(guilty1, guilty2, chunk1)
 		crashed, err = pred(progs)
 		if err != nil {
 			return nil, err
@@ -689,13 +691,20 @@ again:
 	return progs, nil
 }
 
-func flatenChunks(guilty1, guilty2 [][]*prog.LogEntry, chunk []*prog.LogEntry) []*prog.LogEntry {
+func (ctx *context) flatenChunks(guilty1, guilty2 [][]*prog.LogEntry, chunk []*prog.LogEntry) []*prog.LogEntry {
+	dummy := &prog.LogEntry{
+		P:    ctx.progTarget.DataMmapProg(),
+		Proc: 100,
+	}
+
 	var progs []*prog.LogEntry
 	for _, c := range guilty1 {
 		progs = append(progs, c...)
+		progs = append(progs, dummy)
 	}
 	progs = append(progs, chunk...)
 	for _, c := range guilty2 {
+		progs = append(progs, dummy)
 		progs = append(progs, c...)
 	}
 	return progs
