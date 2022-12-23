@@ -176,7 +176,7 @@ indexes:
 
 - kind: Job
   properties:
-  - name: Finished
+  - name: Started
   - name: Attempts
   - name: Created
 

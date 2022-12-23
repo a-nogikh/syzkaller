@@ -549,6 +549,7 @@ func createJobResp(c context.Context, job *Job, jobKey *db.Key) (*dashapi.JobPol
 		}
 		job.Attempts++
 		job.Started = now
+		job.LastStarted = now
 		if _, err := db.Put(c, jobKey, job); err != nil {
 			return fmt.Errorf("job %v: failed to put: %v", jobID, err)
 		}
@@ -664,6 +665,47 @@ func gatherCrashTitles(req *dashapi.JobDoneReq) []string {
 		ret = append(ret, req.CrashTitle)
 	}
 	return ret
+}
+
+// resetJobs is called by syz-ci to "unstart" previously started jobs.
+func resetJobs(c context.Context, req *dashapi.JobResetReq) error {
+	var jobs []*Job
+	keys, err := db.NewQuery("Job").
+		Filter("Finished=", time.Time{}).
+		Filter("Started>", time.Time{}).
+		GetAll(c, &jobs)
+	if err != nil {
+		return err
+	}
+	managerMap := map[string]bool{}
+	for _, name := range req.Managers {
+		managerMap[name] = true
+	}
+	for idx, job := range jobs {
+		if !managerMap[job.Manager] {
+			continue
+		}
+		jobKey := keys[idx]
+		tx := func(c context.Context) error {
+			job = new(Job)
+			if err := db.Get(c, jobKey, job); err != nil {
+				return fmt.Errorf("job %v: failed to get in tx: %v", jobKey, err)
+			}
+			if !job.Finished.IsZero() {
+				// Just in case.
+				return nil
+			}
+			job.Started = time.Time{}
+			if _, err := db.Put(c, jobKey, job); err != nil {
+				return fmt.Errorf("job %v: failed to put: %v", jobKey, err)
+			}
+			return nil
+		}
+		if err := db.RunInTransaction(c, tx, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // doneJob is called by syz-ci to mark completion of a job.
@@ -1065,7 +1107,7 @@ func (sorter *jobSorter) Swap(i, j int) {
 func loadPendingJob(c context.Context, managers map[string]dashapi.ManagerJobs) (*Job, *db.Key, error) {
 	var jobs []*Job
 	keys, err := db.NewQuery("Job").
-		Filter("Finished=", time.Time{}).
+		Filter("Started=", time.Time{}).
 		Order("Attempts").
 		Order("Created").
 		GetAll(c, &jobs)
@@ -1089,7 +1131,7 @@ func loadPendingJob(c context.Context, managers map[string]dashapi.ManagerJobs) 
 			// and protects from bisection job crashing syz-ci.
 			const bisectRepeat = 3 * 24 * time.Hour
 			if timeSince(c, job.Created) < bisectRepeat ||
-				timeSince(c, job.Started) < bisectRepeat {
+				timeSince(c, job.LastStarted) < bisectRepeat {
 				continue
 			}
 		default:

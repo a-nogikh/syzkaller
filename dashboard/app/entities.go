@@ -328,9 +328,10 @@ type Job struct {
 	Patch        int64 // reference to Patch text entity
 	KernelConfig int64 // reference to the kernel config entity
 
-	Attempts int // number of times we tried to execute this job
-	Started  time.Time
-	Finished time.Time // if set, job is finished
+	Attempts    int // number of times we tried to execute this job
+	Started     time.Time
+	LastStarted time.Time
+	Finished    time.Time // if set, job is finished
 
 	// Result of execution:
 	CrashTitle  string // if empty, we did not hit crash during testing
