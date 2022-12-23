@@ -50,6 +50,7 @@ type context struct {
 	target       *targets.Target
 	reporter     *report.Reporter
 	crashTitle   string
+	crashTitles  map[string]bool
 	crashType    report.Type
 	instances    chan *reproInstance
 	bootRequests chan int
@@ -71,7 +72,8 @@ func Run(crashLog []byte, cfg *mgrconfig.Config, features *host.Features, report
 	}
 	crashStart := len(crashLog)
 	crashTitle, crashType := "", report.Unknown
-	if rep := reporter.Parse(crashLog); rep != nil {
+	rep := reporter.Parse(crashLog)
+	if rep != nil {
 		crashStart = rep.StartPos
 		crashTitle = rep.Title
 		crashType = rep.Type
@@ -95,11 +97,19 @@ func Run(crashLog []byte, cfg *mgrconfig.Config, features *host.Features, report
 	case crashType == report.Hang:
 		testTimeouts = testTimeouts[2:]
 	}
+
+	crashTitles := map[string]bool{}
+	crashTitles[crashTitle] = true
+	for _, t := range rep.AltTitles {
+		crashTitles[t] = true
+	}
+
 	ctx := &context{
 		progTarget:   cfg.Target,
 		target:       cfg.SysTarget,
 		reporter:     reporter,
 		crashTitle:   crashTitle,
+		crashTitles:  crashTitles,
 		crashType:    crashType,
 		instances:    make(chan *reproInstance, len(vmIndexes)),
 		bootRequests: make(chan int, len(vmIndexes)),
@@ -545,6 +555,19 @@ func (ctx *context) testWithInstance(callback func(inst *instance.ExecProgInstan
 		ctx.reproLogf(2, "not a leak crash: %v", rep.Title)
 		return false, nil
 	}
+
+	any := false
+	for _, v := range append(append([]string{}, rep.AltTitles...), rep.Title) {
+		if ctx.crashTitles[v] {
+			any = true
+		}
+	}
+
+	if !any {
+		ctx.reproLogf(2, "another bug: %v", rep.Title)
+		return false, nil
+	}
+
 	ctx.report = rep
 	return true, nil
 }
