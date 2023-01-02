@@ -111,6 +111,8 @@ type Config struct {
 	Managers     []*ManagerConfig `json:"managers"`
 	// Poll period for jobs in seconds (optional, defaults to 10 seconds)
 	JobPollPeriod int `json:"job_poll_period"`
+	// These job types will be processed in the parallel job processor.
+	ParallelJobs ManagerJobs `json:"parallel_jobs"`
 	// Poll period for commits in seconds (optional, defaults to 3600 seconds)
 	CommitPollPeriod int `json:"commit_poll_period"`
 	// Asset Storage config.
@@ -181,6 +183,10 @@ type ManagerJobs struct {
 	BisectFix   bool `json:"bisect_fix"`   // do fix bisection
 }
 
+func (m *ManagerJobs) AnyTrue() bool {
+	return m.TestPatches || m.PollCommits || m.BisectCause || m.BisectFix
+}
+
 func main() {
 	flag.Parse()
 	log.EnableLogCaching(1000, 1<<20)
@@ -246,14 +252,14 @@ func main() {
 			}()
 		}
 	}
-	jp, err := newJobProcessor(cfg, managers, stop, shutdownPending)
+	jp, err := newJobManager(cfg, managers)
 	if err != nil {
 		log.Fatalf("failed to create dashapi connection %v", err)
 	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		jp.loop()
+		jp.loop(stop, shutdownPending)
 	}()
 
 	// For testing. Racy. Use with care.
@@ -393,9 +399,7 @@ func loadManagerConfig(cfg *Config, mgr *ManagerConfig) error {
 	if mgr.Branch == "" {
 		mgr.Branch = "master"
 	}
-	if (mgr.Jobs.TestPatches || mgr.Jobs.PollCommits ||
-		mgr.Jobs.BisectCause || mgr.Jobs.BisectFix) &&
-		(cfg.DashboardAddr == "" || cfg.DashboardClient == "") {
+	if mgr.Jobs.AnyTrue() && (cfg.DashboardAddr == "" || cfg.DashboardClient == "") {
 		return fmt.Errorf("manager %v: has jobs but no dashboard info", mgr.Name)
 	}
 	if mgr.Jobs.PollCommits && (cfg.DashboardAddr == "" || mgr.DashboardClient == "") {

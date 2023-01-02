@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/syzkaller/dashboard/dashapi"
@@ -26,68 +27,124 @@ import (
 	"github.com/google/syzkaller/vm"
 )
 
+type JobManager struct {
+	cfg      *Config
+	dash     *dashapi.Dashboard
+	managers []*Manager
+}
+
 type JobProcessor struct {
 	cfg             *Config
 	name            string
 	managers        []*Manager
 	knownCommits    map[string]bool
-	stop            chan struct{}
-	shutdownPending chan struct{}
 	dash            *dashapi.Dashboard
-	syzkallerRepo   string
-	syzkallerBranch string
+	baseDir         string
+	jobFilter       *ManagerJobs
+	jobTicker       <-chan time.Time
+	commitTicker    <-chan time.Time
+	shutdownPending <-chan struct{}
 }
 
-func newJobProcessor(cfg *Config, managers []*Manager, stop, shutdownPending chan struct{}) (*JobProcessor, error) {
+func newJobManager(cfg *Config, managers []*Manager) (*JobManager, error) {
 	dash, err := dashapi.New(cfg.DashboardClient, cfg.DashboardAddr, cfg.DashboardKey)
 	if err != nil {
 		return nil, err
 	}
-	return &JobProcessor{
-		cfg:             cfg,
-		name:            fmt.Sprintf("%v-job", cfg.Name),
-		managers:        managers,
-		knownCommits:    make(map[string]bool),
-		stop:            stop,
-		shutdownPending: shutdownPending,
-		dash:            dash,
-		syzkallerRepo:   cfg.SyzkallerRepo,
-		syzkallerBranch: cfg.SyzkallerBranch,
+	return &JobManager{
+		cfg:      cfg,
+		dash:     dash,
+		managers: managers,
 	}, nil
 }
 
-func (jp *JobProcessor) loop() {
-	jobTicker := time.NewTicker(time.Duration(jp.cfg.JobPollPeriod) * time.Second)
-	commitTicker := time.NewTicker(time.Duration(jp.cfg.CommitPollPeriod) * time.Second)
-	defer jobTicker.Stop()
+func (jm *JobManager) loop(stop, shutdownPending chan struct{}) {
+	if err := jm.resetJobs(); err != nil {
+		if jm.dash != nil {
+			jm.dash.LogError("syz-ci", "reset jobs failed: %v", err)
+		}
+		return
+	}
+	commitTicker := time.NewTicker(time.Duration(jm.cfg.CommitPollPeriod) * time.Second)
 	defer commitTicker.Stop()
+	jobTicker := time.NewTicker(time.Duration(jm.cfg.JobPollPeriod) * time.Second)
+	defer jobTicker.Stop()
+	var wg sync.WaitGroup
+	for parallel := false; ; parallel = true {
+		jp := &JobProcessor{
+			cfg:          jm.cfg,
+			name:         fmt.Sprintf("%v-job", jm.cfg.Name),
+			managers:     jm.managers,
+			commitTicker: commitTicker.C,
+			jobTicker:    jobTicker.C,
+			baseDir:      osutil.Abs("jobs"),
+			// TODO: share it between processors.
+			knownCommits:    make(map[string]bool),
+			dash:            jm.dash,
+			shutdownPending: shutdownPending,
+		}
+		if parallel {
+			jp.jobFilter = &jm.cfg.ParallelJobs
+			jp.name = fmt.Sprintf("%s-parallel", jp.name)
+			jp.baseDir = osutil.Abs("jobs-2")
+			if !jm.cfg.ParallelJobs.PollCommits {
+				// Commit polling is disabled for parallel jobs.
+				jp.commitTicker = make(chan time.Time)
+			}
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			jp.loop(stop, shutdownPending)
+		}()
+		if parallel == jm.cfg.ParallelJobs.AnyTrue() {
+			break
+		}
+	}
+	wg.Wait()
+}
+
+func (jm *JobManager) resetJobs() error {
+	managerNames := []string{}
+	for _, mgr := range jm.managers {
+		if mgr.mgrcfg.Jobs.AnyTrue() {
+			managerNames = append(managerNames, mgr.name)
+		}
+	}
+	if len(managerNames) > 0 {
+		return jm.dash.JobReset(&dashapi.JobResetReq{Managers: managerNames})
+	}
+	return nil
+}
+
+func (jp *JobProcessor) loop(stop, shutdownPending chan struct{}) {
 loop:
 	for {
 		// Check jp.stop separately first, otherwise if stop signal arrives during a job execution,
 		// we can still grab the next job with 50% probability.
 		select {
-		case <-jp.stop:
+		case <-stop:
 			break loop
 		default:
 		}
 		// Similar for commit polling: if we grab 2-3 bisect jobs in a row,
 		// it can delay commit polling by days.
 		select {
-		case <-commitTicker.C:
+		case <-jp.commitTicker:
 			jp.pollCommits()
 		default:
 		}
 		select {
-		case <-jobTicker.C:
+		case <-jp.jobTicker:
 			if len(buildSem) != 0 {
 				// If normal kernel build is in progress (usually on start), don't query jobs.
 				// Otherwise we claim a job, but can't start it for a while.
 				continue loop
 			}
 			jp.pollJobs()
-		case <-commitTicker.C:
+		case <-jp.commitTicker:
 			jp.pollCommits()
-		case <-jp.stop:
+		case <-stop:
 			break loop
 		}
 	}
@@ -174,7 +231,7 @@ func (jp *JobProcessor) pollManagerCommits(mgr *Manager) error {
 }
 
 func (jp *JobProcessor) pollRepo(mgr *Manager, URL, branch, reportEmail string) ([]*vcs.Commit, error) {
-	dir := osutil.Abs(filepath.Join("jobs", mgr.managercfg.TargetOS, "kernel"))
+	dir := filepath.Join(jp.baseDir, mgr.managercfg.TargetOS, "kernel")
 	repo, err := vcs.NewRepo(mgr.managercfg.TargetOS, mgr.managercfg.Type, dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kernel repo: %v", err)
@@ -186,7 +243,7 @@ func (jp *JobProcessor) pollRepo(mgr *Manager, URL, branch, reportEmail string) 
 }
 
 func (jp *JobProcessor) getCommitInfo(mgr *Manager, URL, branch string, commits []string) ([]*vcs.Commit, error) {
-	dir := osutil.Abs(filepath.Join("jobs", mgr.managercfg.TargetOS, "kernel"))
+	dir := filepath.Join(jp.baseDir, mgr.managercfg.TargetOS, "kernel")
 	repo, err := vcs.NewRepo(mgr.managercfg.TargetOS, mgr.managercfg.Type, dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kernel repo: %v", err)
@@ -208,16 +265,19 @@ func (jp *JobProcessor) pollJobs() {
 	poll := &dashapi.JobPollReq{
 		Managers: make(map[string]dashapi.ManagerJobs),
 	}
+	allTrue := ManagerJobs{TestPatches: true, BisectCause: true, BisectFix: true}
 	for _, mgr := range jp.managers {
-		if !mgr.mgrcfg.Jobs.TestPatches &&
-			!mgr.mgrcfg.Jobs.BisectCause &&
-			!mgr.mgrcfg.Jobs.BisectFix {
-			continue
+		jobFilter := allTrue
+		if jp.jobFilter != nil {
+			jobFilter = *jp.jobFilter
 		}
-		poll.Managers[mgr.name] = dashapi.ManagerJobs{
-			TestPatches: mgr.mgrcfg.Jobs.TestPatches,
-			BisectCause: mgr.mgrcfg.Jobs.BisectCause,
-			BisectFix:   mgr.mgrcfg.Jobs.BisectFix,
+		jobs := dashapi.ManagerJobs{
+			TestPatches: mgr.mgrcfg.Jobs.TestPatches && jobFilter.TestPatches,
+			BisectCause: mgr.mgrcfg.Jobs.BisectCause && jobFilter.BisectCause,
+			BisectFix:   mgr.mgrcfg.Jobs.BisectFix && jobFilter.BisectFix,
+		}
+		if jobs.TestPatches || jobs.BisectCause || jobs.BisectFix {
+			poll.Managers[mgr.name] = jobs
 		}
 	}
 	if len(poll.Managers) == 0 {
@@ -280,7 +340,7 @@ type Job struct {
 func (jp *JobProcessor) process(job *Job) *dashapi.JobDoneReq {
 	req, mgr := job.req, job.mgr
 
-	dir := osutil.Abs(filepath.Join("jobs", mgr.managercfg.TargetOS))
+	dir := filepath.Join(jp.baseDir, mgr.managercfg.TargetOS)
 	mgrcfg := new(mgrconfig.Config)
 	*mgrcfg = *mgr.managercfg
 	mgrcfg.Workdir = filepath.Join(dir, "workdir")
@@ -423,7 +483,7 @@ func (jp *JobProcessor) bisect(job *Job, mgrcfg *mgrconfig.Config) error {
 			Userspace:      mgr.mgrcfg.Userspace,
 		},
 		Syzkaller: bisect.SyzkallerConfig{
-			Repo:   jp.syzkallerRepo,
+			Repo:   jp.cfg.SyzkallerRepo,
 			Commit: req.SyzkallerCommit,
 		},
 		Repro: bisect.ReproConfig{
@@ -497,7 +557,7 @@ func (jp *JobProcessor) testPatch(job *Job, mgrcfg *mgrconfig.Config) error {
 		return err
 	}
 	log.Logf(0, "job: building syzkaller on %v...", req.SyzkallerCommit)
-	syzBuildLog, syzBuildErr := env.BuildSyzkaller(jp.syzkallerRepo, req.SyzkallerCommit)
+	syzBuildLog, syzBuildErr := env.BuildSyzkaller(jp.cfg.SyzkallerRepo, req.SyzkallerCommit)
 	if syzBuildErr != nil {
 		return syzBuildErr
 	}
