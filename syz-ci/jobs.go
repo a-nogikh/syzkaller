@@ -37,7 +37,7 @@ type JobProcessor struct {
 	cfg             *Config
 	name            string
 	managers        []*Manager
-	knownCommits    map[string]bool
+	knownCommits    *knownCommitsSet
 	dash            *dashapi.Dashboard
 	baseDir         string
 	jobFilter       *ManagerJobs
@@ -69,17 +69,17 @@ func (jm *JobManager) loop(stop, shutdownPending chan struct{}) {
 	defer commitTicker.Stop()
 	jobTicker := time.NewTicker(time.Duration(jm.cfg.JobPollPeriod) * time.Second)
 	defer jobTicker.Stop()
+	knownCommits := &knownCommitsSet{set: map[string]bool{}}
 	var wg sync.WaitGroup
 	for parallel := false; ; parallel = true {
 		jp := &JobProcessor{
-			cfg:          jm.cfg,
-			name:         fmt.Sprintf("%v-job", jm.cfg.Name),
-			managers:     jm.managers,
-			commitTicker: commitTicker.C,
-			jobTicker:    jobTicker.C,
-			baseDir:      osutil.Abs("jobs"),
-			// TODO: share it between processors.
-			knownCommits:    make(map[string]bool),
+			cfg:             jm.cfg,
+			name:            fmt.Sprintf("%v-job", jm.cfg.Name),
+			managers:        jm.managers,
+			commitTicker:    commitTicker.C,
+			jobTicker:       jobTicker.C,
+			baseDir:         osutil.Abs("jobs"),
+			knownCommits:    knownCommits,
 			dash:            jm.dash,
 			shutdownPending: shutdownPending,
 		}
@@ -195,9 +195,10 @@ func (jp *JobProcessor) pollManagerCommits(mgr *Manager) error {
 					com.Hash = ""
 				}
 				// Not overwrite existing commits, in particular commit from the main repo with hash.
-				if _, ok := commits[com.Title]; !ok && !jp.knownCommits[com.Title] && len(commits) < 100 {
+				if _, ok := commits[com.Title]; !ok && !jp.knownCommits.exists(com.Title) &&
+					len(commits) < 100 {
 					commits[com.Title] = com
-					jp.knownCommits[com.Title] = true
+					jp.knownCommits.add(com.Title)
 				}
 			}
 		}
@@ -690,4 +691,21 @@ func (jp *JobProcessor) Errorf(msg string, args ...interface{}) {
 	if jp.dash != nil {
 		jp.dash.LogError(jp.name, msg, args...)
 	}
+}
+
+type knownCommitsSet struct {
+	set map[string]bool
+	m   sync.Mutex
+}
+
+func (s *knownCommitsSet) add(key string) {
+	s.m.Lock()
+	defer s.m.Unlock()
+	s.set[key] = true
+}
+
+func (s *knownCommitsSet) exists(key string) bool {
+	s.m.Lock()
+	defer s.m.Unlock()
+	return s.set[key]
 }
