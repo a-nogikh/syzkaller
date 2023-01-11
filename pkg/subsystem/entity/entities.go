@@ -3,9 +3,21 @@
 
 package entity
 
+type Subsystem struct {
+	Name        string
+	PathRules   []PathRule
+	Syscalls    []string
+	Lists       []string
+	Maintainers []string
+}
+
 // PathRule describes the part of the directory tree belonging to a single subsystem.
 type PathRule struct {
 	IncludeRegexp string
 	// ExcludeRegexps are tested before IncludeRegexp.
 	ExcludeRegexp string
+}
+
+func (pr *PathRule) IsEmpty() bool {
+	return pr.IncludeRegexp == "" && pr.ExcludeRegexp == ""
 }
