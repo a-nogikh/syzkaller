@@ -7,7 +7,11 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"path/filepath"
+	"regexp"
 	"strings"
+
+	"github.com/google/syzkaller/pkg/subsystem/entity"
 )
 
 // maintainersRecord represents a single raw record in the MAINTAINERS file.
@@ -119,4 +123,66 @@ func unwrapBrackets(value string) (string, error) {
 		return value[:pos], nil
 	}
 	return value, nil
+}
+
+func (r maintainersRecord) ToPathRule() entity.PathRule {
+	inclRe := strings.Builder{}
+	for i, wildcard := range r.includePatterns {
+		if i > 0 {
+			inclRe.WriteByte('|')
+		}
+		wildcardToRegexp(wildcard, &inclRe)
+	}
+	for _, rg := range r.regexps {
+		if inclRe.Len() > 0 {
+			inclRe.WriteByte('|')
+		}
+		inclRe.WriteString(rg)
+	}
+	exclRe := strings.Builder{}
+	for i, wildcard := range r.excludePatterns {
+		if i > 0 {
+			exclRe.WriteByte('|')
+		}
+		wildcardToRegexp(wildcard, &exclRe)
+	}
+	return entity.PathRule{
+		IncludeRegexp: inclRe.String(),
+		ExcludeRegexp: exclRe.String(),
+	}
+}
+
+var (
+	escapedSeparator = regexp.QuoteMeta(fmt.Sprintf("%c", filepath.Separator))
+	wildcardReplace  = map[byte]string{
+		'*': `(?:[^` + escapedSeparator + `]*)`,
+		'?': `(?:.)`,
+		'/': escapedSeparator,
+	}
+)
+
+func wildcardToRegexp(wildcard string, store *strings.Builder) {
+	store.WriteByte('^')
+	tokenStart := 0
+	for i, c := range wildcard {
+		replace, exists := wildcardReplace[byte(c)]
+		if !exists {
+			continue
+		}
+		store.WriteString(regexp.QuoteMeta(wildcard[tokenStart:i]))
+		tokenStart = i + 1
+		if c == '/' && i == len(wildcard)-1 {
+			// The pattern ends with /, which means we need to also match
+			// the whole subtree.
+			store.WriteString(
+				`(?:` + escapedSeparator + `.*)?`,
+			)
+		} else {
+			store.WriteString(replace)
+		}
+	}
+	if tokenStart < len(wildcard) {
+		store.WriteString(regexp.QuoteMeta(wildcard[tokenStart:]))
+	}
+	store.WriteByte('$')
 }
