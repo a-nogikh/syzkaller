@@ -6,9 +6,12 @@ package testutil
 import (
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/google/syzkaller/pkg/osutil"
 )
 
 func IterCount() int {
@@ -40,4 +43,25 @@ func RandMountImage(r *rand.Rand) []byte {
 	slice := make([]byte, len)
 	r.Read(slice)
 	return slice
+}
+
+// DirectoryLayout creates a layout specified by the paths slice.
+// If a path ends with a filepath.Separator, then a directory is created.
+// Otherwise, DirectoryLayout creates an empty file.
+func DirectoryLayout(t *testing.T, base string, paths []string) {
+	for _, path := range paths {
+		path = filepath.Join(base, filepath.FromSlash(path))
+		dir := filepath.Dir(path)
+		// Create the directory.
+		err := osutil.MkdirAll(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if path != "" && path[len(path)-1] != filepath.Separator {
+			err = osutil.WriteFile(path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }
