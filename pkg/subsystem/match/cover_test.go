@@ -4,26 +4,23 @@
 package match
 
 import (
-	"path/filepath"
 	"testing"
 
-	"github.com/google/syzkaller/pkg/osutil"
+	"github.com/google/syzkaller/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestPathCoverQueryPath(t *testing.T) {
 	dir := t.TempDir()
 	// Create some dir hierarchy.
-	err := setupDirLayout(dir, []string{
+
+	testutil.DirectoryLayout(t, dir, []string{
 		"/a/b/c.c",
 		"/a/b/d.c",
 		"/a/d/y.out",
 		"/b/",
 		"/c.h",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	subsystemA, subsystemB, subsystemC := "A", "B", "C"
 	matcher := func(path string) []interface{} {
@@ -48,22 +45,4 @@ func TestPathCoverQueryPath(t *testing.T) {
 	assert.ElementsMatch(t, cover.queryPath("a/b/d.c"), []interface{}{subsystemC})
 	assert.ElementsMatch(t, cover.queryPath("a/d/y.out"), []interface{}{})
 	assert.ElementsMatch(t, cover.queryPath("c.h"), []interface{}{subsystemB})
-}
-func setupDirLayout(base string, paths []string) error {
-	for _, path := range paths {
-		path = filepath.Join(base, filepath.FromSlash(path))
-		dir := filepath.Dir(path)
-		// Create the directory.
-		err := osutil.MkdirAll(dir)
-		if err != nil {
-			return err
-		}
-		if path != "" && path[len(path)-1] != filepath.Separator {
-			err = osutil.WriteFile(path, nil)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
