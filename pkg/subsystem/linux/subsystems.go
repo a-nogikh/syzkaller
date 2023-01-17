@@ -82,12 +82,33 @@ func (ctx *linuxCtx) groupByList() []*subsystemCandidate {
 
 func (ctx *linuxCtx) getSubsystems() ([]*entity.Subsystem, error) {
 	ret := []*entity.Subsystem{}
+	setNames := []*setNameRequest{}
 	for _, raw := range ctx.groupByList() {
 		s := &entity.Subsystem{}
 		mergeRawRecords(s, raw.records)
 		ret = append(ret, s)
+		// Generate a name request.
+		setNames = append(setNames, &setNameRequest{
+			subsystem:      s,
+			referenceEmail: raw.commonEmail,
+		})
+	}
+	if err := setSubsystemNames(setNames); err != nil {
+		return nil, fmt.Errorf("failed to set names: %w", err)
+	}
+	if err := anyEmptyNames(ret); err != nil {
+		return nil, err
 	}
 	return ret, nil
+}
+
+func anyEmptyNames(list []*entity.Subsystem) error {
+	for _, entry := range list {
+		if entry.Name == "" {
+			return fmt.Errorf("unable to find name for: %#v", entry)
+		}
+	}
+	return nil
 }
 
 func mergeRawRecords(subsystem *entity.Subsystem, records []*maintainersRecord) {
@@ -100,6 +121,7 @@ func mergeRawRecords(subsystem *entity.Subsystem, records []*maintainersRecord) 
 		for s := range m {
 			ret = append(ret, s)
 		}
+		sort.Strings(ret)
 		return ret
 	}
 	var lists, maintainers []string
