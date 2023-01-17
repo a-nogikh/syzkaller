@@ -73,15 +73,20 @@ func TestGroupLinuxSubsystems(t *testing.T) {
 	}
 	expected := []*entity.Subsystem{
 		{
+			// Without the rules it would have the "fs" name.
+			Name:  "fs",
 			Lists: []string{"linux-fsdevel@vger.kernel.org"},
 		},
 		{
+			Name:  "ext4",
 			Lists: []string{"linux-ext4@vger.kernel.org"},
 		},
 		{
+			Name:  "mm",
 			Lists: []string{"linux-mm@kvack.org"},
 		},
 		{
+			Name:  "kernel",
 			Lists: []string{"linux-kernel@vger.kernel.org"},
 		},
 	}
@@ -121,9 +126,11 @@ func TestLinuxSubsystemsList(t *testing.T) {
 			Lists: []string{"linux-fsdevel@vger.kernel.org"},
 		},
 		{
+			Name:  "mm",
 			Lists: []string{"linux-mm@kvack.org"},
 		},
 		{
+			Name:  "kernel",
 			Lists: []string{"linux-kernel@vger.kernel.org"},
 		},
 	}
