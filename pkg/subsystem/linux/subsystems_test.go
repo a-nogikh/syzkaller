@@ -76,7 +76,7 @@ func TestLinuxSubsystemPaths(t *testing.T) {
 	// For the list of subsystems, see TestLinuxSubsystemsList.
 	// Here we rely on the same ones.
 	repo := prepareTestLinuxRepo(t, []byte(testMaintainers))
-	subsystems, err := listFromRepoInner(repo, testRules)
+	subsystems, err := listFromRepoInner(repo, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +113,7 @@ func TestLinuxSubsystemPaths(t *testing.T) {
 			list: []string{"kernel", "mm"},
 		},
 		{
+			// Shmem has no mailing list.
 			path: `mm/shmem.c`,
 			list: []string{"kernel", "mm"},
 		},
