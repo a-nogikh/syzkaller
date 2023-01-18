@@ -4,6 +4,7 @@
 package match
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/google/syzkaller/pkg/testutil"
@@ -42,6 +43,42 @@ func TestPathCoverQuerySubtree(t *testing.T) {
 	matchMapKeys(t, cover.QuerySubtree("b"), []interface{}{})
 	matchMapKeys(t, cover.QuerySubtree("c"), []interface{}{subsystemC})
 	matchMapKeys(t, cover.QuerySubtree(""), []interface{}{subsystemA, subsystemB, subsystemC})
+}
+
+func TestPathCoverCoincidence(t *testing.T) {
+	dir := t.TempDir()
+	// Create some dir hierarchy.
+	testutil.DirectoryLayout(t, dir, []string{
+		"a",
+		"ab",
+		"b",
+	})
+
+	subsystemA, subsystemB := "A", "B"
+	matcher := func(path string) []interface{} {
+		m := map[string][]interface{}{
+			"a":  {subsystemA},
+			"ab": {subsystemA, subsystemB},
+			"b":  {subsystemB},
+		}
+		return m[path]
+	}
+
+	// Construct the cover object.
+	cover, err := BuildPathCover(dir, matcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cm := cover.CoincidenceMatrix(nil)
+	assert.Equal(t, 2, cm.Count(subsystemA))
+	assert.Equal(t, 2, cm.Count(subsystemB))
+	assert.Equal(t, 1, cm.Get(subsystemA, subsystemB))
+
+	cm = cover.CoincidenceMatrix(regexp.MustCompile("^ab$"))
+	assert.Equal(t, 1, cm.Count(subsystemA))
+	assert.Equal(t, 1, cm.Count(subsystemB))
+	assert.Equal(t, 0, cm.Get(subsystemA, subsystemB))
 }
 
 func matchMapKeys(t *testing.T, m map[interface{}]struct{}, expected []interface{}) {
