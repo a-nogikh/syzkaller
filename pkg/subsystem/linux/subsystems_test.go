@@ -28,9 +28,11 @@ func TestLinuxSubsystemRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The regexps used for matching rules may change later, so let's not compare them here.
 	for _, s := range subsystems {
+		// The regexps used for matching rules may change later, so let's not compare them here.
 		s.PathRules = nil
+		// It complicates the test, so let's skip it here.
+		s.Parents = nil
 	}
 	expected := []*entity.Subsystem{
 		{
@@ -68,9 +70,11 @@ func TestGroupLinuxSubsystems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The regexps used for matching rules may change later, so let's not compare them here.
 	for _, s := range subsystems {
+		// The regexps used for matching rules may change later, so let's not compare them here.
 		s.PathRules = nil
+		// It complicates the test, so let's skip it here.
+		s.Parents = nil
 	}
 	expected := []*entity.Subsystem{
 		{
@@ -100,9 +104,11 @@ func TestLinuxSubsystemsList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The regexps used for matching rules may change later, so let's not compare them here.
 	for _, s := range subsystems {
+		// The regexps used for matching rules may change later, so let's not compare them here.
 		s.PathRules = nil
+		// It complicates the test, so let's skip it here.
+		s.Parents = nil
 	}
 	expected := []*entity.Subsystem{
 		{
@@ -203,6 +209,32 @@ func TestLinuxSubsystemPaths(t *testing.T) {
 		}
 		assert.ElementsMatchf(t, retList, test.list,
 			"invalid subsystems for %#v", test.path)
+	}
+}
+
+func TestLinuxSubsystemParents(t *testing.T) {
+	// For the list of subsystems, see TestLinuxSubsystemsList.
+	// Here we rely on the same ones.
+	repo := prepareTestLinuxRepo(t, []byte(testMaintainers))
+	subsystems, err := listFromRepoInner(repo, testRules)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectParents := map[string][]string{
+		"ext4":     {"kernel"},
+		"mm":       {"kernel"},
+		"vfs":      {"kernel"},
+		"tmpfs":    {"mm"},
+		"freevxfs": {"kernel"},
+	}
+	for _, s := range subsystems {
+		names := []string{}
+		for _, p := range s.Parents {
+			names = append(names, p.Name)
+		}
+		assert.ElementsMatch(t, names, expectParents[s.Name],
+			"wrong parents for %#v", s.Name)
 	}
 }
 
