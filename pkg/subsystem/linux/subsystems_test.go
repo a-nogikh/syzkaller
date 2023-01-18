@@ -21,9 +21,11 @@ func TestGroupLinuxSubsystems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The regexps used for matching rules may change later, so let's not compare them here.
 	for _, s := range subsystems {
+		// The regexps used for matching rules may change later, so let's not compare them here.
 		s.PathRules = nil
+		// It complicates the test, so let's skip it here.
+		s.Parents = nil
 	}
 	expected := []*entity.Subsystem{
 		{
@@ -39,6 +41,11 @@ func TestGroupLinuxSubsystems(t *testing.T) {
 		{
 			Name:  "mm",
 			Lists: []string{"linux-mm@kvack.org"},
+		},
+		{
+			Name:        "tmpfs",
+			Lists:       []string{"tmpfs@kvack.org"},
+			Maintainers: []string{"email_shmem@email.com"},
 		},
 		{
 			Name:        "kernel",
@@ -58,7 +65,8 @@ func TestCustomCallRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectCalls := map[string][]string{
-		"ext4": []string{"syz_mount_image$ext4"},
+		"ext4":  {"syz_mount_image$ext4"},
+		"tmpfs": {"syz_mount_image$tmpfs"},
 	}
 	gotCalls := map[string][]string{}
 	for _, s := range subsystems {
@@ -113,9 +121,8 @@ func TestLinuxSubsystemPaths(t *testing.T) {
 			list: []string{"kernel", "mm"},
 		},
 		{
-			// Shmem has no mailing list.
 			path: `mm/shmem.c`,
-			list: []string{"kernel", "mm"},
+			list: []string{"kernel", "mm", "tmpfs"},
 		},
 		{
 			path: `include/net/ah.h`,
@@ -138,6 +145,32 @@ func TestLinuxSubsystemPaths(t *testing.T) {
 		}
 		assert.ElementsMatchf(t, retList, test.list,
 			"invalid subsystems for %#v", test.path)
+	}
+}
+
+func TestLinuxSubsystemParents(t *testing.T) {
+	// For the list of subsystems, see TestLinuxSubsystemsList.
+	// Here we rely on the same ones.
+	repo := prepareTestLinuxRepo(t, []byte(testMaintainers))
+	subsystems, err := listFromRepoInner(repo, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectParents := map[string][]string{
+		"ext4":     {"fs"},
+		"mm":       {"kernel"},
+		"fs":       {"kernel"},
+		"tmpfs":    {"mm"},
+		"freevxfs": {"fs"},
+	}
+	for _, s := range subsystems {
+		names := []string{}
+		for _, p := range s.Parents {
+			names = append(names, p.Name)
+		}
+		assert.ElementsMatch(t, names, expectParents[s.Name],
+			"wrong parents for %#v", s.Name)
 	}
 }
 
@@ -165,9 +198,9 @@ func prepareTestLinuxRepo(t *testing.T, maintainers []byte) string {
 var (
 	testRules = &customRules{
 		subsystemCalls: map[string][]string{
-			"ext4":  []string{"syz_mount_image$ext4"},
-			"vxfs":  []string{"syz_mount_image$vxfs"},
-			"tmpfs": []string{"syz_mount_image$tmpfs"},
+			"ext4":  {"syz_mount_image$ext4"},
+			"vxfs":  {"syz_mount_image$vxfs"},
+			"tmpfs": {"syz_mount_image$tmpfs"},
 		},
 	}
 	testMaintainers = `
@@ -225,7 +258,7 @@ F:	tools/testing/selftests/vm/
 
 TMPFS (SHMEM FILESYSTEM)
 M:	Developer <email_shmem@email.com>
-L:	linux-mm@kvack.org
+L:	tmpfs@kvack.org
 S:	Maintained
 F:	include/linux/shmem_fs.h
 F:	mm/shmem.c
