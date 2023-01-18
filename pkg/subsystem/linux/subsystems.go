@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/syzkaller/pkg/subsystem/entity"
 	"github.com/google/syzkaller/pkg/subsystem/match"
@@ -83,8 +84,50 @@ func (ctx *linuxCtx) applyCustomRules(rules []linuxSubsystemRule) error {
 	return nil
 }
 
+func (ctx *linuxCtx) ignoreLists() map[string]bool {
+	// Some mailing lists are less important for clusterization, because they always
+	// coincide with some other mailing list.
+	// If the lists fully overlap, we just pick the alphabetically first one.
+	cm := match.MakeCoincidenceMatrix()
+	for _, record := range ctx.rawRecords {
+		items := []interface{}{}
+		for _, email := range record.lists {
+			items = append(items, email)
+		}
+		cm.Record(items...)
+	}
+
+	// .. and, as usual, nothing works exactly as intended. There are several super
+	// generic mailing lists, which enclose just too many others.
+	canOverlap := map[string]bool{
+		"linux-kernel@vger.kernel.org":   true,
+		"linux-media@vger.kernel.org":    true,
+		"netdev@vger.kernel.org":         true,
+		"linux-wireless@vger.kernel.org": true,
+	}
+
+	ignore := map[string]bool{}
+	cm.NonEmptyPairs(func(anyA, anyB interface{}, count int) {
+		a, b := anyA.(string), anyB.(string)
+
+		// If M[A][B] == M[A][A], then A always coincides with B.
+		// If, at the same time, M[A][B] == M[B][B], then we
+		// eliminate A and keep B if A > B.
+		if count == cm.Count(a) {
+			if count == cm.Count(b) &&
+				strings.ToLower(a) < strings.ToLower(b) {
+				return
+			}
+			if canOverlap[b] {
+				return
+			}
+			ignore[a] = true
+		}
+	})
+	return ignore
+}
+
 func (ctx *linuxCtx) groupByList() {
-	// TODO: some groups may 100% overlap. Remove such duplicates.
 	perList := make(map[string][]*maintainersRecord)
 	exclude := make(map[*maintainersRecord]struct{})
 	for _, record := range ctx.rawRecords {
@@ -95,7 +138,11 @@ func (ctx *linuxCtx) groupByList() {
 			exclude[record] = struct{}{}
 		}
 	}
+	ignore := ctx.ignoreLists()
 	for email, list := range perList {
+		if ignore[email] {
+			continue
+		}
 		ctx.subsystems = append(ctx.subsystems, &subsystemCandidate{
 			commonEmail: email,
 			records:     list,
@@ -115,6 +162,10 @@ func (ctx *linuxCtx) getSubsystems() ([]*entity.Subsystem, error) {
 			s.Syscalls = raw.rule.syscalls
 		}
 		raw.mergeRawRecords(s)
+		// Skip empty subsystems.
+		if len(s.Syscalls)+len(s.PathRules) == 0 {
+			continue
+		}
 		ret = append(ret, s)
 		// Generate a name request.
 		setNames = append(setNames, &setNameRequest{
