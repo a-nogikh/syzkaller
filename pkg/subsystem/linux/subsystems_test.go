@@ -321,6 +321,12 @@ S:	Maintained
 F:	include/linux/shmem_fs.h
 F:	mm/shmem.c
 
+SOME MM SUBSYSTEM WITH A DUPLICATE LIST
+L:	linux-mm@kvack.org
+L:	unknown-list@gmail.com
+S:	Maintained
+F:	include/abcd.h
+
 THE REST
 M:	Developer <email_rest@email.com>
 L:	linux-kernel@vger.kernel.org
