@@ -85,7 +85,7 @@ func (ctx *linuxCtx) getSubsystems() ([]*entity.Subsystem, error) {
 	setNames := []*setNameRequest{}
 	for _, raw := range ctx.groupByList() {
 		s := &entity.Subsystem{}
-		mergeRawRecords(s, raw.records)
+		raw.mergeRawRecords(s)
 		ret = append(ret, s)
 		// Generate a name request.
 		setNames = append(setNames, &setNameRequest{
@@ -121,7 +121,7 @@ func anyEmptyNames(list []*entity.Subsystem) error {
 	return nil
 }
 
-func mergeRawRecords(subsystem *entity.Subsystem, records []*maintainersRecord) {
+func (candidate *subsystemCandidate) mergeRawRecords(subsystem *entity.Subsystem) {
 	unique := func(list []string) []string {
 		m := make(map[string]struct{})
 		for _, s := range list {
@@ -134,17 +134,20 @@ func mergeRawRecords(subsystem *entity.Subsystem, records []*maintainersRecord) 
 		sort.Strings(ret)
 		return ret
 	}
-	var lists, maintainers []string
-	for _, record := range records {
+	var maintainers []string
+	for _, record := range candidate.records {
 		rule := record.ToPathRule()
 		if !rule.IsEmpty() {
 			subsystem.PathRules = append(subsystem.PathRules, rule)
 		}
-		lists = append(lists, record.lists...)
 		maintainers = append(maintainers, record.maintainers...)
 	}
-	subsystem.Lists = unique(lists)
-	// But there's a risk that we collect too many unrelated maintainers, so
+	if candidate.commonEmail != "" {
+		// For list-grouped subsystems, we risk merging just too many lists.
+		// Keep the list short in this case.
+		subsystem.Lists = []string{candidate.commonEmail}
+	}
+	// There's a risk that we collect too many unrelated maintainers, so
 	// let's only merge them if there are no lists.
 	if len(records) <= 1 {
 		subsystem.Maintainers = unique(maintainers)
