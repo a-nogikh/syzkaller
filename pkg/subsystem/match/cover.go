@@ -101,6 +101,23 @@ func (pc *PathCover) QueryPath(path string) []interface{} {
 	return info.list
 }
 
+func (pc *PathCover) CoincidenceMatrix(ignorePaths *regexp.Regexp) *CoincidenceMatrix {
+	cm := MakeCoincidenceMatrix()
+	paths := make(chan string)
+	go func() {
+		for loopPath := range pc.perPath {
+			if ignorePaths == nil || !ignorePaths.MatchString(loopPath) {
+				paths <- loopPath
+			}
+		}
+		close(paths)
+	}()
+	for items := range pc.queryPaths(paths) {
+		cm.Record(items...)
+	}
+	return cm
+}
+
 func (pc *PathCover) queryPaths(input <-chan string) <-chan []interface{} {
 	procs := runtime.NumCPU()
 	output := make(chan []interface{}, procs)

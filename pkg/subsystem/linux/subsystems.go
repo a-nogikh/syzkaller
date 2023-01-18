@@ -177,7 +177,26 @@ func (ctx *linuxCtx) getSubsystems() ([]*entity.Subsystem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to set names: %w", err)
 	}
+	cover, err := ctx.subsystemsCover(ret)
+	if err != nil {
+		return nil, err
+	}
+	err = SetParents(cover, ret)
+	if err != nil {
+		return nil, err
+	}
 	return ret, nil
+}
+
+func (ctx *linuxCtx) subsystemsCover(subsystems []*entity.Subsystem) (*match.PathCover, error) {
+	matcher := match.MakePathMatcher()
+	for _, s := range subsystems {
+		err := matcher.Register(s, s.PathRules...)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return match.BuildPathCover(ctx.repo, matcher.Match)
 }
 
 func (ctx *linuxCtx) removeRecords(exclude map[*maintainersRecord]struct{}) {
