@@ -119,7 +119,7 @@ func (ctx *linuxCtx) getSubsystems() ([]*entity.Subsystem, error) {
 			s.Name = raw.rule.name
 			s.Syscalls = raw.rule.syscalls
 		}
-		mergeRawRecords(s, raw.records)
+		raw.mergeRawRecords(s)
 		ret = append(ret, s)
 		// Generate a name request.
 		setNames = append(setNames, &setNameRequest{
@@ -145,7 +145,7 @@ func (ctx *linuxCtx) removeRecords(exclude map[*maintainersRecord]struct{}) {
 	ctx.rawRecords = newRecords
 }
 
-func mergeRawRecords(subsystem *entity.Subsystem, records []*maintainersRecord) {
+func (candidate *subsystemCandidate) mergeRawRecords(subsystem *entity.Subsystem) {
 	unique := func(list []string) []string {
 		m := make(map[string]struct{})
 		for _, s := range list {
@@ -158,7 +158,7 @@ func mergeRawRecords(subsystem *entity.Subsystem, records []*maintainersRecord) 
 		return ret
 	}
 	var lists, maintainers []string
-	for _, record := range records {
+	for _, record := range candidate.records {
 		rule := record.ToPathRule()
 		if !rule.IsEmpty() {
 			subsystem.PathRules = append(subsystem.PathRules, rule)
@@ -166,9 +166,13 @@ func mergeRawRecords(subsystem *entity.Subsystem, records []*maintainersRecord) 
 		lists = append(lists, record.lists...)
 		maintainers = append(maintainers, record.maintainers...)
 	}
-	// It's expected that we mostly merge subsystems that share mailing lists,
-	// so we don't worry about merging the lists.
-	if len(lists) > 0 {
+	if candidate.commonEmail != "" {
+		// For list-grouped subsystems, we risk merging just too many lists.
+		// Keep the list short in this case.
+		subsystem.Lists = []string{candidate.commonEmail}
+	} else if len(lists) > 0 {
+		// It's expected that we mostly merge subsystems that share mailing lists,
+		// so we don't worry about merging the lists.
 		subsystem.Lists = unique(lists)
 	}
 	// But there's a ristk that we collect too many unrelated maintainers, so
