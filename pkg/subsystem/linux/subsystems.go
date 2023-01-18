@@ -100,6 +100,14 @@ func (ctx *linuxCtx) getSubsystems() ([]*entity.Subsystem, error) {
 	if err := anyEmptyNames(ret); err != nil {
 		return nil, err
 	}
+	cover, err := ctx.subsystemsCover(ret)
+	if err != nil {
+		return nil, err
+	}
+	err = SetParents(cover, ret)
+	if err != nil {
+		return nil, err
+	}
 	return ret, nil
 }
 
@@ -119,6 +127,17 @@ func anyEmptyNames(list []*entity.Subsystem) error {
 		}
 	}
 	return nil
+}
+
+func (ctx *linuxCtx) subsystemsCover(subsystems []*entity.Subsystem) (*match.PathCover, error) {
+	matcher := match.MakePathMatcher()
+	for _, s := range subsystems {
+		err := matcher.Register(s, s.PathRules...)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return match.BuildPathCover(ctx.repo, matcher.Match, nil)
 }
 
 func (candidate *subsystemCandidate) mergeRawRecords(subsystem *entity.Subsystem) {
@@ -149,7 +168,7 @@ func (candidate *subsystemCandidate) mergeRawRecords(subsystem *entity.Subsystem
 	}
 	// There's a risk that we collect too many unrelated maintainers, so
 	// let's only merge them if there are no lists.
-	if len(records) <= 1 {
+	if len(candidate.records) <= 1 {
 		subsystem.Maintainers = unique(maintainers)
 	}
 }

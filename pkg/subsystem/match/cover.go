@@ -63,6 +63,21 @@ var (
 	onlyIncludeRe = regexp.MustCompile(`(?:/|\.(?:c|h|S))$`)
 )
 
+func (pc *PathCover) CoincidenceMatrix() *CoincidenceMatrix {
+	cm := MakeCoincidenceMatrix()
+	paths := make(chan string)
+	go func() {
+		for loopPath := range pc.perPath {
+			paths <- loopPath
+		}
+		close(paths)
+	}()
+	for items := range pc.queryPaths(paths) {
+		cm.Record(items...)
+	}
+	return cm
+}
+
 func (pc *PathCover) queryPaths(input <-chan string) <-chan []interface{} {
 	procs := runtime.NumCPU()
 	output := make(chan []interface{}, procs)
