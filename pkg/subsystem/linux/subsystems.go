@@ -69,11 +69,8 @@ func (ctx *linuxCtx) applyCustomRules(rules []linuxSubsystemRule) error {
 	excludeRecords := make(map[*maintainersRecord]struct{})
 	for i := range rules {
 		rule := rules[i] // we want a copy to extract a pointer
-		matching := cachedCover.QuerySubtree(rule.matchPath)
-		nonMatching := make(map[interface{}]struct{})
-		if rule.noMatchPath != "" {
-			nonMatching = cachedCover.QuerySubtree(rule.noMatchPath)
-		}
+		matching := querySubtrees(cachedCover, rule.matchPaths)
+		nonMatching := querySubtrees(cachedCover, rule.noMatchPaths)
 		candidate := &subsystemCandidate{rule: &rule}
 		ctx.subsystems = append(ctx.subsystems, candidate)
 		for raw := range matching {
@@ -87,6 +84,16 @@ func (ctx *linuxCtx) applyCustomRules(rules []linuxSubsystemRule) error {
 	}
 	ctx.removeRecords(excludeRecords)
 	return nil
+}
+
+func querySubtrees(cover *match.PathCoverCache, entries []string) map[interface{}]struct{} {
+	ret := make(map[interface{}]struct{})
+	for _, entry := range entries {
+		for key := range cover.QuerySubtree(entry) {
+			ret[key] = struct{}{}
+		}
+	}
+	return ret
 }
 
 func (ctx *linuxCtx) ignoreLists() map[string]bool {
