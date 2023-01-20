@@ -270,27 +270,27 @@ func prepareTestMaintainers(t *testing.T) []*maintainersRecord {
 var (
 	testRules = []linuxSubsystemRule{
 		{
-			name:        "ext4",
-			matchPath:   "fs/ext4",
-			noMatchPath: "fs/file.c",
-			syscalls:    []string{"syz_mount_image$ext4"},
+			name:         "ext4",
+			matchPaths:   []string{"fs/ext4"},
+			noMatchPaths: []string{"fs/file.c"},
+			syscalls:     []string{"syz_mount_image$ext4"},
 		},
 		{
-			name:        "freevxfs",
-			matchPath:   "fs/freevxfs",
-			noMatchPath: "fs/file.c",
-			syscalls:    []string{"syz_mount_image$freevxfs"},
+			name:         "freevxfs",
+			matchPaths:   []string{"fs/freevxfs"},
+			noMatchPaths: []string{"fs/file.c"},
+			syscalls:     []string{"syz_mount_image$freevxfs"},
 		},
 		{
-			name:        "tmpfs",
-			matchPath:   "mm/shmem.c",
-			noMatchPath: "mm/memory.c",
-			syscalls:    []string{"syz_mount_image$tmpfs"},
+			name:         "tmpfs",
+			matchPaths:   []string{"mm/shmem.c"},
+			noMatchPaths: []string{"mm/memory.c"},
+			syscalls:     []string{"syz_mount_image$tmpfs"},
 		},
 		{
-			name:        "vfs",
-			matchPath:   "fs/file.c",
-			noMatchPath: "mm/memory.c", // exclude any top level subsystems
+			name:         "vfs",
+			matchPaths:   []string{"fs/file.c"},
+			noMatchPaths: []string{"mm/memory.c"}, // exclude any top level subsystems
 		},
 	}
 	testMaintainers = `

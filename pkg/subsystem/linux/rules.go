@@ -7,9 +7,9 @@ type linuxSubsystemRule struct {
 	// The exact short name that will be used by syzbot.
 	name string
 	// All raw MAINTAINERS records that cover the matchPath subtree will be grouped into one.
-	matchPath string
+	matchPaths []string
 	// .. but subsystems covering noMathPath will be excluded from this grouping.
-	noMatchPath string
+	noMatchPaths []string
 	// If a reproducer contains one of the calls below, the crash belongs to the subsystem.
 	syscalls []string
 }
@@ -17,316 +17,322 @@ type linuxSubsystemRule struct {
 var (
 	linuxSubsystemRules = []linuxSubsystemRule{
 		{
-			name:        "adfs",
-			matchPath:   "fs/adfs",
-			noMatchPath: "fs/file.c",
+			name:         "adfs",
+			matchPaths:   []string{"fs/adfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$adfs",
 			},
 		},
 		{
-			name:        "affs",
-			matchPath:   "fs/affs",
-			noMatchPath: "fs/file.c",
+			name:         "affs",
+			matchPaths:   []string{"fs/affs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$affs",
 			},
 		},
 		{
-			name:        "befs",
-			matchPath:   "fs/befs",
-			noMatchPath: "fs/file.c",
+			name:         "befs",
+			matchPaths:   []string{"fs/befs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$befs",
 			},
 		},
 		{
-			name:        "bfs",
-			matchPath:   "fs/bfs",
-			noMatchPath: "fs/file.c",
+			name:         "bfs",
+			matchPaths:   []string{"fs/bfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$bfs",
 			},
 		},
 		{
-			name:        "btrfs",
-			matchPath:   "fs/btrfs",
-			noMatchPath: "fs/file.c",
+			name:         "btrfs",
+			matchPaths:   []string{"fs/btrfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$btrfs",
 			},
 		},
 		{
-			name:        "cramfs",
-			matchPath:   "fs/cramfs",
-			noMatchPath: "fs/file.c",
+			name:         "cramfs",
+			matchPaths:   []string{"fs/cramfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$cramfs",
 			},
 		},
 		{
-			name:        "efs",
-			matchPath:   "fs/efs",
-			noMatchPath: "fs/file.c",
+			name:         "efs",
+			matchPaths:   []string{"fs/efs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$efs",
 			},
 		},
 		{
-			name:        "erofs",
-			matchPath:   "fs/erofs",
-			noMatchPath: "fs/file.c",
+			name:         "erofs",
+			matchPaths:   []string{"fs/erofs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$erofs",
 			},
 		},
 		{
-			name:        "exfat",
-			matchPath:   "fs/exfat",
-			noMatchPath: "fs/file.c",
+			name:         "exfat",
+			matchPaths:   []string{"fs/exfat"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$exfat",
 			},
 		},
 		{
-			name:        "ext4",
-			matchPath:   "fs/ext4",
-			noMatchPath: "fs/file.c",
+			name: "ext4",
+			matchPaths: []string{
+				"fs/ext4", "fs/ext2", "fs/jbd2",
+			},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$ext4",
 			},
 		},
 		{
-			name:        "f2fs",
-			matchPath:   "fs/f2fs",
-			noMatchPath: "fs/file.c",
+			name:         "f2fs",
+			matchPaths:   []string{"fs/f2fs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$f2fs",
 			},
 		},
 		{
-			name:        "fat",
-			matchPath:   "fs/fat",
-			noMatchPath: "fs/file.c",
+			name:         "fat",
+			matchPaths:   []string{"fs/fat"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$msdos",
 				"syz_mount_image$vfat",
 			},
 		},
 		{
-			name:        "gfs2",
-			matchPath:   "fs/gfs2",
-			noMatchPath: "fs/file.c",
+			name:         "gfs2",
+			matchPaths:   []string{"fs/gfs2"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$gfs2",
 				"syz_mount_image$gfs2meta",
 			},
 		},
 		{
-			name:        "hfs",
-			matchPath:   "fs/hfs",
-			noMatchPath: "fs/file.c",
+			name:         "hfs",
+			matchPaths:   []string{"fs/hfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$hfs",
 			},
 		},
 		{
-			name:        "hfsplus",
-			matchPath:   "fs/hfsplus",
-			noMatchPath: "fs/file.c",
+			name:         "hfsplus",
+			matchPaths:   []string{"fs/hfsplus"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$hfsplus",
 			},
 		},
 		{
-			name:        "hpfs",
-			matchPath:   "fs/hpfs",
-			noMatchPath: "fs/file.c",
+			name:         "hpfs",
+			matchPaths:   []string{"fs/hpfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$hpfs",
 			},
 		},
 		{
-			name:        "iso9660",
-			matchPath:   "fs/isofs",
-			noMatchPath: "fs/file.c",
+			name:         "iso9660",
+			matchPaths:   []string{"fs/isofs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$iso9660",
 			},
 		},
 		{
-			name:        "jffs2",
-			matchPath:   "fs/jffs2",
-			noMatchPath: "fs/file.c",
+			name:         "jffs2",
+			matchPaths:   []string{"fs/jffs2"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$jffs2",
 			},
 		},
 		{
-			name:        "jfs",
-			matchPath:   "fs/jfs",
-			noMatchPath: "fs/file.c",
+			name:         "jfs",
+			matchPaths:   []string{"fs/jfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$jfs",
 			},
 		},
 		{
-			name:        "minix",
-			matchPath:   "fs/minix",
-			noMatchPath: "fs/file.c",
+			name:         "minix",
+			matchPaths:   []string{"fs/minix"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$minix",
 			},
 		},
 		{
-			name:        "nilfs2",
-			matchPath:   "fs/nilfs2",
-			noMatchPath: "fs/file.c",
+			name:         "nilfs2",
+			matchPaths:   []string{"fs/nilfs2"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$nilfs2",
 			},
 		},
 		{
-			name:        "ntfs",
-			matchPath:   "fs/ntfs",
-			noMatchPath: "fs/file.c",
+			name: "ntfs",
+			matchPaths: []string{
+				"fs/ntfs", "block/partitions/ldm.c",
+			},
+			noMatchPaths: []string{
+				"fs/file.c", "fs/ntfs3", "block/partitions/core.c",
+			},
 			syscalls: []string{
 				"syz_mount_image$ntfs",
 			},
 		},
 		{
-			name:        "ntfs3",
-			matchPath:   "fs/ntfs3",
-			noMatchPath: "fs/file.c",
+			name:         "ntfs3",
+			matchPaths:   []string{"fs/ntfs3"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$ntfs3",
 			},
 		},
 		{
-			name:        "ocfs2",
-			matchPath:   "fs/ocfs2",
-			noMatchPath: "fs/file.c",
+			name:         "ocfs2",
+			matchPaths:   []string{"fs/ocfs2"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$ocfs2",
 			},
 		},
 		{
-			name:        "omfs",
-			matchPath:   "fs/omfs",
-			noMatchPath: "fs/file.c",
+			name:         "omfs",
+			matchPaths:   []string{"fs/omfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$omfs",
 			},
 		},
 		{
-			name:        "qnx4",
-			matchPath:   "fs/qnx4",
-			noMatchPath: "fs/file.c",
+			name:         "qnx4",
+			matchPaths:   []string{"fs/qnx4"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$qnx4",
 			},
 		},
 		{
-			name:        "qnx6",
-			matchPath:   "fs/qnx6",
-			noMatchPath: "fs/file.c",
+			name:         "qnx6",
+			matchPaths:   []string{"fs/qnx6"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$qnx6",
 			},
 		},
 		{
-			name:        "reiserfs",
-			matchPath:   "fs/reiserfs",
-			noMatchPath: "fs/file.c",
+			name:         "reiserfs",
+			matchPaths:   []string{"fs/reiserfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$reiserfs",
 			},
 		},
 		{
-			name:        "romfs",
-			matchPath:   "fs/romfs",
-			noMatchPath: "fs/file.c",
+			name:         "romfs",
+			matchPaths:   []string{"fs/romfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$romfs",
 			},
 		},
 		{
-			name:        "squashfs",
-			matchPath:   "fs/squashfs",
-			noMatchPath: "fs/file.c",
+			name:         "squashfs",
+			matchPaths:   []string{"fs/squashfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$squashfs",
 			},
 		},
 		{
-			name:        "sysv",
-			matchPath:   "fs/sysv",
-			noMatchPath: "fs/file.c",
+			name:         "sysv",
+			matchPaths:   []string{"fs/sysv"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$sysv",
 			},
 		},
 		{
-			name:        "tmpfs",
-			matchPath:   "mm/shmem.c",
-			noMatchPath: "mm/memory.c",
+			name:         "tmpfs",
+			matchPaths:   []string{"mm/shmem.c"},
+			noMatchPaths: []string{"mm/memory.c"},
 			syscalls: []string{
 				"syz_mount_image$tmpfs",
 			},
 		},
 		{
-			name:        "ubifs",
-			matchPath:   "fs/ubifs",
-			noMatchPath: "fs/file.c",
+			name:         "ubifs",
+			matchPaths:   []string{"fs/ubifs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$ubifs",
 			},
 		},
 		{
-			name:        "udf",
-			matchPath:   "fs/udf",
-			noMatchPath: "fs/file.c",
+			name:         "udf",
+			matchPaths:   []string{"fs/udf"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$udf",
 			},
 		},
 		{
-			name:        "ufs",
-			matchPath:   "fs/ufs",
-			noMatchPath: "fs/file.c",
+			name:         "ufs",
+			matchPaths:   []string{"fs/ufs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$ufs",
 			},
 		},
 		{
-			name:        "vxfs",
-			matchPath:   "fs/freevxfs",
-			noMatchPath: "fs/file.c",
+			name:         "vxfs",
+			matchPaths:   []string{"fs/freevxfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$vxfs",
 			},
 		},
 		{
-			name:        "xfs",
-			matchPath:   "fs/xfs",
-			noMatchPath: "fs/file.c",
+			name:         "xfs",
+			matchPaths:   []string{"fs/xfs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$xfs",
 			},
 		},
 		{
-			name:        "zonefs",
-			matchPath:   "fs/zonefs",
-			noMatchPath: "fs/file.c",
+			name:         "zonefs",
+			matchPaths:   []string{"fs/zonefs"},
+			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$zonefs",
 			},
 		},
 		// Let's make sure VFS always has the correct name.
 		{
-			name:        "vfs",
-			matchPath:   "fs/inode.c",
-			noMatchPath: "mm/memory.c", // exclude any top level subsystems
+			name:         "vfs",
+			matchPaths:   []string{"fs/inode.c"},
+			noMatchPaths: []string{"mm/memory.c"}, // exclude any top level subsystems
 		},
 	}
 )
