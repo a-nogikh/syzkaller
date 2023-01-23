@@ -79,7 +79,9 @@ func (ctx *linuxCtx) applyCustomRules(rules []linuxSubsystemRule) error {
 			}
 			record := raw.(*maintainersRecord)
 			candidate.records = append(candidate.records, record)
-			excludeRecords[record] = struct{}{}
+			if !rule.keepRecords {
+				excludeRecords[record] = struct{}{}
+			}
 		}
 	}
 	ctx.removeRecords(excludeRecords)
@@ -248,6 +250,9 @@ func (candidate *subsystemCandidate) mergeRawRecords(subsystem *entity.Subsystem
 		// For list-grouped subsystems, we risk merging just too many lists.
 		// Keep the list short in this case.
 		subsystem.Lists = []string{candidate.commonEmail}
+	} else if candidate.rule != nil && len(candidate.rule.lists) > 0 {
+		// If the rule already has the mailing lists, use them.
+		subsystem.Lists = candidate.rule.lists
 	} else if len(lists) > 0 {
 		// It's expected that we mostly merge subsystems that share mailing lists,
 		// so we don't worry about merging the lists.
