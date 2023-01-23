@@ -12,6 +12,12 @@ type linuxSubsystemRule struct {
 	noMatchPaths []string
 	// If a reproducer contains one of the calls below, the crash belongs to the subsystem.
 	syscalls []string
+	// By default, all matching records are excluded from further consideration.
+	// keepRecords disables such behavior.
+	keepRecords bool
+	// If `lists` is empty, the resulting subsystem will contain the sum of the mailing
+	// lists of all squashed MAINTAINER records.
+	lists []string
 }
 
 var (
@@ -328,11 +334,15 @@ var (
 				"syz_mount_image$zonefs",
 			},
 		},
-		// Let's make sure VFS always has the correct name.
+		// Although in MAINTAINERS, linux-fsdevel@vger.kernel.org is more about VFS, it's better for the
+		// subsystem inference if we make it the parent of all specific filesystems as well. As a result,
+		// it will only be assigned to those filesystem bugs that are not specific to any filesystem.
 		{
-			name:         "vfs",
-			matchPaths:   []string{"fs/inode.c"},
+			name:         "fs",
+			matchPaths:   []string{"fs"},
 			noMatchPaths: []string{"mm/memory.c"}, // exclude any top level subsystems
+			lists:        []string{"linux-fsdevel@vger.kernel.org"},
+			keepRecords:  true,
 		},
 	}
 )
