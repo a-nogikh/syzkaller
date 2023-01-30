@@ -56,7 +56,7 @@ var (
 		},
 		{
 			name:         "btrfs",
-			matchPaths:   []string{"fs/btrfs"},
+			matchPaths:   []string{"fs/btrfs/file.c"},
 			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$btrfs",
@@ -264,7 +264,7 @@ var (
 		},
 		{
 			name:         "squashfs",
-			matchPaths:   []string{"fs/squashfs"},
+			matchPaths:   []string{"fs/squashfs/file.c"},
 			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$squashfs",
@@ -296,7 +296,7 @@ var (
 		},
 		{
 			name:         "udf",
-			matchPaths:   []string{"fs/udf"},
+			matchPaths:   []string{"fs/udf/file.c"},
 			noMatchPaths: []string{"fs/file.c"},
 			syscalls: []string{
 				"syz_mount_image$udf",
