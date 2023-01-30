@@ -3,6 +3,8 @@
 
 package linux
 
+import "github.com/google/syzkaller/pkg/subsystem/entity"
+
 type linuxSubsystemRule struct {
 	// The exact short name that will be used by syzbot.
 	name string
@@ -12,12 +14,11 @@ type linuxSubsystemRule struct {
 	noMatchPaths []string
 	// If a reproducer contains one of the calls below, the crash belongs to the subsystem.
 	syscalls []string
-	// By default, all matching records are excluded from further consideration.
-	// keepRecords disables such behavior.
-	keepRecords bool
 	// If `lists` is empty, the resulting subsystem will contain the sum of the mailing
 	// lists of all squashed MAINTAINER records.
 	lists []string
+	// It can be used to specify custom rule(s) for a subsystem.
+	pathRules []entity.PathRule
 }
 
 var (
@@ -338,11 +339,13 @@ var (
 		// subsystem inference if we make it the parent of all specific filesystems as well. As a result,
 		// it will only be assigned to those filesystem bugs that are not specific to any filesystem.
 		{
-			name:         "fs",
-			matchPaths:   []string{"fs"},
-			noMatchPaths: []string{"mm/memory.c"}, // exclude any top level subsystems
-			lists:        []string{"linux-fsdevel@vger.kernel.org"},
-			keepRecords:  true,
+			name: "fs",
+			pathRules: []entity.PathRule{
+				{
+					IncludeRegexp: `^fs/.*|^include/linux/fs`,
+				},
+			},
+			lists: []string{"linux-fsdevel@vger.kernel.org"},
 		},
 	}
 )

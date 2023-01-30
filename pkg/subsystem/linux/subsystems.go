@@ -74,9 +74,7 @@ func (ctx *linuxCtx) applyCustomRules(rules []linuxSubsystemRule) error {
 			}
 			record := raw.(*maintainersRecord)
 			candidate.records = append(candidate.records, record)
-			if !rule.keepRecords {
-				excludeRecords[record] = struct{}{}
-			}
+			excludeRecords[record] = struct{}{}
 		}
 	}
 	ctx.removeRecords(excludeRecords)
@@ -252,10 +250,14 @@ func (candidate *subsystemCandidate) mergeRawRecords(subsystem *entity.Subsystem
 		// so we don't worry about merging the lists.
 		subsystem.Lists = unique(lists)
 	}
-	// But there's a ristk that we collect too many unrelated maintainers, so
+	// But there's a risk that we collect too many unrelated maintainers, so
 	// let's only merge them if there are no lists.
 	if len(subsystem.Lists) == 0 {
 		subsystem.Maintainers = unique(maintainers)
+	}
+	// If there were custom path matching rules, set them.
+	if candidate.rule != nil && len(candidate.rule.pathRules) > 0 {
+		subsystem.PathRules = candidate.rule.pathRules
 	}
 }
 
