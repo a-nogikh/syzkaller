@@ -39,8 +39,9 @@ func TestGroupLinuxSubsystems(t *testing.T) {
 			Maintainers: []string{"email_ext4@email.com", "email_ext4_2@email.com"},
 		},
 		{
-			Name:  "mm",
-			Lists: []string{"linux-mm@kvack.org"},
+			Name:        "mm",
+			Lists:       []string{"linux-mm@kvack.org"},
+			Maintainers: []string{"email_mm@email.com"},
 		},
 		{
 			Name:        "tmpfs",

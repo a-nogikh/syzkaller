@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 
 	"github.com/google/syzkaller/pkg/subsystem/entity"
+	"github.com/google/syzkaller/pkg/subsystem/match"
 )
 
 func ListFromRepo(repo string) ([]*entity.Subsystem, error) {
@@ -22,6 +24,7 @@ func listFromRepoInner(repo string, rules *customRules) ([]*entity.Subsystem, er
 	if err != nil {
 		return nil, err
 	}
+	removeMatchingPatterns(records, dropPatterns)
 	ctx := &linuxCtx{
 		repo:       repo,
 		rawRecords: records,
@@ -57,6 +60,12 @@ type subsystemCandidate struct {
 	records     []*maintainersRecord
 	commonEmail string
 }
+
+var (
+	// Some of the patterns are not really needed for bug subsystem inteference and
+	// only complicate the manual review of the rules.
+	dropPatterns = regexp.MustCompile(`^(Documentation|scripts|samples|tools)|Makefile`)
+)
 
 func (ctx *linuxCtx) groupByList() []*subsystemCandidate {
 	// TODO: some groups may 100% overlap. Remove such duplicates.
@@ -137,7 +146,7 @@ func (ctx *linuxCtx) subsystemsCover(subsystems []*entity.Subsystem) (*match.Pat
 			return nil, err
 		}
 	}
-	return match.BuildPathCover(ctx.repo, matcher.Match, nil)
+	return match.BuildPathCover(ctx.repo, matcher.Match, dropPatterns)
 }
 
 func (candidate *subsystemCandidate) mergeRawRecords(subsystem *entity.Subsystem) {
