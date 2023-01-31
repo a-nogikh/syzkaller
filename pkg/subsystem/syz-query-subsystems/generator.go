@@ -85,6 +85,7 @@ func generateSubsystemsFile(name string, subsystems []*entity.Subsystem) ([]byte
 		}
 		// Some of the records are mostly empty.
 		if len(entry.Maintainers) > 0 {
+			sort.Strings(entry.Maintainers)
 			subsystem.Maintainers = serializer.WriteString(entry.Maintainers)
 		}
 		if len(entry.Syscalls) > 0 {
