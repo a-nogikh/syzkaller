@@ -24,9 +24,10 @@ type linuxSubsystemRule struct {
 var (
 	linuxSubsystemRules = []linuxSubsystemRule{
 		{
-			name:         "adfs",
-			matchPaths:   []string{"fs/adfs"},
-			noMatchPaths: []string{"fs/file.c"},
+			name: "adfs",
+			pathRules: []entity.PathRule{
+				{IncludeRegexp: `^fs/adfs`},
+			},
 			syscalls: []string{
 				"syz_mount_image$adfs",
 			},
@@ -180,9 +181,10 @@ var (
 			},
 		},
 		{
-			name:         "minix",
-			matchPaths:   []string{"fs/minix"},
-			noMatchPaths: []string{"fs/file.c"},
+			name: "minix",
+			pathRules: []entity.PathRule{
+				{IncludeRegexp: `^fs/minix`},
+			},
 			syscalls: []string{
 				"syz_mount_image$minix",
 			},
@@ -240,9 +242,10 @@ var (
 			},
 		},
 		{
-			name:         "qnx6",
-			matchPaths:   []string{"fs/qnx6"},
-			noMatchPaths: []string{"fs/file.c"},
+			name: "qnx6",
+			pathRules: []entity.PathRule{
+				{IncludeRegexp: `^fs/qnx6`},
+			},
 			syscalls: []string{
 				"syz_mount_image$qnx6",
 			},
@@ -256,9 +259,10 @@ var (
 			},
 		},
 		{
-			name:         "romfs",
-			matchPaths:   []string{"fs/romfs"},
-			noMatchPaths: []string{"fs/file.c"},
+			name: "romfs",
+			pathRules: []entity.PathRule{
+				{IncludeRegexp: `^fs/romfs`},
+			},
 			syscalls: []string{
 				"syz_mount_image$romfs",
 			},

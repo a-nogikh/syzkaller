@@ -2,8 +2,8 @@
 // Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 
 // syz-query-subsystems generates and saves the subsystem lists in the format syzkaller understands.
-// An example how to generate the upstream_linux subsystem list.
-// `./syz-query-subsystems -os linux -kernel ~/linux -syzkaller ~/syzkaller -name linux_upstream`.
+// An example how to generate the linux subsystem list (for the upstream kernel).
+// `./syz-query-subsystems -os linux -kernel ~/linux -syzkaller ~/syzkaller -name linux`.
 
 package main
 

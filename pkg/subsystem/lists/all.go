@@ -5,5 +5,5 @@ package lists
 
 import (
 	// Import all lists.
-	_ "github.com/google/syzkaller/pkg/subsystem/lists/linux_upstream"
+	_ "github.com/google/syzkaller/pkg/subsystem/lists/linux"
 )

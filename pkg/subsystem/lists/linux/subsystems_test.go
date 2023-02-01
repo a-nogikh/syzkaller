@@ -1,7 +1,7 @@
 // Copyright 2023 syzkaller project authors. All rights reserved.
 // Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 
-package linuxupstream
+package linux
 
 import (
 	"testing"
@@ -12,7 +12,7 @@ import (
 
 // nolint: lll
 func TestLinuxUpstreamSubsystems(t *testing.T) {
-	list := subsystem.GetList("linux_upstream")
+	list := subsystem.GetList("linux")
 	if list == nil {
 		t.Fatalf("the list is not registered")
 	}
