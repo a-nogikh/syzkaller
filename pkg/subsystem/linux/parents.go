@@ -20,7 +20,7 @@ func SetParents(cover *match.PathCover, list []*entity.Subsystem) error {
 	matrix.NonEmptyPairs(func(anyA, anyB interface{}, count int) {
 		a, b := anyA.(*entity.Subsystem), anyB.(*entity.Subsystem)
 		// Demand that > 2/3 paths are related.
-		if 3*count/matrix.Count(a) > 2 && matrix.Count(a) < matrix.Count(b) {
+		if 3*count/matrix.Count(a) >= 2 && matrix.Count(a) < matrix.Count(b) {
 			a.Parents = append(a.Parents, b)
 		}
 	})
@@ -33,7 +33,7 @@ func SetParents(cover *match.PathCover, list []*entity.Subsystem) error {
 }
 
 var (
-	parentsIgnoreRe = regexp.MustCompile(`^(Documentation|tools|samples|include|scripts)`)
+	parentsIgnoreRe = regexp.MustCompile(`^(Documentation|tools|samples|scripts)`)
 )
 
 // The algorithm runs in O(E * (E + V)).
