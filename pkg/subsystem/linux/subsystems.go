@@ -96,10 +96,20 @@ func (ctx *linuxCtx) getSubsystems() ([]*entity.Subsystem, error) {
 	if err := setSubsystemNames(setNames); err != nil {
 		return nil, fmt.Errorf("failed to set names: %w", err)
 	}
+	ctx.applyExtraRules(ret)
 	if err := anyEmptyNames(ret); err != nil {
 		return nil, err
 	}
 	return ret, nil
+}
+
+func (ctx *linuxCtx) applyExtraRules(list []*entity.Subsystem) {
+	if ctx.extraRules == nil {
+		return
+	}
+	for _, entry := range list {
+		entry.Syscalls = ctx.extraRules.subsystemCalls[entry.Name]
+	}
 }
 
 func anyEmptyNames(list []*entity.Subsystem) error {
