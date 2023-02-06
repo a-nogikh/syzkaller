@@ -37,8 +37,8 @@ func SetParents(matrix *match.CoincidenceMatrix, list []*entity.Subsystem) error
 		if !inInput[a] || !inInput[b] {
 			return
 		}
-		// Demand that > 2/3 paths are related.
-		if 3*count/matrix.Count(a) >= 2 && matrix.Count(a) < matrix.Count(b) {
+		// Demand that >= 50% paths are related.
+		if 2*count/matrix.Count(a) >= 1 && matrix.Count(a) < matrix.Count(b) {
 			a.Parents = append(a.Parents, b)
 		}
 	})

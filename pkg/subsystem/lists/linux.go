@@ -17,8 +17,6 @@ func init() {
 //   - acpi
 //     - acpica
 //   - acrn
-//   - afs
-//   - aio
 //   - alpha
 //   - alsa
 //     - cirrus
@@ -54,7 +52,7 @@ func init() {
 //   - block
 //     - drbd
 //     - nbd
-//   - bluetooth
+//     - parport
 //   - bpf
 //   - ceph
 //   - cgroups
@@ -85,6 +83,8 @@ func init() {
 //   - efi
 //   - fpga
 //   - fs
+//     - afs
+//     - aio
 //     - autofs
 //     - btrfs
 //     - cachefs
@@ -99,6 +99,7 @@ func init() {
 //     - fsverity
 //     - jfs
 //     - karma
+//     - nfs
 //     - nilfs
 //     - ntfs
 //     - ntfs3
@@ -107,10 +108,10 @@ func init() {
 //     - reiserfs
 //     - squashfs
 //     - unionfs
+//     - v9fs
 //     - xfs
 //   - fsi
 //   - gpio
-//   - greybus
 //   - hardening
 //   - hexagon
 //   - hwmon
@@ -148,6 +149,9 @@ func init() {
 //   - media
 //     - mjpeg
 //     - pvrusb2
+//     - staging
+//       - ac100
+//       - greybus
 //   - mips
 //   - mm
 //     - damon
@@ -159,6 +163,7 @@ func init() {
 //     - acenic
 //     - atm
 //     - b.a.t.m.a.n
+//     - bluetooth
 //     - bridge
 //     - cake
 //     - can
@@ -192,7 +197,6 @@ func init() {
 //       - zd1211
 //     - wpan
 //     - x25
-//   - nfs
 //   - nitro
 //   - ntb
 //   - nvdimm
@@ -202,7 +206,6 @@ func init() {
 //   - openipmi
 //   - openrisc
 //   - parisc
-//   - parport
 //   - pci
 //   - perf
 //   - phy
@@ -239,8 +242,6 @@ func init() {
 //   - sparse
 //   - speakup
 //   - spi
-//   - staging
-//     - ac100
 //   - tboot
 //   - tegra
 //     - ac100
@@ -251,7 +252,6 @@ func init() {
 //     - accessrunner
 //     - legousb
 //     - usb-storage
-//   - v9fs
 //   - video
 //   - virt
 //     - spice
@@ -392,7 +392,7 @@ var actions = &Subsystem{
 var afs = &Subsystem{
 	Name:    "afs",
 	Lists:   []string{"linux-afs@lists.infradead.org"},
-	Parents: []*Subsystem{kernel},
+	Parents: []*Subsystem{fs},
 	PathRules: []PathRule{
 		{IncludeRegexp: "^fs/afs(?:/.*)?$|^include/trace/events/afs\\.h$"},
 		{IncludeRegexp: "^include/keys/rxrpc-type\\.h$|^include/net/af_rxrpc\\.h$|^include/trace/events/rxrpc\\.h$|^include/uapi/linux/rxrpc\\.h$|^net/rxrpc(?:/.*)?$"},
@@ -403,7 +403,7 @@ var aio = &Subsystem{
 	Name:        "aio",
 	Lists:       []string{"linux-aio@kvack.org"},
 	Maintainers: []string{"bcrl@kvack.org"},
-	Parents:     []*Subsystem{kernel},
+	Parents:     []*Subsystem{fs},
 	PathRules: []PathRule{
 		{IncludeRegexp: "^fs/aio\\.c$|^include/linux/[^/]*aio[^/]*\\.h$"},
 	},
@@ -856,7 +856,7 @@ var block = &Subsystem{
 var bluetooth = &Subsystem{
 	Name:    "bluetooth",
 	Lists:   []string{"linux-bluetooth@vger.kernel.org"},
-	Parents: []*Subsystem{kernel},
+	Parents: []*Subsystem{net},
 	PathRules: []PathRule{
 		{IncludeRegexp: "^drivers/bluetooth(?:/.*)?$"},
 		{IncludeRegexp: "^drivers/bluetooth/btmtkuart\\.c$"},
@@ -1573,7 +1573,7 @@ var greybus = &Subsystem{
 	Name:        "greybus",
 	Lists:       []string{"greybus-dev@lists.linaro.org"},
 	Maintainers: []string{"elder@kernel.org", "gregkh@linuxfoundation.org", "johan@kernel.org"},
-	Parents:     []*Subsystem{kernel},
+	Parents:     []*Subsystem{staging},
 	PathRules: []PathRule{
 		{IncludeRegexp: "^drivers/greybus(?:/.*)?$|^drivers/staging/greybus(?:/.*)?$|^include/linux/greybus\\.h$|^include/linux/greybus(?:/.*)?$"},
 	},
@@ -3213,7 +3213,7 @@ var nfc = &Subsystem{
 var nfs = &Subsystem{
 	Name:    "nfs",
 	Lists:   []string{"linux-nfs@vger.kernel.org"},
-	Parents: []*Subsystem{kernel},
+	Parents: []*Subsystem{fs},
 	PathRules: []PathRule{
 		{IncludeRegexp: "^fs/exportfs(?:/.*)?$|^fs/lockd(?:/.*)?$|^fs/nfs_common(?:/.*)?$|^fs/nfsd(?:/.*)?$|^include/linux/lockd(?:/.*)?$|^include/linux/sunrpc(?:/.*)?$|^include/trace/events/rpcgss\\.h$|^include/trace/events/rpcrdma\\.h$|^include/trace/events/sunrpc\\.h$|^include/trace/misc/fs\\.h$|^include/trace/misc/nfs\\.h$|^include/trace/misc/sunrpc\\.h$|^include/uapi/linux/nfsd(?:/.*)?$|^include/uapi/linux/sunrpc(?:/.*)?$|^net/sunrpc(?:/.*)?$"},
 		{IncludeRegexp: "^fs/lockd(?:/.*)?$|^fs/nfs(?:/.*)?$|^fs/nfs_common(?:/.*)?$|^include/linux/lockd(?:/.*)?$|^include/linux/nfs[^/]*$|^include/linux/sunrpc(?:/.*)?$|^include/uapi/linux/nfs[^/]*$|^include/uapi/linux/sunrpc(?:/.*)?$|^net/sunrpc(?:/.*)?$"},
@@ -3509,7 +3509,7 @@ var parisc = &Subsystem{
 var parport = &Subsystem{
 	Name:    "parport",
 	Lists:   []string{"linux-parport@lists.infradead.org"},
-	Parents: []*Subsystem{kernel},
+	Parents: []*Subsystem{block},
 	PathRules: []PathRule{
 		{IncludeRegexp: "^drivers/block/paride(?:/.*)?$"},
 		{IncludeRegexp: "^drivers/char/ppdev\\.c$|^drivers/parport(?:/.*)?$|^include/linux/parport[^/]*\\.h$|^include/uapi/linux/ppdev\\.h$"},
@@ -4203,7 +4203,7 @@ var staging = &Subsystem{
 	Name:        "staging",
 	Lists:       []string{"linux-staging@lists.linux.dev"},
 	Maintainers: []string{"gregkh@linuxfoundation.org"},
-	Parents:     []*Subsystem{kernel},
+	Parents:     []*Subsystem{media},
 	PathRules: []PathRule{
 		{IncludeRegexp: "^drivers/staging(?:/.*)?$"},
 	},
@@ -4294,7 +4294,7 @@ var tlan = &Subsystem{
 
 var tomoyo = &Subsystem{
 	Name:        "tomoyo",
-	Lists:       []string{"tomoyo-dev-en@lists.osdn.me"},
+	Lists:       []string{"tomoyo-dev@lists.osdn.me"},
 	Maintainers: []string{"penguin-kernel@I-love.SAKURA.ne.jp", "takedakn@nttdata.co.jp"},
 	Parents:     []*Subsystem{securitymodule},
 	PathRules: []PathRule{
@@ -4453,7 +4453,7 @@ var v9fs = &Subsystem{
 	Name:        "v9fs",
 	Lists:       []string{"v9fs-developer@lists.sourceforge.net"},
 	Maintainers: []string{"asmadeus@codewreck.org", "ericvh@gmail.com", "lucho@ionkov.net"},
-	Parents:     []*Subsystem{kernel},
+	Parents:     []*Subsystem{fs},
 	PathRules: []PathRule{
 		{IncludeRegexp: "^fs/9p(?:/.*)?$|^include/net/9p(?:/.*)?$|^include/trace/events/9p\\.h$|^include/uapi/linux/virtio_9p\\.h$|^net/9p(?:/.*)?$"},
 	},
