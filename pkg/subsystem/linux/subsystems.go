@@ -74,6 +74,13 @@ var (
 	// Some of the patterns are not really needed for bug subsystem inteference and
 	// only complicate the manual review of the rules.
 	dropPatterns = regexp.MustCompile(`^(Documentation|scripts|samples|tools)|Makefile`)
+	// These emails do not represent separate subsystems, even though they seem to by
+	// all criteria we have.
+	notSubsystemEmails = map[string]struct{}{
+		"linaro-mm-sig@lists.linaro.org":  {},
+		"samba-technical@lists.samba.org": {},
+		"storagedev@microchip.com":        {},
+	}
 )
 
 func (ctx *linuxCtx) groupByList() []*subsystemCandidate {
@@ -90,6 +97,9 @@ func (ctx *linuxCtx) groupByList() []*subsystemCandidate {
 	}
 	ret := []*subsystemCandidate{}
 	for email, list := range perList {
+		if _, skip := notSubsystemEmails[email]; skip {
+			continue
+		}
 		ret = append(ret, &subsystemCandidate{
 			commonEmail: email,
 			records:     list,
