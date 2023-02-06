@@ -43,8 +43,11 @@ func setSubsystemNames(list []*setNameRequest) error {
 			if !dups[name] {
 				req.subsystem.Name = name
 				dups[name] = true
+				continue
 			}
-			continue
+			// As a fallback, assign the full email address as the name, with the hope that
+			// the reviewer would notice and take action.
+			req.subsystem.Name = req.referenceEmail
 		}
 	}
 	return nil
@@ -105,6 +108,9 @@ var (
 		"brcm80211-dev-list.pdl@broadcom.com":       "brcm80211",
 		"osmocom-net-gprs@lists.osmocom.org":        "osmocom",
 		"netdev@vger.kernel.org":                    "net",
+		"megaraidlinux.pdl@broadcom.com":            "megaraid",
+		"mpi3mr-linuxdrv.pdl@broadcom.com":          "mpi3",
+		"MPT-FusionLinux.pdl@broadcom.com":          "mpt-fusion",
 	}
 	stripPrefixes = []string{"linux-"}
 	stripSuffixes = []string{

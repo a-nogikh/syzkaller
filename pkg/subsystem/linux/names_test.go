@@ -47,7 +47,7 @@ func TestSetSubsystemNames(t *testing.T) {
 		{
 			inName:  "",
 			email:   "linux-ntfs-dev@lists.sourceforge.net",
-			outName: "", // duplicate name
+			outName: "linux-ntfs-dev@lists.sourceforge.net", // duplicate name
 		},
 		{
 			inName:  "",
@@ -57,7 +57,7 @@ func TestSetSubsystemNames(t *testing.T) {
 		{
 			inName:  "",
 			email:   "llvm@abcd.com",
-			outName: "", // duplicate
+			outName: "llvm@abcd.com", // duplicate
 		},
 	}
 	input := []*setNameRequest{}
