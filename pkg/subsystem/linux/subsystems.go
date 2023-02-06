@@ -35,6 +35,15 @@ func listFromRepoInner(repo string, rules *customRules) ([]*entity.Subsystem, er
 	if err != nil {
 		return nil, err
 	}
+	matrix, err := ctx.coincidenceMatrix(list)
+	if err != nil {
+		return nil, err
+	}
+	list, err = ParentTransformations(matrix, list)
+	if err != nil {
+		return nil, err
+	}
+
 	// Sort subsystems by name to keep output consistent.
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	// Sort path rules to keep output consistent.
@@ -95,6 +104,10 @@ func (ctx *linuxCtx) getSubsystems() ([]*entity.Subsystem, error) {
 	for _, raw := range ctx.groupByList() {
 		s := &entity.Subsystem{}
 		raw.mergeRawRecords(s)
+		// Skip empty subsystems.
+		if len(s.Syscalls)+len(s.PathRules) == 0 {
+			continue
+		}
 		ret = append(ret, s)
 		// Generate a name request.
 		setNames = append(setNames, &setNameRequest{
@@ -107,14 +120,6 @@ func (ctx *linuxCtx) getSubsystems() ([]*entity.Subsystem, error) {
 	}
 	ctx.applyExtraRules(ret)
 	if err := anyEmptyNames(ret); err != nil {
-		return nil, err
-	}
-	cover, err := ctx.subsystemsCover(ret)
-	if err != nil {
-		return nil, err
-	}
-	err = SetParents(cover, ret)
-	if err != nil {
 		return nil, err
 	}
 	return ret, nil
@@ -138,7 +143,7 @@ func anyEmptyNames(list []*entity.Subsystem) error {
 	return nil
 }
 
-func (ctx *linuxCtx) subsystemsCover(subsystems []*entity.Subsystem) (*match.PathCover, error) {
+func (ctx *linuxCtx) coincidenceMatrix(subsystems []*entity.Subsystem) (*match.CoincidenceMatrix, error) {
 	matcher := match.MakePathMatcher()
 	for _, s := range subsystems {
 		err := matcher.Register(s, s.PathRules...)
@@ -146,7 +151,11 @@ func (ctx *linuxCtx) subsystemsCover(subsystems []*entity.Subsystem) (*match.Pat
 			return nil, err
 		}
 	}
-	return match.BuildPathCover(ctx.repo, matcher.Match, dropPatterns)
+	cover, err := match.BuildPathCover(ctx.repo, matcher.Match, dropPatterns)
+	if err != nil {
+		return nil, err
+	}
+	return cover.CoincidenceMatrix(), nil
 }
 
 func (candidate *subsystemCandidate) mergeRawRecords(subsystem *entity.Subsystem) {
