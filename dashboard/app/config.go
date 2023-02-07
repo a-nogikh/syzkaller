@@ -14,6 +14,7 @@ import (
 	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/auth"
 	"github.com/google/syzkaller/pkg/email"
+	"github.com/google/syzkaller/pkg/subsystem/entity"
 	"github.com/google/syzkaller/pkg/vcs"
 )
 
@@ -108,7 +109,8 @@ type Config struct {
 // subsystem inference / bug reporting.
 type SubsystemsConfig struct {
 	// IMPORTANT: this interface is experimental and will likely change in the future.
-	SubsystemCc func(name string) []string
+	// List stores all subsystems of the namespace.
+	List []*entity.Subsystem
 }
 
 // ObsoletingConfig describes how bugs without reproducer should be obsoleted.
@@ -347,9 +349,6 @@ func checkNamespace(ns string, cfg *Config, namespaces, clientNames map[string]b
 	}
 	if cfg.Kcidb != nil {
 		checkKcidb(ns, cfg.Kcidb)
-	}
-	if cfg.Subsystems.SubsystemCc == nil {
-		cfg.Subsystems.SubsystemCc = func(string) []string { return nil }
 	}
 	checkKernelRepos(ns, cfg)
 	checkNamespaceReporting(ns, cfg)
