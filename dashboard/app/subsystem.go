@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/google/syzkaller/pkg/subsystem"
 	"github.com/google/syzkaller/pkg/subsystem/entity"
@@ -13,9 +14,82 @@ import (
 	"google.golang.org/appengine/v2/log"
 )
 
+// reassignBugSubsystems is expected to be periodically called to refresh old automatic
+// subsystem assignments.
+func reassignBugSubsystems(c context.Context, ns string, count int) error {
+	service := getSubsystemService(c, ns)
+	if service == nil {
+		return nil
+	}
+	keys, err := bugsToUpdateSubsystems(c, ns, count)
+	if err != nil {
+		return err
+	}
+	log.Infof(c, "updating subsystems for %d bugs in %#v", len(keys), ns)
+	now := timeNow(c)
+	for i, bugKey := range keys {
+		if i > 0 {
+			// Prevent contention on db updates.
+			time.Sleep(time.Second)
+		}
+		tx := func(c context.Context) error {
+			bug := new(Bug)
+			if err := db.Get(c, bugKey, bug); err != nil {
+				return fmt.Errorf("failed to get bug: %v", err)
+			}
+			list, err := inferSubsystems(c, bug, bugKey)
+			if err != nil {
+				return fmt.Errorf("failed to infer subsystems: %w", err)
+			}
+			bug.SetSubsystems(list, now)
+			if _, err = db.Put(c, bugKey, bug); err != nil {
+				return fmt.Errorf("failed to put bug: %v", err)
+			}
+			return nil
+		}
+		if err := db.RunInTransaction(c, tx, &db.TransactionOptions{XG: true}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func bugsToUpdateSubsystems(c context.Context, ns string, count int) ([]*db.Key, error) {
+	now := timeNow(c)
+	// Give priority to open bugs.
+	openKeys, err := db.NewQuery("Bug").
+		Filter("Namespace=", ns).
+		Filter("Status=", BugStatusOpen).
+		Filter("SubsystemsTime<", now.Add(-openBugsUpdateTime)).
+		Limit(count).
+		KeysOnly().
+		GetAll(c, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query open bugs: %v", err)
+	}
+	closedKeys := []*db.Key{}
+	if len(openKeys) < count {
+		closedKeys, err = db.NewQuery("Bug").
+			Filter("Namespace=", ns).
+			Filter("Status=", BugStatusFixed).
+			Filter("SubsystemsTime<", now.Add(-fixedBugsUpdateTime)).
+			Limit(count-len(openKeys)).
+			KeysOnly().
+			GetAll(c, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query fixed bugs: %v", err)
+		}
+	}
+	return append(openKeys, closedKeys...), nil
+}
+
 const (
 	// We load the top crashesForInference crashes to determine the bug subsystem(s).
 	crashesForInference = 5
+	// How often we update open bugs.
+	openBugsUpdateTime = time.Hour * 24 * 30
+	// How often we update fixed bugs.
+	fixedBugsUpdateTime = time.Hour * 24 * 30 * 6
 )
 
 // inferSubsystems determines the best yet possible estimate of the bug's subsystems.
@@ -61,7 +135,28 @@ func subsystemMaintainers(c context.Context, ns, subsystemName string) []string 
 	return item.Emails()
 }
 
+var subsystemsListKey = "custom list of kernel subsystems"
+
+type customSubsystemList struct {
+	ns   string
+	list []*entity.Subsystem
+}
+
+func contextWithSubsystems(c context.Context, custom *customSubsystemList) context.Context {
+	return context.WithValue(c, &subsystemsListKey, custom)
+}
+
 func getSubsystemService(c context.Context, ns string) *subsystem.Service {
+	// This is needed to emulate changes to the subsystem list over time during testing.
+	if val, ok := c.Value(&subsystemsListKey).(*customSubsystemList); ok && val.ns == ns {
+		log.Infof(c, "custom list: %#v", val.list)
+		service, err := subsystem.MakeService(val.list)
+		if err != nil {
+			panic(err)
+		}
+		return service
+	}
+
 	ret, exists := subsystemServices[ns]
 	if exists {
 		return ret

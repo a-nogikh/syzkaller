@@ -104,6 +104,7 @@ type Bug struct {
 	FixTime        time.Time // when we become aware of the fixing commit
 	LastActivity   time.Time // last time we observed any activity related to the bug
 	Closed         time.Time
+	SubsystemsTime time.Time // when we have updated subsystems last time
 	Reporting      []BugReporting
 	Commits        []string // titles of fixing commmits
 	CommitInfo     []Commit // additional info for commits (for historical reasons parallel array to Commits)
@@ -130,8 +131,9 @@ type BugSubsystem struct {
 	Name string
 }
 
-func (bug *Bug) SetSubsystems(list []*entity.Subsystem) {
+func (bug *Bug) SetSubsystems(list []*entity.Subsystem, now time.Time) {
 	bug.Tags.Subsystems = nil
+	bug.SubsystemsTime = now
 	for _, item := range list {
 		bug.Tags.Subsystems = append(bug.Tags.Subsystems, BugSubsystem{Name: item.Name})
 	}

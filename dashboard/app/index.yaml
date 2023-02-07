@@ -100,6 +100,12 @@ indexes:
   - name: Status
   - name: LastTime
 
+- kind: Bug
+  properties:
+  - name: Namespace
+  - name: Status
+  - name: SubsystemsTime
+
 - kind: Build
   properties:
   - name: Namespace

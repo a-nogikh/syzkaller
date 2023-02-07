@@ -24,6 +24,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/syzkaller/dashboard/dashapi"
+	"github.com/google/syzkaller/pkg/subsystem/entity"
 	"golang.org/x/net/context"
 	"google.golang.org/appengine/v2/aetest"
 	db "google.golang.org/appengine/v2/datastore"
@@ -203,6 +204,15 @@ func (c *Ctx) Close() {
 
 func (c *Ctx) advanceTime(d time.Duration) {
 	c.mockedTime = c.mockedTime.Add(d)
+}
+
+func (c *Ctx) setSubsystems(ns string, list []*entity.Subsystem) {
+	c.transformContext = func(c context.Context) context.Context {
+		return contextWithSubsystems(c, &customSubsystemList{
+			ns:   ns,
+			list: list,
+		})
+	}
 }
 
 // GET sends admin-authorized HTTP GET request to the app.
