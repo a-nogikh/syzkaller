@@ -1,0 +1,40 @@
+{{/*
+Copyright 2023 syzkaller project authors. All rights reserved.
+Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+The list of polled trees.
+*/}}
+
+<!doctype html>
+<html>
+<head>
+	{{template "head" .Header}}
+	<title>syzbot</title>
+</head>
+<body>
+	{{template "header" .Header}}
+        <i>Note that the numbers below may lag behind the current situation. They are updated once an hour.</i><br>
+        <i>If you believe the subsystem list should be updated to reflect the reality better, feel free to contact us at syzkaller@googlegroups.com.</i><br>
+	<table class="list_table">
+		<caption>Bug subsystems</caption>
+		<tr>
+			<th>Name</th>
+			<th>Lists</th>
+			<th>Maintainers</th>
+			<th>Open bugs</th>
+			<th>Fixed</th>
+			<th>Invalid</th>
+		</tr>
+		{{range $item := .List}}
+		<tr>
+			<td>{{$item.Name}}</td>
+			<td>{{$item.Lists}}</td>
+			<td class="maintainers">{{$item.Maintainers}}</td>
+			<td>{{link $item.Open.Link (printf "%d" $item.Open.Count)}}</td>
+			<td>{{link $item.Fixed.Link (printf "%d" $item.Fixed.Count)}}</td>
+			<td>{{link $item.Invalid.Link (printf "%d" $item.Invalid.Count)}}</td>
+		</tr>
+		{{end}}
+	</table>
+</body>
+</html>
