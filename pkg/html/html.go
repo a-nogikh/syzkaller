@@ -43,6 +43,7 @@ var Funcs = template.FuncMap{
 	"selectBisect":           selectBisect,
 	"dereference":            dereferencePointer,
 	"commitLink":             commitLink,
+	"inc":                    formatInc,
 }
 
 func selectBisect(rep *dashapi.BugReport) *dashapi.BisectResult {
@@ -209,4 +210,8 @@ func AmendURL(baseURL, key, value string) string {
 	}
 	parsed.RawQuery = values.Encode()
 	return parsed.String()
+}
+
+func formatInc(v int) string {
+	return fmt.Sprintf("%d", v+1)
 }

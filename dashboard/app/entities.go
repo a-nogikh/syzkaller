@@ -340,6 +340,64 @@ type ReportingStateEntry struct {
 	Date int // YYYYMMDD
 }
 
+// Subsystem holds the history of grouped per-subsystem open bug reminders.
+type Subsystem struct {
+	Namespace string
+	Name      string
+	// ListsQueried is the last time bug lists were queried for the subsystem.
+	ListsQueried time.Time
+	// There shouldn't bee too many of them - 10-20 per year, so let's just
+	// keep them in this entity.
+	// It should be enough for several hundred years :)
+	BugLists []SubsystemReminder
+}
+
+func (s *Subsystem) findStage(id string) (*SubsystemReminder, *SubsystemReminderStage) {
+	for i := range s.BugLists {
+		bugList := &s.BugLists[i]
+		for j := range bugList.Stages {
+			stage := &bugList.Stages[j]
+			if stage.ID == id {
+				return bugList, stage
+			}
+		}
+	}
+	return nil, nil
+}
+
+// SubsystemReminder holds the information about a single notification.
+// There'll be one record for moderation (if it's needed) and one for actual reporting.
+type SubsystemReminder struct {
+	Created time.Time
+	BugKeys []string
+	Total   int
+	Type    string // That's actually the BugListType.
+	Stages  []SubsystemReminderStage
+}
+
+func (r *SubsystemReminder) getBugKeys() ([]*db.Key, error) {
+	ret := []*db.Key{}
+	for _, encoded := range r.BugKeys {
+		key, err := db.DecodeKey(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse %#v: %w", encoded, err)
+		}
+		ret = append(ret, key)
+	}
+	return ret, nil
+}
+
+// There can be at most two stages.
+// One has Moderation=true, the other one has Moderation=false.
+type SubsystemReminderStage struct {
+	ID         string
+	ExtID      string
+	Link       string
+	Reported   time.Time
+	Closed     time.Time
+	Moderation bool
+}
+
 // Job represent a single patch testing or bisection job for syz-ci.
 // Later we may want to extend this to other types of jobs:
 //   - test of a committed fix

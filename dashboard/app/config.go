@@ -113,6 +113,20 @@ type SubsystemsConfig struct {
 	Service *subsystem.Service
 	// If all existing subsystem labels must be recalculated, increase this integer.
 	Revision int
+	// Periodic per-subsystem reminders about open bugs.
+	Reminder *BugListReporting
+}
+
+// BugListReporting describes how aggregated reminders about open bugs should be processed.
+type BugListReporting struct {
+	// SourceStage is the name of the reporting stage from which bugs should be taken.
+	SourceStage string
+	// If ModerationConfig is set, bug lists will be first sent there for human confirmation.
+	// For now, only EmailConfig is supported.
+	ModerationConfig ReportingType
+	// Config specifies how exactly such notifications should be delivered.
+	// For now, only EmailConfig is supported.
+	Config ReportingType
 }
 
 // ObsoletingConfig describes how bugs without reproducer should be obsoleted.
@@ -357,6 +371,32 @@ func checkNamespace(ns string, cfg *Config, namespaces, clientNames map[string]b
 	}
 	checkKernelRepos(ns, cfg)
 	checkNamespaceReporting(ns, cfg)
+	checkSubsystems(ns, cfg)
+}
+
+func checkSubsystems(ns string, cfg *Config) {
+	if cfg.Subsystems.Reminder == nil {
+		// Nothing to validate.
+		return
+	}
+	if cfg.Subsystems.Service == nil {
+		panic(fmt.Sprintf("%v: Subsystems.Reminder is set while Subsystems.Service is nil", ns))
+	}
+	reminder := cfg.Subsystems.Reminder
+	if reminder.SourceStage == "" {
+		panic(fmt.Sprintf("%v: Reminder.SourceStage must be set", ns))
+	}
+	if reminder.Config == nil {
+		panic(fmt.Sprintf("%v: Reminder.Config must be set", ns))
+	}
+	reporting := cfg.ReportingByName(reminder.SourceStage)
+	if reporting == nil {
+		panic(fmt.Sprintf("%v: Reminder.SourceStage %v points to a non-existent reporting",
+			ns, reminder.SourceStage))
+	}
+	if reporting.AccessLevel != AccessPublic {
+		panic(fmt.Sprintf("%v: Reminder.SourceStage must point to a public reporting", ns))
+	}
 }
 
 func checkKernelRepos(ns string, cfg *Config) {

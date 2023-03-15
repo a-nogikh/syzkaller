@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -215,4 +216,106 @@ func expectSubsystems(t *testing.T, client *apiClient, extID string, subsystems 
 		names = append(names, item.Name)
 	}
 	assert.ElementsMatch(t, names, subsystems)
+}
+
+func TestPeriodicSubsystemReminders(t *testing.T) {
+	c := NewCtx(t)
+	defer c.Close()
+
+	client := c.makeClient(clientSubsystemRemind, keySubsystemRemind, true)
+	build := testBuild(1)
+	client.UploadBuild(build)
+
+	crashes := map[string]map[string]int{
+		"a.c": map[string]int{
+			"WARNING: a first":  3,
+			"WARNING: a second": 5,
+		},
+		"b.c": map[string]int{
+			"WARNING: b first":  2,
+			"WARNING: b second": 1,
+		},
+	}
+
+	for guilty, countsMap := range crashes {
+		for title, count := range countsMap {
+			for i := 0; i < count; i++ {
+				crash := testCrash(build, 1)
+				crash.Title = fmt.Sprintf(title)
+				crash.GuiltyFiles = []string{guilty}
+				client.ReportCrash(crash)
+				if i == 0 {
+					client.pollEmailBug()
+				}
+				c.advanceTime(time.Hour)
+			}
+		}
+	}
+	crash := testCrash(build, 1)
+	crash.Title = fmt.Sprintf("WARNING: a third, keep private")
+	crash.GuiltyFiles = []string{"a.c"}
+	client.ReportCrash(crash)
+	client.pollBug()
+
+	c.advanceTime(time.Hour * 24 * 31)
+
+	// Expect the reminder for subsystemA.
+	reply := client.pollEmailBug()
+	c.expectEQ(reply.Subject, "[syzbot] open bugs in the subsystemA subsystem")
+	c.expectEQ(reply.To, "moderation@syzkaller.com")
+	c.expectEQ(reply.Cc, []string{})
+	c.expectEQ(reply.Body, ``)
+
+	// Expect the reminder for subsystemB.
+	reply = client.pollEmailBug()
+	c.expectEQ(reply.Subject, "[syzbot] open bugs in the subsystemB subsystem")
+	c.expectEQ(reply.To, "moderation@syzkaller.com")
+	c.expectEQ(reply.Cc, []string{})
+	c.expectEQ(reply.Body, ``)
+
+	// Wait the next pair of reminders.
+	c.advanceTime(time.Hour * 24 * 30)
+
+	// Capture two more moderation requests.
+	reply = client.pollEmailBug()
+	c.expectEQ(reply.Subject, "[syzbot] open bugs in the subsystemA subsystem")
+	reply = client.pollEmailBug()
+	c.expectEQ(reply.Subject, "[syzbot] open bugs in the subsystemB subsystem")
+}
+
+func TestSubsystemRemindersModeration(t *testing.T) {
+	c := NewCtx(t)
+	defer c.Close()
+
+	client := c.makeClient(clientSubsystemRemind, keySubsystemRemind, true)
+	crashes := map[string]map[string]int{
+		"a.c": map[string]int{
+			"WARNING: a first":  3,
+			"WARNING: a second": 5,
+		},
+		"b.c": map[string]int{
+			"WARNING: b first":  2,
+			"WARNING: b second": 1,
+		},
+	}
+
+	build := testBuild(1)
+	client.UploadBuild(build)
+	for guilty, countsMap := range crashes {
+		for title, count := range countsMap {
+			for i := 0; i < count; i++ {
+				crash := testCrash(build, 1)
+				crash.Title = fmt.Sprintf(title)
+				crash.GuiltyFiles = []string{guilty}
+				client.ReportCrash(crash)
+				client.pollEmailBug()
+
+				c.advanceTime(time.Hour)
+			}
+		}
+	}
+
+	// Add two bugs of just one subsystem.
+	// Moderate one of them.
+	// Make sure it comes in time.
 }

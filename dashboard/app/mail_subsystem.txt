@@ -1,0 +1,12 @@
+Hello,
+
+Lately syzbot has been hitting {{.Total}} issues presumably related to {{.Subsystem}}.
+The full list of bugs can be found at {{.Link}}
+
+Here are
+{{- if eq .Type "most_frequent"}} the top crashers{{else}} some of the bugs{{end}}:
+{{range $i, $item := .Bugs}}
+{{inc $i}}. {{$item.Title}}, {{$item.Hits}} crashes
+{{- if gt $item.ReproLevel 0}}, has repro{{end}}
+{{$item.Link}}
+{{end}}
