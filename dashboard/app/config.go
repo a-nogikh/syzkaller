@@ -218,9 +218,8 @@ type KernelRepo struct {
 	ReportingPriority int
 	// CC for all bugs reported on this repo.
 	CC CCConfig
-	// This repository is no longer active and should not be polled for commits.
-	// It will only be used to display kernel aliases for older crashes.
-	Obsolete bool
+	// The repository will not be used for commit polling.
+	NoPoll bool
 }
 
 type CCConfig struct {
