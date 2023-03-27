@@ -238,6 +238,11 @@ func getNextJob(c context.Context, managers map[string]dashapi.ManagerJobs) (*Jo
 	if job != nil || err != nil {
 		return job, jobKey, err
 	}
+	// TODO: with some probability, try to generate a multi tree test.
+	// Query bugs with repros and lowest LastTreeTest.
+	// Repeat no more often that some const value (month?).
+	// Avoid build/boot/test errors??
+
 	// We need both C and syz repros, but the crazy datastore query restrictions
 	// do not allow to use ReproLevel>ReproLevelNone in the query. So we do 2 separate queries.
 	// C repros tend to be of higher reliability so maybe it's not bad.

@@ -220,6 +220,17 @@ type KernelRepo struct {
 	CC CCConfig
 	// The repository will not be used for commit polling.
 	NoPoll bool
+	// Type determines whether the repository is related to e.g. upstream or downstream code.
+	// By default it's TreeTypeUnknown.
+	Type dashapi.TreeType
+	// Stability can be one of NextTree, DevTree, etc.
+	// By default it's StabilityUnknown.
+	Stability dashapi.TreeStability
+	// MergeFrom is the alias of the repo that gets periodically merged to this KernelRepo.
+	MergeFrom string
+	// If RunRepro is true, dashboard will periodically initiate repro testing jobs on the
+	// tree and capture the results.
+	RunRepro bool
 }
 
 type CCConfig struct {

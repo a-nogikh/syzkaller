@@ -185,7 +185,35 @@ type JobPollResp struct {
 	ReproOpts         []byte
 	ReproSyz          []byte
 	ReproC            []byte
+	TestTrees         []JobTestTree
 }
+
+type JobTestTree struct {
+	Repo   string
+	Branch string
+	// If MergeRepo/MergeBranch are set, there'll be up to two results.
+	// One for ToT, one for the merge base.
+	MergeToRepo   string
+	MergeToBranch string
+}
+
+type TreeType string
+
+const (
+	TreeTypeUnknown TreeType = ""
+	UpstreamTree    TreeType = "upstream"
+	DownstreamTree  TreeType = "downstream"
+)
+
+type TreeStability string
+
+const (
+	StabilityUnknown TreeStability = ""
+	NextTree         TreeStability = "next"
+	DevTree          TreeStability = "dev"
+	ReleaseTree      TreeStability = "release"
+	StableTree       TreeStability = "stable"
+)
 
 type JobDoneReq struct {
 	ID             string

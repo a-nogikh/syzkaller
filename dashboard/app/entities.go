@@ -115,9 +115,22 @@ type Bug struct {
 	// Kcidb publishing status bitmask:
 	// bit 0 - the bug is published
 	// bit 1 - don't want to publish it (syzkaller build/test errors)
-	KcidbStatus int64
-	DailyStats  []BugDailyStats
-	Tags        BugTags
+	KcidbStatus  int64
+	DailyStats   []BugDailyStats
+	Trees        []BugTreeInfo
+	LastTreeTest time.Time
+	Tags         BugTags
+}
+
+// BugTreeInfo stores the information about whether the bug is reproducible on other trees.
+type BugTreeInfo struct {
+	Repo   string
+	Branch string
+	// If set, the entry is related to the merge base between the tree above and below.
+	MergeFromRepo   string
+	MergeFromBranch string
+	LastRun         TreeCrash
+	LastRunTime     time.Time
 }
 
 type BugTags struct {
@@ -446,6 +459,10 @@ type Job struct {
 	Error       int64 // reference to Error text entity, if set job failed
 	Flags       JobFlags
 
+	// These fields are needed for the JobMultiTest type.
+	TestOn      JobTestTree
+	TestResults []JobCrash
+
 	Reported bool // have we reported result back to user?
 }
 
@@ -459,6 +476,7 @@ const (
 	JobTestPatch JobType = iota
 	JobBisectCause
 	JobBisectFix
+	JobMultiTest
 )
 
 func (typ JobType) toDashapiReportType() dashapi.ReportType {
@@ -514,6 +532,28 @@ func (job *Job) isUnreliableBisect() bool {
 		job.Flags&BisectResultNoop != 0 ||
 		job.Flags&BisectResultRelease != 0 ||
 		job.Flags&BisectResultIgnore != 0
+}
+
+type JobTestTree struct {
+	Repo   string
+	Branch string
+	// If MergeRepo/MergeBranch are set, there'll be up to two results.
+	// One for ToT, one for the merge base.
+	MergeRepo   string
+	MergeBranch string
+}
+
+// TreeCrash represents a crash that was triggered during the execution of a job.
+type TreeCrash struct {
+	BuildID string
+	Title   string
+	Log     int64
+	Report  int64
+	// At least one must be set.
+	// There can also be cases when both are set (e.g. if the merge base is
+	// equal to ToT, there'll be just one result).
+	ToT       bool
+	MergeBase bool
 }
 
 // Text holds text blobs (crash logs, reports, reproducers, etc).
