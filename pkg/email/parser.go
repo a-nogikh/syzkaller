@@ -14,12 +14,15 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 )
 
 type Email struct {
 	BugID       string
 	MessageID   string
+	InReplyTo   string
+	Date        time.Time
 	Link        string
 	Subject     string
 	MailingList string
@@ -162,10 +165,13 @@ func Parse(r io.Reader, ownEmails, goodLists []string) (*Email, error) {
 		// In other cases, the mailing list would preserve From and just change Sender.
 		mailingList = CanonicalEmail(sender)
 	}
-
+	date, _ := mail.ParseDate(msg.Header.Get("Date"))
 	email := &Email{
+
 		BugID:       bugID,
 		MessageID:   msg.Header.Get("Message-ID"),
+		InReplyTo:   msg.Header.Get("In-Reply-To"),
+		Date:        date,
 		Link:        link,
 		Author:      author,
 		MailingList: mailingList,
