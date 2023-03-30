@@ -76,6 +76,13 @@ type EmailConfig struct {
 	MailMaintainers    bool
 	DefaultMaintainers []string
 	SubjectPrefix      string
+	// DiscussionSources is the ordered list of (Cc'd email, DiscussionSource) pairs.
+	DiscussionSources []EmailConfigDiscussion
+}
+
+type EmailConfigDiscussion struct {
+	Email  string
+	Source dashapi.DiscussionSource
 }
 
 func (cfg *EmailConfig) Type() string {
@@ -470,6 +477,7 @@ func incomingMail(c context.Context, r *http.Request) error {
 		incomingBugListEmail(c, bugListInfo, msg)
 		return nil
 	}
+	saveDiscussionEmail(c, bugInfo, msg, emailConfig)
 	if msg.Command == email.CmdTest {
 		return handleTestCommand(c, bugInfo, msg)
 	} else if msg.Command == email.CmdSet {
@@ -518,6 +526,37 @@ func incomingMail(c context.Context, r *http.Request) error {
 		warnMailingListInCC(c, msg, bugID, mailingList)
 	}
 	return nil
+}
+
+func saveDiscussionEmail(c context.Context, bugInfo *bugInfoResult,
+	msg *email.Email, emailConfig *EmailConfig) {
+	source := dashapi.NoDiscussion
+	for _, item := range emailConfig.DiscussionSources {
+		if stringInList(msg.Cc, item.Email) {
+			source = item.Source
+		}
+	}
+	if source == dashapi.NoDiscussion {
+		return
+	}
+	// This is very crude, but should work for now.
+	dType := dashapi.DiscussionReport
+	if strings.Contains(msg.Subject, "PATCH") {
+		dType = dashapi.DiscussionPatch
+	}
+	err := saveDiscussionMessage(c, &newDiscussionMessage{
+		id:        msg.MessageID,
+		subject:   msg.Subject,
+		msgSource: source,
+		msgType:   dType,
+		bugID:     bugInfo.bugReporting.ID,
+		inReplyTo: msg.InReplyTo,
+		external:  ownEmail(c) != msg.Author,
+		time:      msg.Date,
+	})
+	if err != nil {
+		log.Errorf(c, "failed to save in discussions: %v", err)
+	}
 }
 
 var emailCmdToStatus = map[email.Command]dashapi.BugStatus{

@@ -298,6 +298,9 @@ var testConfig = &GlobalConfig{
 						Email:            "test@syzkaller.com",
 						HandleListEmails: true,
 						SubjectPrefix:    "[syzbot]",
+						DiscussionSources: []EmailConfigDiscussion{
+							{"linux-kernel@vger.kernel.org", dashapi.DiscussionLore},
+						},
 					},
 				},
 			},

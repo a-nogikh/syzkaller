@@ -228,6 +228,14 @@ type uiCommit struct {
 	Date   time.Time
 }
 
+type uiBugDiscussion struct {
+	Subject  string
+	Link     string
+	Total    int
+	External int
+	Last     time.Time
+}
+
 type uiBugPage struct {
 	Header        *uiHeader
 	Now           time.Time
@@ -242,6 +250,7 @@ type uiBugPage struct {
 	FixBisections *uiCrashTable
 	TestPatchJobs *uiJobList
 	Subsystems    []*uiBugSubsystem
+	Discussions   []*uiBugDiscussion
 }
 
 type uiBugGroup struct {
@@ -721,6 +730,7 @@ func handleBug(c context.Context, w http.ResponseWriter, r *http.Request) error 
 			PerBug: true,
 			Jobs:   testPatchJobs,
 		},
+		Discussions: getBugDiscussionsUI(c, bug, accessLevel),
 	}
 	for _, entry := range bug.Tags.Subsystems {
 		data.Subsystems = append(data.Subsystems, makeBugSubsystemUI(c, bug, entry))
@@ -762,6 +772,30 @@ func makeBugSubsystemUI(c context.Context, bug *Bug, entry BugSubsystem) *uiBugS
 		Name: entry.Name,
 		Link: link,
 	}
+}
+
+func getBugDiscussionsUI(c context.Context, bug *Bug, accessLevel AccessLevel) []*uiBugDiscussion {
+	// TODO: also include dup bug discussions.
+	var list []*uiBugDiscussion
+	for _, bugReporting := range bug.Reporting {
+		reporting := config.Namespaces[bug.Namespace].ReportingByName(bugReporting.Name)
+		if reporting == nil || reporting.AccessLevel > accessLevel {
+			continue
+		}
+		for _, d := range bugReporting.discussions() {
+			list = append(list, &uiBugDiscussion{
+				Subject:  d.Subject,
+				Link:     discussionURL(dashapi.DiscussionSource(d.Source), d.ID),
+				Total:    d.AllMessages,
+				External: d.ExternalMessages,
+				Last:     d.LastMessage,
+			})
+		}
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		return list[i].Last.After(list[j].Last)
+	})
+	return list
 }
 
 func handleBugStats(c context.Context, w http.ResponseWriter, r *http.Request) error {

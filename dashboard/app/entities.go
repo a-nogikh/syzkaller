@@ -229,6 +229,22 @@ type BugReporting struct {
 	OnHold     time.Time          // if set, the bug must not be upstreamed
 	Reported   time.Time
 	Closed     time.Time
+	// datastore does not permit us to put slice here (they cannot be nested).
+	// Since we don't need to index any subfields, let's just store the data as JSON.
+	DiscussionsJSON []byte `datastore:",noindex"`
+}
+
+// BugReportingDiscussion is a summary of the info contained in Discussion.
+type BugReportingDiscussion struct {
+	ID      string
+	Source  string
+	Type    string
+	Subject string
+	// So far it's not apparent whether we'll need the total number of comment,
+	// but let's always keep in in the DB -- it will be much harder to add it later.
+	AllMessages      int
+	ExternalMessages int
+	LastMessage      time.Time
 }
 
 type Crash struct {
@@ -325,6 +341,37 @@ func (crash *Crash) Load(ps []db.Property) error {
 
 func (crash *Crash) Save() ([]db.Property, error) {
 	return db.SaveStruct(crash)
+}
+
+type Discussion struct {
+	ID      string // the base message ID
+	Source  string
+	Type    string
+	Subject string
+	BugIDs  []string
+	// Message contains last N messages.
+	// N is supposed to be big enough, so that in almost all cases
+	// AllMessages == len(Messages) holds true.
+	Messages []DiscussionMessage
+	// Since Messages could be trimmed, we have to keep aggregate stats.
+	AllMessages      int
+	ExternalMessages int
+}
+
+func discussionKey(c context.Context, source, id string) *db.Key {
+	return db.NewKey(c, "Discussion", fmt.Sprintf("%v-%v", source, id), 0, nil)
+}
+
+func (d *Discussion) key(c context.Context) *db.Key {
+	return discussionKey(c, d.Source, d.ID)
+}
+
+type DiscussionMessage struct {
+	ID string
+	// External is true if the message is not from the bot itself.
+	// Let's use a shorter name to save space.
+	External bool      `datastore:"e"`
+	Time     time.Time `datastore:",noindex"`
 }
 
 // ReportingState holds dynamic info associated with reporting.

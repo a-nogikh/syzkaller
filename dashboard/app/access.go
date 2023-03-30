@@ -186,5 +186,6 @@ func sanitizeReporting(bug *Bug) {
 		bugReporting.ID = ""
 		bugReporting.ExtID = ""
 		bugReporting.Link = ""
+		bugReporting.DiscussionsJSON = nil
 	}
 }
