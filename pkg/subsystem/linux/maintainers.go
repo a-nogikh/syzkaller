@@ -39,19 +39,26 @@ func parseLinuxMaintainers(content io.Reader) ([]*maintainersRecord, error) {
 		}
 	}
 	ml := &maintainersLexer{scanner: scanner}
+	perName := map[string]*maintainersRecord{}
 	ret := []*maintainersRecord{}
+	var current *maintainersRecord
 loop:
 	for {
 		item := ml.next()
 		switch v := item.(type) {
 		case recordTitle:
-			// The new subsystem begins.
-			ret = append(ret, &maintainersRecord{name: string(v)})
+			// New subsystem block begins.
+			name := string(v)
+			if _, ok := perName[name]; !ok {
+				perName[name] = &maintainersRecord{name: name}
+				ret = append(ret, perName[name])
+			}
+			current = perName[name]
 		case recordProperty:
 			if len(ret) == 0 {
 				return nil, fmt.Errorf("line %d: property without subsystem", ml.currentLine)
 			}
-			err := applyProperty(ret[len(ret)-1], &v)
+			err := applyProperty(current, &v)
 			if err != nil {
 				return nil, fmt.Errorf("line %d: failed to apply the property %#v: %w",
 					ml.currentLine, v, err)

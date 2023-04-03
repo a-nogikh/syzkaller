@@ -5,10 +5,12 @@ package linux
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/google/syzkaller/pkg/subsystem"
 )
@@ -19,7 +21,7 @@ func ListFromRepo(repo string) ([]*subsystem.Subsystem, error) {
 
 // listFromRepoInner allows for better testing.
 func listFromRepoInner(root fs.FS, rules *customRules) ([]*subsystem.Subsystem, error) {
-	records, err := getMaintainers(root)
+	records, err := getMaintainers(root, rules)
 	if err != nil {
 		return nil, err
 	}
@@ -207,11 +209,16 @@ func maintainersFromRecords(records []*maintainersRecord) []string {
 	return retList
 }
 
-func getMaintainers(root fs.FS) ([]*maintainersRecord, error) {
+func getMaintainers(root fs.FS, rules *customRules) ([]*maintainersRecord, error) {
 	f, err := root.Open("MAINTAINERS")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open the MAINTAINERS file: %w", err)
 	}
 	defer f.Close()
-	return parseLinuxMaintainers(f)
+
+	reader := f.(io.Reader)
+	if rules.appendMaintainers != "" {
+		reader = io.MultiReader(reader, strings.NewReader(rules.appendMaintainers))
+	}
+	return parseLinuxMaintainers(reader)
 }

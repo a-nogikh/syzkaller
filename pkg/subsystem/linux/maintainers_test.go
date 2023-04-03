@@ -216,6 +216,54 @@ func TestLinuxMaintainers(t *testing.T) {
 	}
 }
 
+func TestMaintainersAmend(t *testing.T) {
+	result, err := parseLinuxMaintainers(
+		strings.NewReader(`
+Maintainers List
+----------------
+
+.. note:: When reading this list, please look for the most precise areas
+          first. When adding to this list, please keep the entries in
+          alphabetical order.
+
+NAME
+F:	include_1.c
+
+ANOTHER NAME
+F:	include_2.c
+
+.. Amend the already existing entry.
+NAME
+X:      exclude_1.c
+
+`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetResult := []*maintainersRecord{
+		{
+			name: "NAME",
+			includePatterns: []string{
+				"include_1.c",
+			},
+			excludePatterns: []string{
+				"exclude_1.c",
+			},
+		},
+		{
+			name: "ANOTHER NAME",
+			includePatterns: []string{
+				"include_2.c",
+			},
+		},
+	}
+	if diff := cmp.Diff(targetResult, result,
+		cmp.AllowUnexported(maintainersRecord{})); diff != "" {
+		t.Fatal(diff)
+	}
+}
+
 const maintainersSample = `
 List of maintainers and how to submit kernel changes
 ====================================================

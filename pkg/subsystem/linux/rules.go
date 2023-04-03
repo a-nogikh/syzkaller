@@ -12,6 +12,8 @@ type customRules struct {
 	// These subsystems need to be extracted even without mailing lists.
 	// Key is the subsystem name, value is the list of raw names in MAINTAINERS.
 	extraSubsystems map[string][]string
+	// These lines will be appended to MAINTAINERS.
+	appendMaintainers string
 }
 
 var (
@@ -79,5 +81,10 @@ var (
 			"kernfs": {"KERNFS"},
 			"udf":    {"UDF FILESYSTEM"},
 		},
+		appendMaintainers: `
+FILESYSTEMS (VFS and infrastructure)
+X:	fs/efivarfs/
+
+`,
 	}
 )
