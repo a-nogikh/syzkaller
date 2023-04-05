@@ -234,6 +234,14 @@ type KernelRepo struct {
 	// This repository is no longer active and should not be polled for commits.
 	// It will only be used to display kernel aliases for older crashes.
 	Obsolete bool
+	Links    []KernelRepoLink
+}
+
+// TODO: make sure that Roles are all different.
+type KernelRepoLink struct {
+	Alias      string
+	Role       dashapi.RepoRole
+	CommitFlow dashapi.CommitFlow
 }
 
 type CCConfig struct {

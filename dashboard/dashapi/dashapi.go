@@ -925,3 +925,18 @@ type Recipients []RecipientInfo
 func (r Recipients) Len() int           { return len(r) }
 func (r Recipients) Less(i, j int) bool { return r[i].Address.Address < r[j].Address.Address }
 func (r Recipients) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
+
+type RepoRole string
+
+const (
+	RepoNext     = "next"
+	RepoUpstream = "upstream"
+	RepoMainline = "mainline"
+)
+
+type CommitFlow string
+
+const (
+	MergeCommits      = "merge"
+	CherryPickCommits = "cherry-pick"
+)

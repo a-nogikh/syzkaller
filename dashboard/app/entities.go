@@ -119,10 +119,35 @@ type Bug struct {
 	DailyStats     []BugDailyStats
 	Tags           BugTags
 	DiscussionInfo []BugDiscussionInfo
+	TreeTests      []BugTreeTest
+	NextTreeTest   time.Time
+}
+
+type BugTreeTest struct {
+	CrashID   int
+	Repo      string
+	Branch    string
+	Commit    string
+	MergeBase bool // If true, testing was done on the merge base commit.
+	// Below are job keys.
+	FirstRunKey string // The first job that finished successfully.
+	LastRunKey  string
+	ErrorKey    string // If some job succeeds afterwards, it should be cleared.
+	PendingKey  string
 }
 
 type BugTags struct {
 	Subsystems []BugSubsystem
+	// TODO: Probably we need some generic way to store them.
+	Downstream BugTagBool
+	Upstream   BugTagBool
+	Next       BugTagBool
+	TreeLocal  BugTagBool
+}
+
+type BugTagBool struct {
+	Value bool
+	SetBy string
 }
 
 type BugSubsystem struct {
