@@ -222,6 +222,7 @@ type BugDiscussionInfo struct {
 type DiscussionSummary struct {
 	AllMessages      int
 	ExternalMessages int
+	FirstMessage     time.Time
 	LastMessage      time.Time
 	LastPatchMessage time.Time
 }

@@ -233,6 +233,7 @@ type uiBugDiscussion struct {
 	Link     string
 	Total    int
 	External int
+	First    time.Time
 	Last     time.Time
 }
 
@@ -838,6 +839,7 @@ func getBugDiscussionsUI(c context.Context, bug *Bug) ([]*uiBugDiscussion, error
 			Link:     d.link(),
 			Total:    d.Summary.AllMessages,
 			External: d.Summary.ExternalMessages,
+			First:    d.Summary.FirstMessage,
 			Last:     d.Summary.LastMessage,
 		})
 	}

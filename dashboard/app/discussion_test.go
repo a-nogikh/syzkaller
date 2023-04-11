@@ -86,6 +86,7 @@ func TestDiscussionAccess(t *testing.T) {
 			Link:     "https://lore.kernel.org/all/123/T/",
 			Total:    1,
 			External: 1,
+			First:    firstTime,
 			Last:     firstTime,
 		},
 	}, got); diff != "" {
@@ -104,6 +105,7 @@ func TestDiscussionAccess(t *testing.T) {
 			Link:     "https://lore.kernel.org/all/456/T/",
 			Total:    1,
 			External: 0,
+			First:    secondTime,
 			Last:     secondTime,
 		},
 		{
@@ -111,6 +113,7 @@ func TestDiscussionAccess(t *testing.T) {
 			Link:     "https://lore.kernel.org/all/123/T/",
 			Total:    1,
 			External: 1,
+			First:    firstTime,
 			Last:     firstTime,
 		},
 	}, got); diff != "" {
@@ -122,6 +125,7 @@ func TestDiscussionAccess(t *testing.T) {
 	if diff := cmp.Diff(DiscussionSummary{
 		AllMessages:      2,
 		ExternalMessages: 1,
+		FirstMessage:     firstTime,
 		LastMessage:      secondTime,
 		LastPatchMessage: firstTime,
 	}, summary); diff != "" {
@@ -169,6 +173,7 @@ Hello`, msg.Sender)
 			Link:     "https://lore.kernel.org/all/1234/T/",
 			Total:    1,
 			External: 0,
+			First:    time.Date(2017, time.August, 15, 14, 59, 0, 0, zone),
 			Last:     time.Date(2017, time.August, 15, 14, 59, 0, 0, zone),
 		},
 	}, got); diff != "" {
@@ -200,6 +205,7 @@ Hello`, msg.Sender)
 			Link:     "https://lore.kernel.org/all/1234/T/",
 			Total:    2,
 			External: 1,
+			First:    time.Date(2017, time.August, 15, 14, 59, 0, 0, zone),
 			Last:     time.Date(2017, time.August, 16, 14, 59, 0, 0, zone),
 		},
 	}, got); diff != "" {

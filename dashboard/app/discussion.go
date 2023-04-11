@@ -88,6 +88,11 @@ func mergeDiscussion(c context.Context, update *dashapi.Discussion) error {
 		if d.Type == string(dashapi.DiscussionPatch) {
 			diff.LastPatchMessage = diff.LastMessage
 		}
+		for _, m := range update.Messages {
+			if diff.FirstMessage.IsZero() || diff.FirstMessage.After(m.Time) {
+				diff.FirstMessage = m.Time
+			}
+		}
 		d.Summary.merge(diff)
 		_, err = db.Put(c, d.key(c), d)
 		if err != nil {
@@ -146,6 +151,9 @@ func (ds *DiscussionSummary) merge(diff DiscussionSummary) {
 	}
 	if ds.LastPatchMessage.Before(diff.LastPatchMessage) {
 		ds.LastPatchMessage = diff.LastPatchMessage
+	}
+	if ds.FirstMessage.IsZero() || ds.FirstMessage.After(diff.FirstMessage) {
+		ds.FirstMessage = diff.FirstMessage
 	}
 }
 
