@@ -56,18 +56,12 @@ func main() {
 				Time:     m.Date,
 			})
 		}
-		discType := dashapi.DiscussionReport
-		if strings.Contains(thread.Subject, "PATCH") {
-			discType = dashapi.DiscussionPatch
-		} else if strings.Contains(thread.Subject, "Monthly") {
-			discType = dashapi.DiscussionReminder
-		}
 		log.Printf("saving %d/%d", i+1, len(threads))
 		err := dash.SaveDiscussion(&dashapi.SaveDiscussionReq{
 			Discussion: &dashapi.Discussion{
 				ID:       thread.MessageID,
 				Source:   dashapi.DiscussionLore,
-				Type:     discType,
+				Type:     thread.Type,
 				Subject:  thread.Subject,
 				BugIDs:   thread.BugIDs,
 				Messages: messages,
