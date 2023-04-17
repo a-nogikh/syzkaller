@@ -466,14 +466,10 @@ func processIncomingEmail(c context.Context, msg *email.Email) error {
 		// But we still want to remember the id of our own message, so just neutralize the command.
 		msg.Commands = nil
 	}
-	command := msg.FirstCommand()
 	log.Infof(c, "received email: subject %q, author %q, cc %q, msg %q, bug %v, cmd %q, link %q, list %q",
-		msg.Subject, msg.Author, msg.Cc, msg.MessageID, msg.BugIDs, command.Command, msg.Link, msg.MailingList)
-	if command.Command == email.CmdFix && command.Args == "exact-commit-title" {
-		// Sometimes it happens that somebody sends us our own text back, ignore it.
-		command.Command = email.CmdNone
-		msg.Commands = nil
-	}
+		msg.Subject, msg.Author, msg.Cc, msg.MessageID, msg.BugIDs, msg.FirstCommand().Command, msg.Link, msg.MailingList)
+	excludeSampleCommands(msg)
+	command := msg.FirstCommand()
 	bugInfo, bugListInfo, emailConfig := identifyEmail(c, msg)
 	if bugInfo == nil && bugListInfo == nil {
 		return nil // error was already logged
@@ -545,6 +541,24 @@ func processIncomingEmail(c context.Context, msg *email.Email) error {
 		warnMailingListInCC(c, msg, bugID, mailingList, command)
 	}
 	return nil
+}
+
+func excludeSampleCommands(msg *email.Email) {
+	// Sometimes it happens that somebody sends us our own text back, ignore it.
+	var newCommands []*email.SingleCommand
+	for _, cmd := range msg.Commands {
+		ok := true
+		switch cmd.Command {
+		case email.CmdFix:
+			ok = cmd.Args != "exact-commit-title"
+		case email.CmdSkip:
+			ok = cmd.Args != "bug-title"
+		}
+		if ok {
+			newCommands = append(newCommands, cmd)
+		}
+	}
+	msg.Commands = newCommands
 }
 
 func processDiscussionEmail(c context.Context, msg *email.Email, source dashapi.DiscussionSource) error {
