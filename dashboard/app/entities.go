@@ -123,6 +123,14 @@ type Bug struct {
 
 type BugTags struct {
 	Subsystems []BugSubsystem
+	NoRemind   BugLabelTag
+}
+
+type BugLabelTag struct {
+	// Value of the label.
+	Value bool
+	// The name of the user who last set the label.
+	SetBy string
 }
 
 type BugSubsystem struct {

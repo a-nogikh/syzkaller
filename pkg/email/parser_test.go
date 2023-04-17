@@ -394,7 +394,7 @@ type ParseTest struct {
 
 var parseTestZone = time.FixedZone("", -7*60*60)
 
-// nolint: lll
+// nolint: lll, dupl
 var parseTests = []ParseTest{
 	{`Date: Sun, 7 May 2017 19:54:00 -0700
 Message-ID: <123>
@@ -1043,6 +1043,38 @@ Content-Transfer-Encoding: quoted-printable
 				Command: CmdTest,
 				Str:     "test:",
 				Args:    "ccc ddd",
+			},
+		},
+	}},
+	{`Sender: syzkaller-bugs@googlegroups.com
+Subject: Subject
+To: syzbot <syzbot+344bb0f46d7719cd9483@syzkaller.appspotmail.com>
+From: bar <bar@foo.com>
+Message-ID: <12345>
+Date: Sun, 7 May 2017 19:54:00 -0700
+Content-Type: text/plain; charset="UTF-8"
+
+#syz skip: first title
+#syz skip: second title
+`, Email{
+		MessageID: "<12345>",
+		Date:      time.Date(2017, time.May, 7, 19, 54, 0, 0, parseTestZone),
+		Subject:   "Subject",
+		Author:    "bar@foo.com",
+		Cc:        []string{"bar@foo.com", "syzbot@syzkaller.appspotmail.com"},
+		Body: `#syz skip: first title
+#syz skip: second title
+`,
+		Commands: []*SingleCommand{
+			{
+				Command: CmdSkip,
+				Str:     "skip:",
+				Args:    "first title",
+			},
+			{
+				Command: CmdSkip,
+				Str:     "skip:",
+				Args:    "second title",
 			},
 		},
 	}},

@@ -480,10 +480,12 @@ type BugListItem struct {
 }
 
 type BugListUpdate struct {
-	ID      string // copied from BugListReport
-	ExtID   string
-	Link    string
-	Command BugListUpdateCommand
+	ID       string // copied from BugListReport
+	ExtID    string
+	Link     string
+	Command  BugListUpdateCommand
+	User     string
+	BugTitle string
 }
 
 type BugListUpdateCommand string
@@ -493,6 +495,7 @@ const (
 	BugListUpdateCmd     BugListUpdateCommand = "update"
 	BugListUpstreamCmd   BugListUpdateCommand = "upstream"
 	BugListRegenerateCmd BugListUpdateCommand = "regenerate"
+	BugListSkipCmd       BugListUpdateCommand = "skip"
 )
 
 type BugUpdate struct {

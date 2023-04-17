@@ -55,6 +55,7 @@ const (
 	CmdUnCC
 	CmdSet
 	CmdRegenerate
+	CmdSkip
 
 	cmdTest5
 )
@@ -310,7 +311,7 @@ func extractCommand(body string) (*SingleCommand, int) {
 		args = extractArgsLine(body[cmdPos+cmdEnd:])
 	case cmdTest5:
 		args = extractArgsTokens(body[cmdPos+cmdEnd:], 5)
-	case CmdFix, CmdDup:
+	case CmdFix, CmdDup, CmdSkip:
 		args = extractArgsLine(body[cmdPos+cmdEnd:])
 	}
 	return &SingleCommand{
@@ -346,6 +347,8 @@ func strToCmd(str string) Command {
 		return CmdSet
 	case "regenerate":
 		return CmdRegenerate
+	case "skip", "skip:":
+		return CmdSkip
 	case "test_5_arg_cmd":
 		return cmdTest5
 	}

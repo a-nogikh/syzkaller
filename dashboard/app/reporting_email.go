@@ -705,27 +705,44 @@ func handleEmailBounce(w http.ResponseWriter, r *http.Request) {
 }
 
 func incomingBugListEmail(c context.Context, bugListInfo *bugListInfoResult, msg *email.Email) {
-	upd := &dashapi.BugListUpdate{
-		ID:    bugListInfo.id,
-		ExtID: msg.MessageID,
-		Link:  msg.Link,
+	const maxListCommands = 10
+	if len(msg.Commands) > maxListCommands {
+		msg.Commands = msg.Commands[:maxListCommands]
 	}
-	command := msg.FirstCommand()
-	if command.Command == email.CmdUpstream {
-		upd.Command = dashapi.BugListUpstreamCmd
-	} else if command.Command == email.CmdRegenerate {
-		upd.Command = dashapi.BugListRegenerateCmd
-	} else {
-		upd.Command = dashapi.BugListUpdateCmd
+	totalReply := ""
+	for _, command := range msg.Commands {
+		upd := &dashapi.BugListUpdate{
+			ID:    bugListInfo.id,
+			ExtID: msg.MessageID,
+			Link:  msg.Link,
+		}
+		switch command.Command {
+		case email.CmdUpstream:
+			upd.Command = dashapi.BugListUpstreamCmd
+		case email.CmdRegenerate:
+			upd.Command = dashapi.BugListRegenerateCmd
+		case email.CmdSkip:
+			upd.Command = dashapi.BugListSkipCmd
+			upd.User = msg.Author
+			upd.BugTitle = command.Args
+		default:
+			upd.Command = dashapi.BugListUpdateCmd
+		}
+		log.Infof(c, "bug list update: id=%s, cmd=%v", upd.ID, upd.Command)
+		reply, err := reportingBugListCommand(c, upd)
+		if err != nil {
+			log.Errorf(c, "bug list command failed: %s", err)
+			return
+		}
+		if reply != "" {
+			if totalReply != "" {
+				totalReply += "\n\n"
+			}
+			totalReply += reply
+		}
 	}
-	log.Infof(c, "bug list update: id=%s, cmd=%v", upd.ID, upd.Command)
-	reply, err := reportingBugListCommand(c, upd)
-	if err != nil {
-		log.Errorf(c, "bug list command failed: %s", err)
-		return
-	}
-	if reply != "" {
-		if err := replyTo(c, msg, bugListInfo.id, reply); err != nil {
+	if totalReply != "" {
+		if err := replyTo(c, msg, bugListInfo.id, totalReply); err != nil {
 			log.Errorf(c, "failed to send email reply: %v", err)
 		}
 	}

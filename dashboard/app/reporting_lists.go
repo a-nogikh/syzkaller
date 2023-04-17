@@ -201,6 +201,12 @@ Please visit the new discussion thread.`
 			if err != nil {
 				return fmt.Errorf("failed to save subsystem: %s", err)
 			}
+		case dashapi.BugListSkipCmd:
+			var err error
+			reply, err = skipBugFromReport(c, report, cmd.BugTitle, cmd.User)
+			if err != nil {
+				return err
+			}
 		}
 		_, err = db.Put(c, reportKey, report)
 		if err != nil {
@@ -212,6 +218,35 @@ Please visit the new discussion thread.`
 		XG:       true,
 		Attempts: 10,
 	})
+}
+
+func skipBugFromReport(c context.Context, report *SubsystemReport, title, user string) (string, error) {
+	bugKeys, err := report.getBugKeys()
+	if err != nil {
+		return "", err
+	}
+	bugs := make([]*Bug, len(bugKeys))
+	if err := db.GetMulti(c, bugKeys, bugs); err != nil {
+		return "", err
+	}
+	var bug *Bug
+	var bugKey *db.Key
+	for i, listBug := range bugs {
+		if stringInList(listBug.AltTitles, title) || listBug.displayTitle() == title {
+			bug = listBug
+			bugKey = bugKeys[i]
+			break
+		}
+	}
+	if bug == nil {
+		return fmt.Sprintf("No bugs with the %q title have been reported", title), nil
+	}
+	bug.Tags.NoRemind.Value = true
+	bug.Tags.NoRemind.SetBy = user
+	if _, err := db.Put(c, bugKey, bug); err != nil {
+		return "", fmt.Errorf("failed to put bug: %v", err)
+	}
+	return "", nil
 }
 
 func findSubsystemReportByID(c context.Context, ID string) (*Subsystem,
@@ -262,6 +297,10 @@ func querySubsystemReport(c context.Context, subsystem *Subsystem, reporting *Re
 		}
 		if bug.FirstTime.After(timeNow(c).Add(-config.MinBugAge)) {
 			// Don't take bugs which are too new -- they're still fresh in memory.
+			continue
+		}
+		if bug.Tags.NoRemind.Value {
+			// The bug was intentionally excluded from monthly reminders.
 			continue
 		}
 		if bug.ReproLevel == dashapi.ReproLevelNone {
