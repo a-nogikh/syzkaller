@@ -308,6 +308,7 @@ type uiBug struct {
 	LastActivity   time.Time
 	Subsystems     []*uiBugSubsystem
 	Discussions    DiscussionSummary
+	NoReminders    bool
 }
 
 type uiBugSubsystem struct {
@@ -1475,6 +1476,7 @@ func createUIBug(c context.Context, bug *Bug, state *ReportingState, managers []
 		NumManagers:    len(managers),
 		LastActivity:   bug.LastActivity,
 		Discussions:    bug.discussionSummary(),
+		NoReminders:    bug.Tags.NoRemind.Value,
 	}
 	for _, entry := range bug.Tags.Subsystems {
 		uiBug.Subsystems = append(uiBug.Subsystems, makeBugSubsystemUI(c, bug, entry))
