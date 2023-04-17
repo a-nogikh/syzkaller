@@ -464,13 +464,15 @@ func processIncomingEmail(c context.Context, msg *email.Email) error {
 	// Ignore any incoming emails from syzbot itself.
 	if ownEmail(c) == msg.Author {
 		// But we still want to remember the id of our own message, so just neutralize the command.
-		msg.Command, msg.CommandArgs = email.CmdNone, ""
+		msg.Commands = nil
 	}
+	command := msg.FirstCommand()
 	log.Infof(c, "received email: subject %q, author %q, cc %q, msg %q, bug %v, cmd %q, link %q, list %q",
-		msg.Subject, msg.Author, msg.Cc, msg.MessageID, msg.BugIDs, msg.Command, msg.Link, msg.MailingList)
-	if msg.Command == email.CmdFix && msg.CommandArgs == "exact-commit-title" {
+		msg.Subject, msg.Author, msg.Cc, msg.MessageID, msg.BugIDs, command.Command, msg.Link, msg.MailingList)
+	if command.Command == email.CmdFix && command.Args == "exact-commit-title" {
 		// Sometimes it happens that somebody sends us our own text back, ignore it.
-		msg.Command, msg.CommandArgs = email.CmdNone, ""
+		command.Command = email.CmdNone
+		msg.Commands = nil
 	}
 	bugInfo, bugListInfo, emailConfig := identifyEmail(c, msg)
 	if bugInfo == nil && bugListInfo == nil {
@@ -482,7 +484,7 @@ func processIncomingEmail(c context.Context, msg *email.Email) error {
 	mailingList := email.CanonicalEmail(emailConfig.Email)
 	mailingListInCC := checkMailingListInCC(c, msg, mailingList)
 	log.Infof(c, "from/cc mailing list: %v/%v", fromMailingList, mailingListInCC)
-	if fromMailingList && len(msg.BugIDs) > 0 && msg.Command != email.CmdNone {
+	if fromMailingList && len(msg.BugIDs) > 0 && command.Command != email.CmdNone {
 		// Note that if syzbot was not directly mentioned in To or Cc, this is not really
 		// a duplicate message, so it must be processed. We detect it by looking at BugID.
 
@@ -495,42 +497,42 @@ func processIncomingEmail(c context.Context, msg *email.Email) error {
 		incomingBugListEmail(c, bugListInfo, msg)
 		return nil
 	}
-	if msg.Command == email.CmdTest {
-		return handleTestCommand(c, bugInfo, msg)
-	} else if msg.Command == email.CmdSet {
-		return handleSetCommand(c, bugInfo, msg)
+	if command.Command == email.CmdTest {
+		return handleTestCommand(c, bugInfo, msg, command)
+	} else if command.Command == email.CmdSet {
+		return handleSetCommand(c, bugInfo, msg, command)
 	}
 	cmd := &dashapi.BugUpdate{
-		Status: emailCmdToStatus[msg.Command],
+		Status: emailCmdToStatus[command.Command],
 		ID:     bugInfo.bugReporting.ID,
 		ExtID:  msg.MessageID,
 		Link:   msg.Link,
 		CC:     msg.Cc,
 	}
 	bugID := bugInfo.bugReporting.ID
-	switch msg.Command {
+	switch command.Command {
 	case email.CmdNone, email.CmdUpstream, email.CmdInvalid, email.CmdUnDup:
 	case email.CmdFix:
-		if msg.CommandArgs == "" {
+		if command.Args == "" {
 			return replyTo(c, msg, bugID, "no commit title")
 		}
-		cmd.FixCommits = []string{msg.CommandArgs}
+		cmd.FixCommits = []string{command.Args}
 	case email.CmdUnFix:
 		cmd.ResetFixCommits = true
 	case email.CmdDup:
-		if msg.CommandArgs == "" {
+		if command.Args == "" {
 			return replyTo(c, msg, bugID, "no dup title")
 		}
-		cmd.DupOf = msg.CommandArgs
+		cmd.DupOf = command.Args
 		cmd.DupOf = strings.TrimSpace(strings.TrimPrefix(cmd.DupOf, replySubjectPrefix))
 		cmd.DupOf = strings.TrimSpace(strings.TrimPrefix(cmd.DupOf, emailConfig.SubjectPrefix))
 	case email.CmdUnCC:
 		cmd.CC = []string{msg.Author}
 	default:
-		if msg.Command != email.CmdUnknown {
-			log.Errorf(c, "unknown email command %v %q", msg.Command, msg.CommandStr)
+		if command.Command != email.CmdUnknown {
+			log.Errorf(c, "unknown email command %v %q", command.Command, command.Str)
 		}
-		return replyTo(c, msg, bugID, fmt.Sprintf("unknown command %q", msg.CommandStr))
+		return replyTo(c, msg, bugID, fmt.Sprintf("unknown command %q", command.Str))
 	}
 	ok, reply, err := incomingCommand(c, cmd)
 	if err != nil {
@@ -539,8 +541,8 @@ func processIncomingEmail(c context.Context, msg *email.Email) error {
 	if !ok && reply != "" {
 		return replyTo(c, msg, bugID, reply)
 	}
-	if !mailingListInCC && msg.Command != email.CmdNone && msg.Command != email.CmdUnCC {
-		warnMailingListInCC(c, msg, bugID, mailingList)
+	if !mailingListInCC && command.Command != email.CmdNone && command.Command != email.CmdUnCC {
+		warnMailingListInCC(c, msg, bugID, mailingList, command)
 	}
 	return nil
 }
@@ -589,8 +591,9 @@ var emailCmdToStatus = map[email.Command]dashapi.BugStatus{
 	email.CmdUnCC:     dashapi.BugStatusUnCC,
 }
 
-func handleTestCommand(c context.Context, info *bugInfoResult, msg *email.Email) error {
-	args := strings.Split(msg.CommandArgs, " ")
+func handleTestCommand(c context.Context, info *bugInfoResult,
+	msg *email.Email, command email.SingleCommand) error {
+	args := strings.Split(command.Args, " ")
 	if len(args) != 2 {
 		return replyTo(c, msg, info.bugReporting.ID,
 			fmt.Sprintf("want 2 args (repo, branch), got %v", len(args)))
@@ -642,9 +645,10 @@ If you believe that the subsystem list should be changed, please contact the bot
 The list of available subsystems can be found at %s`
 )
 
-func handleSetCommand(c context.Context, info *bugInfoResult, msg *email.Email) error {
+func handleSetCommand(c context.Context, info *bugInfoResult,
+	msg *email.Email, command email.SingleCommand) error {
 	subsystemsURL := fmt.Sprintf("%v/%v/subsystems?all=true", appURL(c), info.bug.Namespace)
-	match := setCmdRe.FindStringSubmatch(msg.CommandArgs)
+	match := setCmdRe.FindStringSubmatch(command.Args)
 	if len(match) != 3 {
 		return replyTo(c, msg, info.bugReporting.ID,
 			fmt.Sprintf(cmdParseFailureFmt, subsystemsURL))
@@ -706,9 +710,10 @@ func incomingBugListEmail(c context.Context, bugListInfo *bugListInfoResult, msg
 		ExtID: msg.MessageID,
 		Link:  msg.Link,
 	}
-	if msg.Command == email.CmdUpstream {
+	command := msg.FirstCommand()
+	if command.Command == email.CmdUpstream {
 		upd.Command = dashapi.BugListUpstreamCmd
-	} else if msg.Command == email.CmdRegenerate {
+	} else if command.Command == email.CmdRegenerate {
 		upd.Command = dashapi.BugListRegenerateCmd
 	} else {
 		upd.Command = dashapi.BugListUpdateCmd
@@ -794,7 +799,7 @@ func loadBugInfo(c context.Context, msg *email.Email) *bugInfoResult {
 			}
 			log.Infof(c, "mailing list matching failed: %s", matchingErr)
 		}
-		if msg.Command == email.CmdNone {
+		if len(msg.Commands) == 0 {
 			// This happens when people CC syzbot on unrelated emails.
 			log.Infof(c, "no bug ID (%q)", msg.Subject)
 		} else {
@@ -997,11 +1002,12 @@ func checkMailingListInCC(c context.Context, msg *email.Email, mailingList strin
 	return false
 }
 
-func warnMailingListInCC(c context.Context, msg *email.Email, bugID, mailingList string) {
+func warnMailingListInCC(c context.Context, msg *email.Email, bugID, mailingList string,
+	command email.SingleCommand) {
 	reply := fmt.Sprintf("Your '%v' command is accepted, but please keep %v mailing list"+
 		" in CC next time. It serves as a history of what happened with each bug report."+
 		" Thank you.",
-		msg.CommandStr, mailingList)
+		command.Str, mailingList)
 	if err := replyTo(c, msg, bugID, reply); err != nil {
 		log.Errorf(c, "failed to send email reply: %v", err)
 	}
@@ -1037,7 +1043,7 @@ func replyTo(c context.Context, msg *email.Email, bugID, reply string) error {
 		To:      []string{msg.Author},
 		Cc:      msg.Cc,
 		Subject: replySubject(msg.Subject),
-		Body:    email.FormReply(msg.Body, reply),
+		Body:    email.FormReply(msg, reply),
 		Headers: mail.Header{"In-Reply-To": []string{msg.MessageID}},
 	}
 	return sendEmail(c, replyMsg)
