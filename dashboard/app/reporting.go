@@ -1001,6 +1001,9 @@ func incomingCommandCmd(c context.Context, now time.Time, cmd *dashapi.BugUpdate
 		// Just update Link, Commits, etc below.
 	case dashapi.BugStatusUnCC:
 		bug.UNCC = email.MergeEmailLists(bug.UNCC, cmd.CC)
+	case dashapi.BugStatusSkip:
+		bug.Tags.NoRemind.Value = true
+		bug.Tags.NoRemind.SetBy = cmd.User
 	default:
 		return false, internalError, fmt.Errorf("unknown bug status %v", cmd.Status)
 	}

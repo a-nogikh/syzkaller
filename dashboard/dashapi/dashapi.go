@@ -512,6 +512,7 @@ type BugUpdate struct {
 	ResetFixCommits bool     // Remove all commits (empty FixCommits means leave intact).
 	FixCommits      []string // Titles of commits that fix this bug.
 	CC              []string // Additional emails to add to CC list in future emails.
+	User            string   // the user that caused the bug update
 
 	CrashID int64 // This is a deprecated field, left here for backward compatibility.
 
@@ -800,6 +801,7 @@ const (
 	BugStatusUpdate // aux info update (i.e. ExtID/Link/CC)
 	BugStatusUnCC   // don't CC sender on any future communication
 	BugStatusFixed
+	BugStatusSkip
 )
 
 const (

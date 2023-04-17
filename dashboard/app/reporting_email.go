@@ -504,10 +504,11 @@ func processIncomingEmail(c context.Context, msg *email.Email) error {
 		ExtID:  msg.MessageID,
 		Link:   msg.Link,
 		CC:     msg.Cc,
+		User:   msg.Author,
 	}
 	bugID := bugInfo.bugReporting.ID
 	switch command.Command {
-	case email.CmdNone, email.CmdUpstream, email.CmdInvalid, email.CmdUnDup:
+	case email.CmdNone, email.CmdUpstream, email.CmdInvalid, email.CmdUnDup, email.CmdSkip:
 	case email.CmdFix:
 		if command.Args == "" {
 			return replyTo(c, msg, bugID, "no commit title")
@@ -603,6 +604,7 @@ var emailCmdToStatus = map[email.Command]dashapi.BugStatus{
 	email.CmdUnFix:    dashapi.BugStatusUpdate,
 	email.CmdDup:      dashapi.BugStatusDup,
 	email.CmdUnCC:     dashapi.BugStatusUnCC,
+	email.CmdSkip:     dashapi.BugStatusSkip,
 }
 
 func handleTestCommand(c context.Context, info *bugInfoResult,

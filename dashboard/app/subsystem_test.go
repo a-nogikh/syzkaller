@@ -789,3 +789,25 @@ following command:
 You can send multiple #syz skip commands in one email.
 `, bugToExtID["WARNING: a first"], bugToExtID["WARNING: a second"]))
 }
+
+func TestSingleBugSkip(t *testing.T) {
+	c := NewCtx(t)
+	defer c.Close()
+
+	client := c.makeClient(clientSubsystemRemind, keySubsystemRemind, true)
+	build := testBuild(1)
+	client.UploadBuild(build)
+
+	crash := testCrash(build, 1)
+	client.ReportCrash(crash)
+	sender := c.pollEmailBug().Sender
+	_, extBugID, err := email.RemoveAddrContext(sender)
+	c.expectOK(err)
+
+	// Send the #syz skip command.
+	c.incomingEmail(sender, "#syz skip\n")
+
+	bug, _, _ := client.Ctx.loadBug(extBugID)
+	c.expectTrue(bug.Tags.NoRemind.Value)
+	c.expectEQ(bug.Tags.NoRemind.SetBy, "default@sender.com")
+}
