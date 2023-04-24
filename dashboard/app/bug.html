@@ -18,9 +18,14 @@ Page with details about a single bug.
 	Status: {{if .Bug.ExternalLink}}<a href="{{.Bug.ExternalLink}}">{{.Bug.Status}}</a>{{else}}{{.Bug.Status}}{{end}}<br>
 	{{if .Subsystems}}
 		Subsystems: {{range .Subsystems}}
-			<span class="subsystem">{{link .Link .Name}}</span>
+			<span class="tag subsystem">{{link .Link .Name}}</span>
 		{{- end}}
 		<a href="https://github.com/google/syzkaller/blob/master/docs/syzbot.md#subsystems">(incorrect?)</a><br>
+	{{- end}}
+	{{if .Bug.Labels}}
+		Labels: {{range .Bug.Labels}}
+			<span class="tag label">{{link .Link .Name}}</span>
+		{{- end}}<br>
 	{{- end}}
 	{{if .Bug.CreditEmail}}
 	Reported-by: {{.Bug.CreditEmail}}<br>

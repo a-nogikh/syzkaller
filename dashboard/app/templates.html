@@ -105,6 +105,9 @@ Use of this source code is governed by Apache 2 LICENSE that can be found in the
 	{{if .Filter.NoSubsystem}}
 		NoSubsystem={{.Filter.NoSubsystem}} ({{link (call .DropURL "no_subsystem") "drop"}})
 	{{end}}
+	{{if .Filter.Label}}
+		Label={{.Filter.Label}} ({{link (call .DropURL "label") "drop"}})
+	{{end}}
 	<br>
 {{end}}
 {{end}}
@@ -161,7 +164,10 @@ Use of this source code is governed by Apache 2 LICENSE that can be found in the
 			<td class="title">
 				<a href="{{$b.Link}}">{{$b.Title}}</a>
 				{{- range $b.Subsystems}}
-					<span class="subsystem">{{link .Link .Name}}</span>
+					<span class="tag subsystem">{{link .Link .Name}}</span>
+				{{- end}}
+				{{- range $b.Labels}}
+					<span class="tag label">{{link .Link .Name}}</span>
 				{{- end}}
 			</td>
 			<td class="stat">{{formatReproLevel $b.ReproLevel}}</td>

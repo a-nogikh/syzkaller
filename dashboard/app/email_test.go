@@ -12,6 +12,7 @@ import (
 	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/email"
 	"github.com/google/syzkaller/sys/targets"
+	"github.com/stretchr/testify/assert"
 )
 
 // nolint: funlen
@@ -1073,7 +1074,7 @@ func TestEmailPatchTestingAccess(t *testing.T) {
 	c.expectEQ(pollResp.ID, "")
 }
 
-func TestEmailInvalidSetCommand(t *testing.T) {
+func TestEmailSetInvalidSubsystems(t *testing.T) {
 	c := NewCtx(t)
 	defer c.Close()
 
@@ -1106,15 +1107,9 @@ https://testapp.appspot.com/access-public-email/subsystems?all=true
 If you believe that the subsystem list should be changed, please contact the bot's maintainers.
 
 `)
-
-	// No subsystems.
-	c.incomingEmail(sender, "#syz set subsystems:\n",
-		EmailOptFrom("test@requester.com"), EmailOptCC([]string{mailingList}))
-	c.expectEQ(strings.Contains(c.pollEmailBug().Body,
-		"You must specify at least one subsystem name"), true)
 }
 
-func TestEmailSetCommand(t *testing.T) {
+func TestEmailSetSubsystems(t *testing.T) {
 	c := NewCtx(t)
 	defer c.Close()
 
@@ -1138,15 +1133,89 @@ func TestEmailSetCommand(t *testing.T) {
 	// Set one subsystem.
 	c.incomingEmail(sender, "#syz set subsystems: subsystemA\n",
 		EmailOptFrom("test@requester.com"), EmailOptCC([]string{mailingList}))
-	syzbotReply := c.pollEmailBug()
-	c.expectEQ(syzbotReply.To, []string{"test@requester.com"})
-	c.expectEQ(syzbotReply.Cc, []string{"test@syzkaller.com"})
-	c.expectEQ(strings.Contains(syzbotReply.Body, "I've successfully updated the bug's subsystems."), true)
 	expectSubsystems(t, client, extBugID, "subsystemA")
 
 	// Set two subsystems.
 	c.incomingEmail(sender, "#syz set subsystems: subsystemA, subsystemB\n",
 		EmailOptFrom("test@requester.com"), EmailOptCC([]string{mailingList}))
-	c.pollEmailBug()
 	expectSubsystems(t, client, extBugID, "subsystemA", "subsystemB")
+}
+
+func TestEmailBugLabels(t *testing.T) {
+	c := NewCtx(t)
+	defer c.Close()
+
+	client := c.makeClient(clientPublicEmail, keyPublicEmail, true)
+	mailingList := config.Namespaces["access-public-email"].Reporting[0].Config.(*EmailConfig).Email
+
+	build := testBuild(1)
+	client.UploadBuild(build)
+
+	crash := testCrash(build, 1)
+	client.ReportCrash(crash)
+	c.incomingEmail(c.pollEmailBug().Sender, "#syz upstream\n")
+
+	sender := c.pollEmailBug().Sender
+	_, extBugID, err := email.RemoveAddrContext(sender)
+	c.expectOK(err)
+
+	// At the beginning, there are no tags.
+	expectLabels(t, client, extBugID)
+
+	// Set two tags.
+	c.incomingEmail(sender, "#syz set some-tag, another-tag\n",
+		EmailOptFrom("test@requester.com"), EmailOptCC([]string{mailingList}))
+	expectLabels(t, client, extBugID, "some-tag", "another-tag")
+
+	// Add one more.
+	c.incomingEmail(sender, "#syz set another-tag, yet-another-tag\n",
+		EmailOptFrom("test@requester.com"), EmailOptCC([]string{mailingList}))
+	expectLabels(t, client, extBugID, "some-tag", "another-tag", "yet-another-tag")
+
+	// Remove two tags.
+	c.incomingEmail(sender, "#syz unset some-tag, yet-another-tag\n",
+		EmailOptFrom("test@requester.com"), EmailOptCC([]string{mailingList}))
+	expectLabels(t, client, extBugID, "another-tag")
+}
+
+func TestInvalidEmailBugLabels(t *testing.T) {
+	c := NewCtx(t)
+	defer c.Close()
+
+	client := c.makeClient(clientPublicEmail, keyPublicEmail, true)
+	mailingList := config.Namespaces["access-public-email"].Reporting[0].Config.(*EmailConfig).Email
+
+	build := testBuild(1)
+	client.UploadBuild(build)
+
+	crash := testCrash(build, 1)
+	client.ReportCrash(crash)
+	c.incomingEmail(c.pollEmailBug().Sender, "#syz upstream\n")
+
+	sender := c.pollEmailBug().Sender
+
+	c.incomingEmail(sender, "#syz set tag\n",
+		EmailOptFrom("test@requester.com"), EmailOptCC([]string{mailingList}))
+
+	// Removing a non-existing tag.
+	c.incomingEmail(sender, "#syz unset tag2\n",
+		EmailOptFrom("test@requester.com"), EmailOptCC([]string{mailingList}))
+	syzbotReply := c.pollEmailBug()
+	c.expectEQ(strings.Contains(syzbotReply.Body, "The following tags did not exist: "), true)
+
+	// Setting tags for an unknown group.
+	c.incomingEmail(sender, "#syz set unknown-group: abcd\n",
+		EmailOptFrom("test@requester.com"), EmailOptCC([]string{mailingList}))
+	syzbotReply = c.pollEmailBug()
+	c.expectEQ(strings.Contains(syzbotReply.Body, "I've failed to parse your command"), true)
+}
+
+func expectLabels(t *testing.T, client *apiClient, extID string, labels ...string) {
+	t.Helper()
+	bug, _, _ := client.Ctx.loadBug(extID)
+	names := []string{}
+	for _, item := range bug.Tags.Labels {
+		names = append(names, item.Name)
+	}
+	assert.ElementsMatch(t, names, labels)
 }

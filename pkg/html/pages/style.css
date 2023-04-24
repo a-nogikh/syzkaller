@@ -207,8 +207,7 @@ table td, table th {
 	font-size: 75%;
 }
 
-.subsystem {
-	background: white;
+.tag {
 	border: 1pt solid black;
 	display: inline-block;
 	padding-left: 2pt;
@@ -217,9 +216,17 @@ table td, table th {
 	font-size: small;
 }
 
-.subsystem a {
+.tag a {
 	text-decoration: none;
 	color: black;
+}
+
+.subsystem {
+	background: white;
+}
+
+.label {
+	background: lightgray;
 }
 
 .bad {

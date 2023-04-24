@@ -188,7 +188,6 @@ func TestUserSubsystemsRefresh(t *testing.T) {
 	// Manually set another subsystem.
 	c.incomingEmail(sender, "#syz set subsystems: subsystemB\n",
 		EmailOptFrom("test@requester.com"))
-	c.pollEmailBug()
 	expectSubsystems(t, client, extID, "subsystemB")
 
 	// Refresh subsystems.
@@ -219,6 +218,7 @@ func expectSubsystems(t *testing.T, client *apiClient, extID string, subsystems 
 	assert.ElementsMatch(t, names, subsystems)
 }
 
+// nolint: goconst
 func TestPeriodicSubsystemReminders(t *testing.T) {
 	c := NewCtx(t)
 	defer c.Close()
@@ -605,4 +605,67 @@ func TestSubsystemRemindersNoReport(t *testing.T) {
 
 	// Expect no reminders for subsystemC.
 	client.expectNoEmail()
+}
+
+// nolint: goconst
+func TestSubsystemReminderLabels(t *testing.T) {
+	c := NewCtx(t)
+	defer c.Close()
+
+	client := c.makeClient(clientSubsystemRemind, keySubsystemRemind, true)
+	build := testBuild(1)
+	client.UploadBuild(build)
+
+	aFirst := testCrash(build, 1)
+	aFirst.Title = `WARNING: a first`
+	aFirst.GuiltyFiles = []string{"a.c"}
+	client.ReportCrash(aFirst)
+	firstExtID := client.pollEmailExtID()
+	c.advanceTime(time.Hour)
+
+	aSecond := testCrash(build, 1)
+	aSecond.Title = `WARNING: a second`
+	aSecond.GuiltyFiles = []string{"a.c"}
+	client.ReportCrash(aSecond)
+	secondExtID := client.pollEmailExtID()
+	c.advanceTime(time.Hour)
+
+	// Report them again.
+	c.advanceTime(time.Hour * 24 * 14)
+	client.ReportCrash(aFirst)
+	client.ReportCrash(aSecond)
+
+	_, err := c.GET("/cron/subsystem_reports")
+	c.expectOK(err)
+
+	// Expect the reminder for subsystemA.
+	replyA := client.pollEmailBug()
+
+	// Moderate the subsystemA list.
+	c.advanceTime(time.Hour)
+	c.incomingEmail(replyA.Sender, "#syz upstream\n")
+	// Also emulate the second email that would come from the mailing list.
+	// The email should be silently ignored.
+	c.incomingEmail(replyA.Sender, "#syz upstream\n",
+		EmailOptFrom("moderation@syzkaller.com"), EmailOptOrigFrom("user@user.com"))
+
+	// Expect the normal report.
+	reply := client.pollEmailBug()
+	c.expectEQ(reply.Subject, "[syzbot] Monthly subsystemA report")
+
+	// Set different labels for these bugs.
+
+	c.incomingEmail(replyA.Sender, `#syz set <1> first-bug-tag
+#syz set <2> second-bug-tag
+`)
+	c.expectNoEmail()
+
+	// There's no such bug.
+	c.incomingEmail(replyA.Sender, "#syz set <3> second-bug-tag\n")
+	reply = client.pollEmailBug()
+	c.expectEQ(strings.Contains(reply.Body, "The specified <Ref> number is invalid"), true)
+
+	// Now verify labels.
+	expectLabels(t, client, firstExtID, "first-bug-tag")
+	expectLabels(t, client, secondExtID, "second-bug-tag")
 }

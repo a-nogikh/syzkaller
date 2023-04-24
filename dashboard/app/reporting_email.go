@@ -22,7 +22,6 @@ import (
 	"github.com/google/syzkaller/pkg/email"
 	"github.com/google/syzkaller/pkg/email/lore"
 	"github.com/google/syzkaller/pkg/html"
-	"github.com/google/syzkaller/pkg/subsystem"
 	"golang.org/x/net/context"
 	"google.golang.org/appengine/v2"
 	db "google.golang.org/appengine/v2/datastore"
@@ -583,7 +582,9 @@ func handleBugCommand(c context.Context, bugInfo *bugInfoResult, msg *email.Emai
 		case email.CmdTest:
 			return handleTestCommand(c, bugInfo, msg, command)
 		case email.CmdSet:
-			return handleSetCommand(c, bugInfo, msg, command)
+			return handleSetCommand(c, bugInfo.bug, msg, command)
+		case email.CmdUnset:
+			return handleUnsetCommand(c, bugInfo.bug, msg, command)
 		case email.CmdUpstream, email.CmdInvalid, email.CmdUnDup:
 		case email.CmdFix:
 			if command.Args == "" {
@@ -694,59 +695,120 @@ func handleTestCommand(c context.Context, info *bugInfoResult,
 }
 
 var (
-	// The format is `#syz set KEY: value(s)`. We also tolerate `#syz set KEY value(s)`.
-	setCmdRe           = regexp.MustCompile(`^(\w+):?\s*(.*?)\s*$`)
-	setCmdArgSplitRe   = regexp.MustCompile(`[\s,]+`)
-	cmdParseFailureFmt = `I've failed to parse your command. Please use the following format:
-#syz set subsystems: some-subsystem-A, some-subsystem-B
+	// The supported formats are:
+	// For bugs:
+	// #syz set [GROUP: ] [label_1, [label_2, ....]]
+	// For bug lists:
+	// #syz set <N> [GROUP: ] [label_1, [label_2, ....]]
+	setCmdRe         = regexp.MustCompile(`(?m)(?:\s*([-\w]+)\s*\:)?\s*([,\-\w\s]*?)$`)
+	setCmdArgSplitRe = regexp.MustCompile(`[\s,]+`)
+	setBugCmdFormat  = `I've failed to parse your command. Please use the following format(s):
+#syz set one-label, another-label
+#syz set subsystems: one-subsystem, another-subsystem
 
-The list of subsystems can be found at %s`
+Or, for bug lists,
+#syz set <Ref> one-label, another-label
+#syz set <Ref> subsystems: one-subsystem, another-subsystem
+
+The list of subsystems can be found at %s
+`
 	cmdNoSubsystems = `Subsystems assignment is not yet supported for this kernel.
 Please contact the bot's maintainers.`
 	cmdUnknownSubsystemFmt = `Please use subsystem names from the list of supported subsystems:
 %s
 
 If you believe that the subsystem list should be changed, please contact the bot's maintainers.`
-	cmdNoSubsystemsSetFmt = `You must specify at least one subsystem name.
-The list of available subsystems can be found at %s`
+	cmdInternalErrorReply = `The command was not executed due to an internal error.
+Please contact the bot's maintainers.`
 )
 
-func handleSetCommand(c context.Context, info *bugInfoResult,
-	msg *email.Email, command *email.SingleCommand) string {
-	subsystemsURL := fmt.Sprintf("%v/%v/subsystems?all=true", appURL(c), info.bug.Namespace)
+func handleSetCommand(c context.Context, bug *Bug, msg *email.Email,
+	command *email.SingleCommand) string {
+	subsystemsURL := fmt.Sprintf("%v/%v/subsystems?all=true", appURL(c), bug.Namespace)
 	match := setCmdRe.FindStringSubmatch(command.Args)
-	if len(match) != 3 {
-		return fmt.Sprintf(cmdParseFailureFmt, subsystemsURL)
+	if match == nil {
+		return fmt.Sprintf(setBugCmdFormat, subsystemsURL)
 	}
-	cmd, args := match[1], match[2]
-	// Now we only support setting bug's subsystems.
-	// Also let's tolerate both subsystem spellings.
-	if cmd != "subsystem" && cmd != "subsystems" {
-		return fmt.Sprintf(cmdParseFailureFmt, subsystemsURL)
+	group, labels := match[1], match[2]
+	tags := []BugLabel{}
+	log.Infof(c, "setting %#v tags for %q (group %q)", bug.displayTitle(), labels, group)
+	for _, name := range setCmdArgSplitRe.Split(labels, -1) {
+		tags = append(tags, BugLabel{
+			Name:  name,
+			SetBy: msg.Author,
+			Link:  msg.Link,
+		})
 	}
-	service := getSubsystemService(c, info.bug.Namespace)
-	if service == nil {
-		return cmdNoSubsystems
-	}
-	if args == "" {
-		return fmt.Sprintf(cmdNoSubsystemsSetFmt, subsystemsURL)
-	}
-	subsystems := []*subsystem.Subsystem{}
-	for _, name := range setCmdArgSplitRe.Split(args, -1) {
-		item := service.ByName(name)
-		if item == nil {
-			return fmt.Sprintf(cmdUnknownSubsystemFmt, subsystemsURL)
+	var err error
+	if group == "subsystem" || group == "subsystems" {
+		// Let's tolerate both subsystem spellings.
+		service := getSubsystemService(c, bug.Namespace)
+		if service == nil {
+			return cmdNoSubsystems
 		}
-		subsystems = append(subsystems, item)
+		for _, tag := range tags {
+			if service.ByName(tag.Name) == nil {
+				return fmt.Sprintf(cmdUnknownSubsystemFmt, subsystemsURL)
+			}
+		}
+		err = updateSingleBug(c, bug.key(c), func(bug *Bug) error {
+			bug.Tags.Subsystems = tags
+			return nil
+		})
+	} else if group == "" {
+		if tags[0].Name == "subsystem" {
+			// Most likely user has made a mistake.
+			// Display the instructions once more.
+			return fmt.Sprintf(setBugCmdFormat, subsystemsURL)
+		}
+		err = updateSingleBug(c, bug.key(c), func(bug *Bug) error {
+			bug.Tags.Labels = MergeBugLabels(bug.Tags.Labels, tags)
+			return nil
+		})
+	} else {
+		// We don't know such label group.
+		return fmt.Sprintf(setBugCmdFormat, subsystemsURL)
 	}
-	// All the replies below will only be sent to the initiator and the mailing list.
-	msg.Cc = []string{info.reporting.Config.(*EmailConfig).Email}
-	err := updateBugSubsystems(c, info.bugKey, subsystems, userAssignment(msg.Author))
 	if err != nil {
-		log.Errorf(c, "failed to assign bug's subsystems: %s", err)
-		return "I've failed to update subsystems due to an internal error.\n"
+		log.Errorf(c, "failed to set bug tags: %s", err)
+		return cmdInternalErrorReply
 	}
-	return "Thank you!\n\nI've successfully updated the bug's subsystems."
+	return ""
+}
+
+var (
+	unsetBugCmdFormat = `I've failed to parse your command. Please use the following format(s):
+#syz unset any-label
+
+Or, for bug lists,
+#syz unset <Ref> any-label
+`
+	unsetTagsNotFound = `The following tags did not exist: %s`
+)
+
+func handleUnsetCommand(c context.Context, bug *Bug, msg *email.Email,
+	command *email.SingleCommand) string {
+	match := setCmdRe.FindStringSubmatch(command.Args)
+	if match == nil {
+		return unsetBugCmdFormat
+	}
+	var notFound []string
+	var notFoundErr = fmt.Errorf("some tags were not found")
+	err := updateSingleBug(c, bug.key(c), func(bug *Bug) error {
+		bug.Tags.Labels, notFound = SubtractBugLabels(bug.Tags.Labels,
+			setCmdArgSplitRe.Split(command.Args, -1))
+		if len(notFound) > 0 {
+			return notFoundErr
+		}
+		return nil
+	})
+	if err == notFoundErr {
+		return fmt.Sprintf(unsetTagsNotFound, strings.Join(notFound, ", "))
+	} else if err != nil {
+		log.Errorf(c, "failed to unset bug tags: %s", err)
+		return cmdInternalErrorReply
+	}
+	return ""
 }
 
 func handleEmailBounce(w http.ResponseWriter, r *http.Request) {
@@ -764,6 +826,18 @@ func handleEmailBounce(w http.ResponseWriter, r *http.Request) {
 	log.Infof(c, "%s", body)
 }
 
+var (
+	setGroupCmdRe     = regexp.MustCompile(`(?m)\s*<(\d+)>\s*(.*)$`)
+	setGroupCmdFormat = `I've failed to parse your command. Please use the following format(s):
+#syz set <Ref> some-label, another-label
+#syz set <Ref> subsystems: one-subsystem, another-subsystem
+#syz unset <Ref> some-label
+`
+	setGroupCmdBadRef = `The specified <Ref> number is invalid. It must be one of the <NUM> values
+listed in the bug list table.
+`
+)
+
 func handleBugListCommand(c context.Context, bugListInfo *bugListInfoResult,
 	msg *email.Email, command *email.SingleCommand) string {
 	upd := &dashapi.BugListUpdate{
@@ -771,18 +845,46 @@ func handleBugListCommand(c context.Context, bugListInfo *bugListInfoResult,
 		ExtID: msg.MessageID,
 		Link:  msg.Link,
 	}
-	if command.Command == email.CmdUpstream {
+	switch command.Command {
+	case email.CmdUpstream:
 		upd.Command = dashapi.BugListUpstreamCmd
-	} else if command.Command == email.CmdRegenerate {
+	case email.CmdRegenerate:
 		upd.Command = dashapi.BugListRegenerateCmd
-	} else {
+	case email.CmdSet, email.CmdUnset:
+		// Extract and cut the <Ref> part.
+		match := setGroupCmdRe.FindStringSubmatch(command.Args)
+		if match == nil {
+			return setGroupCmdFormat
+		}
+		ref, args := match[1], match[2]
+		numRef, err := strconv.Atoi(ref)
+		if err != nil {
+			return setGroupCmdFormat
+		}
+		if numRef < 1 || numRef > len(bugListInfo.keys) {
+			return setGroupCmdBadRef
+		}
+		bugKey := bugListInfo.keys[numRef-1]
+		bug := new(Bug)
+		if err := db.Get(c, bugKey, bug); err != nil {
+			log.Errorf(c, "failed to fetch bug by key %s: %s", bugKey, err)
+			return cmdInternalErrorReply
+		}
+		command.Args = args
+		switch command.Command {
+		case email.CmdSet:
+			return handleSetCommand(c, bug, msg, command)
+		case email.CmdUnset:
+			return handleUnsetCommand(c, bug, msg, command)
+		}
+	default:
 		upd.Command = dashapi.BugListUpdateCmd
 	}
 	log.Infof(c, "bug list update: id=%s, cmd=%v", upd.ID, upd.Command)
 	reply, err := reportingBugListCommand(c, upd)
 	if err != nil {
 		log.Errorf(c, "bug list command failed: %s", err)
-		return ""
+		return cmdInternalErrorReply
 	}
 	return reply
 }
@@ -793,6 +895,7 @@ var nonCriticalBounceRe = regexp.MustCompile(`\*\* Address not found \*\*|550 #5
 type bugListInfoResult struct {
 	id     string
 	config *EmailConfig
+	keys   []*db.Key
 }
 
 func identifyEmail(c context.Context, msg *email.Email) (*bugInfoResult, *bugListInfoResult, *EmailConfig) {
@@ -802,7 +905,7 @@ func identifyEmail(c context.Context, msg *email.Email) (*bugInfoResult, *bugLis
 		bugID = msg.BugIDs[0]
 	}
 	if isBugListHash(bugID) {
-		subsystem, _, stage, err := findSubsystemReportByID(c, bugID)
+		subsystem, report, stage, err := findSubsystemReportByID(c, bugID)
 		if err != nil {
 			log.Errorf(c, "findBugListByID failed: %s", err)
 			return nil, nil, nil
@@ -821,7 +924,16 @@ func identifyEmail(c context.Context, msg *email.Email) (*bugInfoResult, *bugLis
 			log.Errorf(c, "bug list's reporting config is not EmailConfig (id=%v)", bugID)
 			return nil, nil, nil
 		}
-		return nil, &bugListInfoResult{id: bugID, config: emailConfig}, emailConfig
+		keys, err := report.getBugKeys()
+		if err != nil {
+			log.Errorf(c, "failed to extract keys from bug list: %s", err)
+			return nil, nil, nil
+		}
+		return nil, &bugListInfoResult{
+			id:     bugID,
+			config: emailConfig,
+			keys:   keys,
+		}, emailConfig
 	}
 	bugInfo := loadBugInfo(c, msg)
 	if bugInfo == nil {

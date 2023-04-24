@@ -99,34 +99,23 @@ func checkOutdatedSubsystems(c context.Context, service *subsystem.Service, bug 
 
 type (
 	autoInference  int
-	userAssignment string
 	updateRevision int
 )
 
 func updateBugSubsystems(c context.Context, bugKey *db.Key,
 	list []*subsystem.Subsystem, info interface{}) error {
 	now := timeNow(c)
-	tx := func(c context.Context) error {
-		bug := new(Bug)
-		if err := db.Get(c, bugKey, bug); err != nil {
-			return fmt.Errorf("failed to get bug: %v", err)
-		}
+	return updateSingleBug(c, bugKey, func(bug *Bug) error {
 		switch v := info.(type) {
 		case autoInference:
 			logSubsystemChange(c, bug, list)
 			bug.SetAutoSubsystems(list, now, int(v))
-		case userAssignment:
-			bug.SetUserSubsystems(list, now, string(v))
 		case updateRevision:
 			bug.SubsystemsRev = int(v)
 			bug.SubsystemsTime = now
 		}
-		if _, err := db.Put(c, bugKey, bug); err != nil {
-			return fmt.Errorf("failed to put bug: %v", err)
-		}
 		return nil
-	}
-	return db.RunInTransaction(c, tx, &db.TransactionOptions{Attempts: 10})
+	})
 }
 
 func logSubsystemChange(c context.Context, bug *Bug, new []*subsystem.Subsystem) {

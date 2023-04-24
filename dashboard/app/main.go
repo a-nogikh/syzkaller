@@ -245,7 +245,8 @@ type uiBugPage struct {
 	SampleReport  template.HTML
 	Crashes       *uiCrashTable
 	TestPatchJobs *uiJobList
-	Subsystems    []*uiBugSubsystem
+	Subsystems    []*uiBugLabel
+	Label         []*uiBugLabel
 }
 
 const (
@@ -305,11 +306,12 @@ type uiBug struct {
 	MissingOn      []string
 	NumManagers    int
 	LastActivity   time.Time
-	Subsystems     []*uiBugSubsystem
+	Subsystems     []*uiBugLabel
+	Labels         []*uiBugLabel
 	Discussions    DiscussionSummary
 }
 
-type uiBugSubsystem struct {
+type uiBugLabel struct {
 	Name string
 	Link string
 }
@@ -374,6 +376,7 @@ type userBugFilter struct {
 	Manager     string // show bugs that happened on the manager
 	OnlyManager string // show bugs that happened ONLY on the manager
 	Subsystem   string // only show bugs belonging to the subsystem
+	Label       string
 	NoSubsystem bool
 }
 
@@ -383,6 +386,7 @@ func MakeBugFilter(r *http.Request) *userBugFilter {
 		NoSubsystem: r.FormValue("no_subsystem") != "",
 		Manager:     r.FormValue("manager"),
 		OnlyManager: r.FormValue("only_manager"),
+		Label:       r.FormValue("label"),
 	}
 }
 
@@ -414,7 +418,10 @@ func (filter *userBugFilter) MatchBug(bug *Bug) bool {
 	if filter.NoSubsystem && len(bug.Tags.Subsystems) > 0 {
 		return false
 	}
-	if filter.Subsystem != "" && !bug.hasSubsystem(filter.Subsystem) {
+	if filter.Subsystem != "" && !BugLabelExists(bug.Tags.Subsystems, filter.Subsystem) {
+		return false
+	}
+	if filter.Label != "" && !BugLabelExists(bug.Tags.Labels, filter.Subsystem) {
 		return false
 	}
 	return true
@@ -424,7 +431,8 @@ func (filter *userBugFilter) Any() bool {
 	if filter == nil {
 		return false
 	}
-	return filter.Subsystem != "" || filter.OnlyManager != "" || filter.Manager != "" || filter.NoSubsystem
+	return filter.Subsystem != "" || filter.OnlyManager != "" || filter.Manager != "" ||
+		filter.Label != "" || filter.NoSubsystem
 }
 
 // handleMain serves main page.
@@ -813,7 +821,7 @@ func handleBug(c context.Context, w http.ResponseWriter, r *http.Request) error 
 	return serveTemplate(w, "bug.html", data)
 }
 
-func makeBugSubsystemUI(c context.Context, bug *Bug, entry BugSubsystem) *uiBugSubsystem {
+func makeBugSubsystemUI(c context.Context, bug *Bug, entry BugLabel) *uiBugLabel {
 	url := getCurrentURL(c)
 	// By default let's point to the subsystem's page.
 	link := fmt.Sprintf("/%s/s/%s", bug.Namespace, entry.Name)
@@ -822,9 +830,23 @@ func makeBugSubsystemUI(c context.Context, bug *Bug, entry BugSubsystem) *uiBugS
 		// If we're on a main or terminal page, let's amend the bug filter instead.
 		link = html.AmendURL(url, "subsystem", entry.Name)
 	}
-	return &uiBugSubsystem{
+	return &uiBugLabel{
 		Name: entry.Name,
 		Link: link,
+	}
+}
+
+func makeBugLabelUI(c context.Context, bug *Bug, entry BugLabel) *uiBugLabel {
+	url := getCurrentURL(c)
+	link := url
+	// If we're on a main/terminal/subsystem page, let's stay there.
+	if !strings.HasPrefix(url, "/"+bug.Namespace) {
+		// Otherwise move to the bug list.
+		link = fmt.Sprintf("/%s", bug.Namespace)
+	}
+	return &uiBugLabel{
+		Name: entry.Name,
+		Link: html.AmendURL(link, "label", entry.Name),
 	}
 }
 
@@ -1477,6 +1499,9 @@ func createUIBug(c context.Context, bug *Bug, state *ReportingState, managers []
 	}
 	for _, entry := range bug.Tags.Subsystems {
 		uiBug.Subsystems = append(uiBug.Subsystems, makeBugSubsystemUI(c, bug, entry))
+	}
+	for _, entry := range bug.Tags.Labels {
+		uiBug.Labels = append(uiBug.Labels, makeBugLabelUI(c, bug, entry))
 	}
 	updateBugBadness(c, uiBug)
 	if len(bug.Commits) != 0 {

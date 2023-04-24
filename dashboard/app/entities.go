@@ -123,55 +123,108 @@ type Bug struct {
 }
 
 type BugTags struct {
-	Subsystems []BugSubsystem
+	// Subsystem labels.
+	Subsystems []BugLabel
+	// Non-grouped tags are stored in Labels.
+	Labels []BugLabel
 }
 
-type BugSubsystem struct {
+type BugLabel struct {
 	// For now, let's keep the bare minimum number of fields.
 	// The subsystem names we use now are not stable and should not be relied upon.
 	Name string
 	// The email of the user who manually set this subsystem tag.
 	// If empty, the subsystem was set automatically.
 	SetBy string
+	// Link to the message.
+	Link string
 }
 
-func (bug *Bug) SetAutoSubsystems(list []*subsystem.Subsystem, now time.Time, rev int) {
-	objects := []BugSubsystem{}
-	for _, item := range list {
-		objects = append(objects, BugSubsystem{Name: item.Name})
+// MergeBugLabels overwrites labels with same name and adds missing labels.
+func MergeBugLabels(list, new []BugLabel) []BugLabel {
+	newMap := map[string]BugLabel{}
+	for _, item := range new {
+		newMap[item.Name] = item
 	}
-	bug.SubsystemsRev = rev
-	bug.SetSubsystems(objects, now)
-}
-
-func (bug *Bug) SetUserSubsystems(list []*subsystem.Subsystem, now time.Time, user string) {
-	objects := []BugSubsystem{}
-	for _, item := range list {
-		objects = append(objects, BugSubsystem{
-			Name:  item.Name,
-			SetBy: user,
-		})
+	oldMap := map[string]bool{}
+	for i, item := range list {
+		oldMap[item.Name] = true
+		if val, ok := newMap[item.Name]; ok {
+			list[i] = val
+		}
 	}
-	bug.SetSubsystems(objects, now)
+	// Now add missing ones.
+	for _, item := range new {
+		if !oldMap[item.Name] {
+			list = append(list, item)
+		}
+	}
+	return list
 }
 
-func (bug *Bug) SetSubsystems(list []BugSubsystem, now time.Time) {
-	bug.Tags.Subsystems = list
-	bug.SubsystemsTime = now
+// SubtractBugLabels removes the specified labels from the list.
+func SubtractBugLabels(list []BugLabel, sub []string) ([]BugLabel, []string) {
+	subMap := map[string]bool{}
+	for _, name := range sub {
+		subMap[name] = true
+	}
+	exists := map[string]bool{}
+	var newList []BugLabel
+	for _, item := range list {
+		exists[item.Name] = true
+		if !subMap[item.Name] {
+			newList = append(newList, item)
+		}
+	}
+	var notFound []string
+	for _, name := range sub {
+		if !exists[name] {
+			notFound = append(notFound, name)
+		}
+	}
+	return newList, notFound
 }
 
-func (bug *Bug) hasUserSubsystems() bool {
-	for _, item := range bug.Tags.Subsystems {
-		if item.SetBy != "" {
+func BugLabelExists(labels []BugLabel, name string) bool {
+	for _, item := range labels {
+		if item.Name == name {
 			return true
 		}
 	}
 	return false
 }
 
-func (bug *Bug) hasSubsystem(name string) bool {
+func (bug *Bug) SetAutoSubsystems(list []*subsystem.Subsystem, now time.Time, rev int) {
+	bug.SubsystemsRev = rev
+	bug.SubsystemsTime = now
+	var objects []BugLabel
+	for _, item := range list {
+		objects = append(objects, BugLabel{Name: item.Name})
+	}
+	bug.Tags.Subsystems = objects
+}
+
+func updateSingleBug(c context.Context, bugKey *db.Key, transform func(*Bug) error) error {
+	tx := func(c context.Context) error {
+		bug := new(Bug)
+		if err := db.Get(c, bugKey, bug); err != nil {
+			return fmt.Errorf("failed to get bug: %v", err)
+		}
+		err := transform(bug)
+		if err != nil {
+			return err
+		}
+		if _, err := db.Put(c, bugKey, bug); err != nil {
+			return fmt.Errorf("failed to put bug: %v", err)
+		}
+		return nil
+	}
+	return db.RunInTransaction(c, tx, &db.TransactionOptions{Attempts: 10})
+}
+
+func (bug *Bug) hasUserSubsystems() bool {
 	for _, item := range bug.Tags.Subsystems {
-		if item.Name == name {
+		if item.SetBy != "" {
 			return true
 		}
 	}
