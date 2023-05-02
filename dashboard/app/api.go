@@ -756,6 +756,7 @@ func reportCrash(c context.Context, build *Build, req *dashapi.Crash) (*Bug, err
 	} else if len(req.ReproSyz) != 0 {
 		reproLevel = ReproLevelSyz
 	}
+	logCrash(c, req, build, reproLevel)
 	save := reproLevel != ReproLevelNone ||
 		bug.NumCrashes < int64(maxCrashes()) ||
 		now.Sub(bug.LastSavedCrash) > time.Hour ||
@@ -780,7 +781,6 @@ func reportCrash(c context.Context, build *Build, req *dashapi.Crash) (*Bug, err
 			return nil, err
 		}
 	}
-
 	tx := func(c context.Context) error {
 		bug = new(Bug)
 		if err := db.Get(c, bugKey, bug); err != nil {
@@ -822,6 +822,11 @@ func reportCrash(c context.Context, build *Build, req *dashapi.Crash) (*Bug, err
 		purgeOldCrashes(c, bug, bugKey)
 	}
 	return bug, nil
+}
+
+func logCrash(c context.Context, crash *dashapi.Crash, build *Build, reproLevel dashapi.ReproLevel) {
+	log.Infof(c, "new crash event, ns=%q, manager=%q, repro=%d, title=%q",
+		build.Namespace, build.Manager, reproLevel, crash.Title)
 }
 
 func parseCrashAssets(c context.Context, req *dashapi.Crash) ([]Asset, error) {
