@@ -32,9 +32,10 @@ type Proc struct {
 	execOptsCollide *ipc.ExecOpts
 	execOptsCover   *ipc.ExecOpts
 	execOptsComps   *ipc.ExecOpts
+	onlyGen         bool
 }
 
-func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
+func newProc(fuzzer *Fuzzer, pid int, onlyGen bool) (*Proc, error) {
 	env, err := ipc.MakeEnv(fuzzer.config, pid)
 	if err != nil {
 		return nil, err
@@ -55,33 +56,35 @@ func newProc(fuzzer *Fuzzer, pid int) (*Proc, error) {
 		execOptsCollide: &execOptsCollide,
 		execOptsCover:   &execOptsCover,
 		execOptsComps:   &execOptsComps,
+		onlyGen:         onlyGen,
 	}
 	return proc, nil
 }
 
 func (proc *Proc) loop() {
 	generatePeriod := 100
-	if proc.fuzzer.config.Flags&ipc.FlagSignal == 0 {
+	if proc.fuzzer.config.Flags&ipc.FlagSignal == 0 || proc.onlyGen {
 		// If we don't have real coverage signal, generate programs more frequently
 		// because fallback signal is weak.
 		generatePeriod = 2
 	}
 	for i := 0; ; i++ {
-		item := proc.fuzzer.workQueue.dequeue()
-		if item != nil {
-			switch item := item.(type) {
-			case *WorkTriage:
-				proc.triageInput(item)
-			case *WorkCandidate:
-				proc.execute(proc.execOpts, item.p, item.flags, StatCandidate)
-			case *WorkSmash:
-				proc.smashInput(item)
-			default:
-				log.SyzFatalf("unknown work type: %#v", item)
+		if !proc.onlyGen {
+			item := proc.fuzzer.workQueue.dequeue()
+			if item != nil {
+				switch item := item.(type) {
+				case *WorkTriage:
+					proc.triageInput(item)
+				case *WorkCandidate:
+					proc.execute(proc.execOpts, item.p, item.flags, StatCandidate)
+				case *WorkSmash:
+					proc.smashInput(item)
+				default:
+					log.SyzFatalf("unknown work type: %#v", item)
+				}
+				continue
 			}
-			continue
 		}
-
 		ct := proc.fuzzer.choiceTable
 		fuzzerSnapshot := proc.fuzzer.snapshot()
 		if len(fuzzerSnapshot.corpus) == 0 || i%generatePeriod == 0 {

@@ -302,7 +302,7 @@ func main() {
 
 	log.Logf(0, "starting %v fuzzer processes", *flagProcs)
 	for pid := 0; pid < *flagProcs; pid++ {
-		proc, err := newProc(fuzzer, pid)
+		proc, err := newProc(fuzzer, pid, pid == 0)
 		if err != nil {
 			log.SyzFatalf("failed to create proc: %v", err)
 		}
