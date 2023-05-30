@@ -179,6 +179,7 @@ static bool flag_collect_signal;
 static bool flag_dedup_cover;
 static bool flag_threaded;
 static bool flag_coverage_filter;
+static bool flag_no_xor_signal;
 
 // If true, then executor should write the comparisons data to fuzzer.
 static bool flag_comparisons;
@@ -674,6 +675,7 @@ void receive_execute()
 	flag_comparisons = req.exec_flags & (1 << 3);
 	flag_threaded = req.exec_flags & (1 << 4);
 	flag_coverage_filter = req.exec_flags & (1 << 5);
+	flag_no_xor_signal = req.exec_flags & (1 << 6);
 
 	debug("[%llums] exec opts: procid=%llu threaded=%d cover=%d comps=%d dedup=%d signal=%d"
 	      " timeouts=%llu/%llu/%llu prog=%llu filter=%d\n",
@@ -1012,7 +1014,7 @@ void write_coverage_signal(cover_t* cov, uint32* signal_count_pos, uint32* cover
 		for (uint32 i = 0; i < cov->size; i++) {
 			cover_data_t pc = cover_data[i] + cov->pc_offset;
 			uint32 sig = pc;
-			if (use_cover_edges(pc))
+			if (use_cover_edges(pc) && !flag_no_xor_signal)
 				sig ^= hash(prev_pc);
 			bool filter = coverage_filter(pc);
 			// Ignore the edge only if both current and previous PCs are filtered out

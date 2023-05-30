@@ -55,6 +55,7 @@ const (
 	FlagCollectComps                               // collect KCOV comparisons
 	FlagThreaded                                   // use multiple threads to mitigate blocked syscalls
 	FlagEnableCoverageFilter                       // setup and use bitmap to do coverage filter
+	FlagNoXorSignal
 )
 
 type ExecOpts struct {
