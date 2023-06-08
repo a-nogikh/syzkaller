@@ -217,7 +217,7 @@ func (inst *instance) repair() error {
 	log.Logf(2, "isolated: trying to ssh")
 	if err := inst.waitForSSH(30 * time.Minute); err != nil {
 		log.Logf(2, "isolated: ssh failed")
-		return fmt.Errorf("SSH failed")
+		return fmt.Errorf("SSH failed: %w", err)
 	}
 	if inst.cfg.TargetReboot {
 		if len(inst.cfg.USBDevNums) > 0 {

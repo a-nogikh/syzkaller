@@ -65,7 +65,7 @@ func (pool *Pool) Count() int {
 func (pool *Pool) Create(workdir string, index int) (vmimpl.Instance, error) {
 	gceInst, err := pool.gcePool.Create(workdir, index)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create underlying gce instance: %s", err)
+		return nil, fmt.Errorf("failed to create underlying gce instance: %w", err)
 	}
 
 	inst := &instance{

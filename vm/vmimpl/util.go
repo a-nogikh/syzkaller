@@ -36,7 +36,7 @@ func WaitForSSH(debug bool, timeout time.Duration, addr, sshKey, sshUser, OS str
 		case err := <-stop:
 			return err
 		case <-Shutdown:
-			return fmt.Errorf("shutdown in progress")
+			return OngoingShutdownErr
 		}
 		args := append(SSHArgs(debug, sshKey, port), sshUser+"@"+addr, pwd)
 		if debug {

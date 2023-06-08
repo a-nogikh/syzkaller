@@ -93,6 +93,11 @@ type BootError struct {
 }
 
 func MakeBootError(err error, output []byte) error {
+	if errors.As(err, vmimpl.OngoingShutdownErr) {
+		// An exception -- the boot failed because we're shutting down.
+		// This is not really BootError.
+		return err
+	}
 	switch err1 := err.(type) {
 	case *osutil.VerboseError:
 		return BootError{err1.Title, append(err1.Output, output...)}
@@ -146,6 +151,8 @@ var (
 
 	Types = make(map[string]Type)
 )
+
+var OngoingShutdownErr = fmt.Errorf("shutdown in progress")
 
 func Multiplex(cmd *exec.Cmd, merger *OutputMerger, console io.Closer, timeout time.Duration,
 	stop, closed <-chan bool, debug bool) (<-chan []byte, <-chan error, error) {

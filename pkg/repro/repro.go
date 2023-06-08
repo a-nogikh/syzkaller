@@ -20,6 +20,7 @@ import (
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys/targets"
 	"github.com/google/syzkaller/vm"
+	"github.com/google/syzkaller/vm/vmimpl"
 )
 
 type Result struct {
@@ -548,6 +549,7 @@ func (ctx *context) runOnInstance(callback func(execInterface) (rep *instance.Ru
 	err error)) (*instance.RunResult, error) {
 	inst := <-ctx.instances
 	if inst == nil {
+		// TODO: don't do it for vmimpl.OngoingShutdownErr.
 		return nil, fmt.Errorf("all VMs failed to boot")
 	}
 	defer ctx.returnInstance(inst)
@@ -740,7 +742,7 @@ func (ctx *context) createInstances(cfg *mgrconfig.Config, vmPool *vm.Pool, vmIn
 					var err error
 					inst, err = instance.CreateExecProgInstance(vmPool, vmIndex, cfg,
 						ctx.reporter, &instance.OptionalConfig{Logf: ctx.reproLogf})
-					if err != nil {
+					if err != nil && !errors.As(err, vmimpl.OngoingShutdownErr) {
 						ctx.reproLogf(0, "failed to init instance: %v", err)
 						time.Sleep(10 * time.Second)
 						continue
