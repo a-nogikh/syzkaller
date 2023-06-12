@@ -6,6 +6,7 @@ package bisect
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/syzkaller/pkg/build"
@@ -79,6 +80,7 @@ type env struct {
 	buildTime    time.Duration
 	testTime     time.Duration
 	flaky        bool
+	report       *report.Report
 }
 
 const MaxNumTests = 20 // number of tests we do per commit
@@ -261,6 +263,8 @@ func (env *env) bisect() (*Result, error) {
 			testRes = testRes1
 		}
 	}
+
+	env.report = testRes.rep
 
 	bad, good, results1, fatalResult, err := env.commitRange()
 	if fatalResult != nil || err != nil {
@@ -644,14 +648,18 @@ func (env *env) processResults(current *vcs.Commit, results []instance.EnvTestRe
 			}
 			env.saveDebugFile(current.Hash, i, output)
 		case *instance.CrashError:
-			bad++
-			rep = err.Report
-			verdicts = append(verdicts, fmt.Sprintf("crashed: %v", err))
 			output := err.Report.Report
 			if len(output) == 0 {
 				output = err.Report.Output
 			}
 			env.saveDebugFile(current.Hash, i, output)
+			if env.isTransientError(err.Report) {
+				verdicts = append(verdicts, fmt.Sprintf("ignore: %v", err))
+				break
+			}
+			bad++
+			rep = err.Report
+			verdicts = append(verdicts, fmt.Sprintf("crashed: %v", err))
 		default:
 			infra++
 			verdicts = append(verdicts, fmt.Sprintf("failed: %v", err))
@@ -669,6 +677,14 @@ func (env *env) processResults(current *vcs.Commit, results []instance.EnvTestRe
 		}
 	}
 	return
+}
+
+func (env *env) isTransientError(rep *report.Report) bool {
+	// If we're not chasing a SYZFATAL error, ignore them.
+	// Otherwise it likely indicates some transient problem with the kernel revision.
+	return env.report != nil &&
+		!strings.HasPrefix(env.report.Title, "SYZFATAL:") &&
+		strings.HasPrefix(rep.Title, "SYZFATAL:")
 }
 
 func (env *env) saveDebugFile(hash string, idx int, data []byte) {
