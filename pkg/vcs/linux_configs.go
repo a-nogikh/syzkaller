@@ -3,7 +3,12 @@
 
 package vcs
 
-import "github.com/google/syzkaller/pkg/kconfig"
+import (
+	"github.com/google/syzkaller/dashboard/dashapi"
+	"github.com/google/syzkaller/pkg/debugtracer"
+	"github.com/google/syzkaller/pkg/kconfig"
+	"github.com/google/syzkaller/pkg/log"
+)
 
 func linuxConfigsForTags(cf *kconfig.ConfigFile, tags map[string]bool) {
 	const disableAlways = "disable-always"
@@ -81,5 +86,40 @@ func linuxConfigsForTags(cf *kconfig.ConfigFile, tags map[string]bool) {
 			cf.Unset(a.From)
 			cf.Set(a.To, kconfig.Yes)
 		}
+	}
+}
+
+// linuxConfigsForType removes Linux kernel config options that are not necessary for the specific
+// report type.
+func linuxConfigsForType(cf *kconfig.ConfigFile, typ dashapi.CrashType, dt debugtracer.DebugTracer) {
+	keep := map[dashapi.CrashType]string{
+		dashapi.Hang:        "RCU_STALL_COMMON",
+		dashapi.MemoryLeak:  "DEBUG_KMEMLEAK",
+		dashapi.UBSAN:       "UBSAN",
+		dashapi.Bug:         "BUG",
+		dashapi.Warning:     "BUG",
+		dashapi.KASAN:       "KASAN",
+		dashapi.LockdepBug:  "LOCKDEP",
+		dashapi.AtomicSleep: "DEBUG_ATOMIC_SLEEP",
+	}
+	keepConfig := keep[typ]
+	if keepConfig == "" {
+		// We didn't recognize any sanitizer, so let's not risk disabling all of them.
+		return
+	}
+	if cf.Value(keepConfig) != kconfig.Yes {
+		// That's strange, let's not proceed.
+		log.Errorf("%s is disabled, but the type is %q", keepConfig, typ)
+	}
+	// Drop everything else.
+	var disabled []string
+	for t, name := range keep {
+		if t != typ && name != keepConfig {
+			cf.Unset(name)
+			disabled = append(disabled, name)
+		}
+	}
+	if len(disabled) > 0 {
+		dt.Log("configs %v are not needed to trigger %v, disable them", disabled, typ)
 	}
 }
