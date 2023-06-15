@@ -96,8 +96,8 @@ type Bisecter interface {
 }
 
 type ConfigMinimizer interface {
-	Minimize(target *targets.Target, original, baseline []byte, dt debugtracer.DebugTracer,
-		pred func(test []byte) (BisectResult, error)) ([]byte, error)
+	Minimize(target *targets.Target, original, baseline []byte, typ dashapi.CrashType,
+		dt debugtracer.DebugTracer, pred func(test []byte) (BisectResult, error)) ([]byte, error)
 }
 
 type Commit struct {

@@ -254,14 +254,12 @@ func (env *env) bisect() (*Result, error) {
 	}
 	env.crashReport = testRes.rep
 
-	if len(cfg.Kernel.BaselineConfig) != 0 {
-		testRes1, err := env.minimizeConfig()
-		if err != nil {
-			return nil, err
-		}
-		if testRes1 != nil {
-			testRes = testRes1
-		}
+	testRes1, err := env.minimizeConfig()
+	if err != nil {
+		return nil, err
+	}
+	if testRes1 != nil {
+		testRes = testRes1
 	}
 
 	bad, good, results1, fatalResult, err := env.commitRange()
@@ -362,11 +360,14 @@ func (env *env) minimizeConfig() (*testResult, error) {
 		if err != nil {
 			return 0, err
 		}
-		testResults[hash.Hash(test)] = testRes
+		if testRes.verdict == vcs.BisectBad {
+			// Only remember crashes.
+			testResults[hash.Hash(test)] = testRes
+		}
 		return testRes.verdict, err
 	}
 	minConfig, err := env.minimizer.Minimize(env.cfg.Manager.SysTarget, env.cfg.Kernel.Config,
-		env.cfg.Kernel.BaselineConfig, env.cfg.Trace, predMinimize)
+		env.cfg.Kernel.BaselineConfig, env.crashReport.Type, env.cfg.Trace, predMinimize)
 	if err != nil {
 		return nil, err
 	}

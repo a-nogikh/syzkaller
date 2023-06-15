@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/debugtracer"
 	"github.com/google/syzkaller/pkg/kconfig"
 	"github.com/google/syzkaller/pkg/osutil"
@@ -304,7 +305,7 @@ func ParseMaintainersLinux(text []byte) Recipients {
 
 const configBisectTag = "# Minimized by syzkaller"
 
-func (ctx *linux) Minimize(target *targets.Target, original, baseline []byte,
+func (ctx *linux) Minimize(target *targets.Target, original, baseline []byte, typ dashapi.CrashType,
 	dt debugtracer.DebugTracer, pred func(test []byte) (BisectResult, error)) ([]byte, error) {
 	if bytes.HasPrefix(original, []byte(configBisectTag)) {
 		dt.Log("# configuration already minimized\n")
@@ -314,27 +315,69 @@ func (ctx *linux) Minimize(target *targets.Target, original, baseline []byte,
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse Kconfig: %v", err)
 	}
-	originalConfig, err := kconfig.ParseConfigData(original, "original")
+	config, err := kconfig.ParseConfigData(original, "original")
 	if err != nil {
 		return nil, err
 	}
-	baselineConfig, err := kconfig.ParseConfigData(baseline, "baseline")
-	if err != nil {
-		return nil, err
-	}
-	linuxConfigsForTags(originalConfig, nil)
-	linuxConfigsForTags(baselineConfig, nil)
+	linuxConfigsForTags(config, nil)
 	kconfPred := func(candidate *kconfig.ConfigFile) (bool, error) {
 		res, err := pred(serialize(candidate))
 		return res == BisectBad, err
 	}
-	minConfig, err := kconf.Minimize(baselineConfig, originalConfig, kconfPred, dt)
-	if err != nil {
-		return nil, err
+	transformConfig := noConfigTransformation
+	if typ != dashapi.UnknownCrash {
+		newConfig, transform, err := dropInstrumentation(config, kconfPred, typ, dt)
+		if err != nil {
+			return nil, err
+		}
+		config = newConfig
+		transformConfig = transform
 	}
-	return serialize(minConfig), nil
+	if len(baseline) > 0 {
+		baselineConfig, err := kconfig.ParseConfigData(baseline, "baseline")
+		if err != nil {
+			return nil, err
+		}
+		linuxConfigsForTags(baselineConfig, nil)
+		transformConfig(baselineConfig)
+		minConfig, err := kconf.Minimize(baselineConfig, config, kconfPred, dt)
+		if err != nil {
+			return nil, err
+		}
+		config = minConfig
+	}
+	return serialize(config), nil
 }
 
 func serialize(cf *kconfig.ConfigFile) []byte {
 	return []byte(fmt.Sprintf("%v, rev: %v\n%s", configBisectTag, prog.GitRevision, cf.Serialize()))
+}
+
+func noConfigTransformation(c *kconfig.ConfigFile) {
+}
+
+func dropInstrumentation(
+	base *kconfig.ConfigFile,
+	pred func(*kconfig.ConfigFile) (bool, error),
+	typ dashapi.CrashType,
+	dt debugtracer.DebugTracer,
+) (
+	*kconfig.ConfigFile, func(*kconfig.ConfigFile), error,
+) {
+	dt.Log("check whether we can drop unnecessary instrumentation")
+	transform := func(c *kconfig.ConfigFile) {
+		linuxConfigsForType(c, typ, dt)
+	}
+	newConfig := base.Clone()
+	transform(newConfig)
+	if bytes.Equal(base.Serialize(), newConfig.Serialize()) {
+		dt.Log("there was nothing we could disable; skip")
+		return base, noConfigTransformation, nil
+	}
+	ok, err := pred(newConfig)
+	if !ok || err != nil {
+		return base, noConfigTransformation, err
+	}
+	dt.Log("the bug reproduces without unnecessary instrumentation")
+	return newConfig, transform, nil
 }
