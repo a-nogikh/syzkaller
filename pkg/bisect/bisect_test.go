@@ -17,6 +17,7 @@ import (
 	"github.com/google/syzkaller/pkg/report"
 	"github.com/google/syzkaller/pkg/vcs"
 	"github.com/google/syzkaller/sys/targets"
+	"github.com/stretchr/testify/assert"
 )
 
 // testEnv will implement instance.BuilderTester. This allows us to
@@ -599,4 +600,26 @@ func crashErrors(crashing, nonCrashing int, title string) []instance.EnvTestResu
 		ret = append(ret, instance.EnvTestResult{})
 	}
 	return ret
+}
+
+func TestMostFrequentCrash(t *testing.T) {
+	// Multiple crash titles case.
+	input := []*report.Report{
+		{Title: "A"},
+		{Title: "B"},
+		{Title: "A"},
+	}
+	ret, others := mostFrequentReport(input)
+	assert.Equal(t, ret, input[0])
+	assert.True(t, others)
+
+	// Single crash case.
+	input = []*report.Report{
+		{Title: "A"},
+		{Title: "A"},
+		{Title: "A"},
+	}
+	ret, others = mostFrequentReport(input)
+	assert.Equal(t, ret, input[0])
+	assert.False(t, others)
 }

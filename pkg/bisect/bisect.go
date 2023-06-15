@@ -79,6 +79,7 @@ type env struct {
 	buildTime    time.Duration
 	testTime     time.Duration
 	flaky        bool
+	crashReport  *report.Report
 }
 
 const MaxNumTests = 20 // number of tests we do per commit
@@ -251,6 +252,7 @@ func (env *env) bisect() (*Result, error) {
 	} else if testRes.verdict != vcs.BisectBad {
 		return nil, fmt.Errorf("the crash wasn't reproduced on the original commit")
 	}
+	env.crashReport = testRes.rep
 
 	if len(cfg.Kernel.BaselineConfig) != 0 {
 		testRes1, err := env.minimizeConfig()
@@ -622,6 +624,7 @@ func (env *env) test() (*testResult, error) {
 func (env *env) processResults(current *vcs.Commit, results []instance.EnvTestResult) (
 	bad, good, infra int, rep *report.Report) {
 	var verdicts []string
+	var reports []*report.Report
 	for i, res := range results {
 		if res.Error == nil {
 			good++
@@ -645,7 +648,7 @@ func (env *env) processResults(current *vcs.Commit, results []instance.EnvTestRe
 			env.saveDebugFile(current.Hash, i, output)
 		case *instance.CrashError:
 			bad++
-			rep = err.Report
+			reports = append(reports, err.Report)
 			verdicts = append(verdicts, fmt.Sprintf("crashed: %v", err))
 			output := err.Report.Report
 			if len(output) == 0 {
@@ -668,7 +671,29 @@ func (env *env) processResults(current *vcs.Commit, results []instance.EnvTestRe
 			env.log("run #%v: %v", i, verdict)
 		}
 	}
+	rep, others := mostFrequentReport(reports)
+	if others {
+		// TODO: set flaky=true or in some other way indicate that the bug
+		// triggers multiple different crashes?
+		env.log("most frequent crash: %v", rep.Title)
+	}
 	return
+}
+
+func mostFrequentReport(reports []*report.Report) (*report.Report, bool) {
+	perTitle, max := map[string]int{}, 0
+	for _, rep := range reports {
+		perTitle[rep.Title]++
+		if perTitle[rep.Title] > max {
+			max = perTitle[rep.Title]
+		}
+	}
+	for _, rep := range reports {
+		if perTitle[rep.Title] == max {
+			return rep, len(perTitle) > 1
+		}
+	}
+	return nil, false
 }
 
 func (env *env) saveDebugFile(hash string, idx int, data []byte) {
