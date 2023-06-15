@@ -1,5 +1,6 @@
 TITLE: BUG: Dentry still in use in unmount
 ALT: BUG: Dentry still in use [unmount of ext4 loop4]
+TYPE: BUG
 
 [  538.260174][  T380] BUG: Dentry ffff88810e2ca880{i=0,n=.index}  still in use (1) [unmount of ext4 loop4]
 [  538.269909][  T380] ------------[ cut here ]------------

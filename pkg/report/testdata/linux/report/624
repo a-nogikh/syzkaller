@@ -1,5 +1,6 @@
 TITLE: BUG: Dentry still in use in unmount
 ALT: BUG: Dentry still in use [unmount of ramfs ramfs]
+TYPE: BUG
 
 [   20.143962][  T367] BUG: Dentry ffff888119d8a000{i=0,n=.index}  still in use (1) [unmount of ramfs ramfs]
 [   20.175803][  T367] ------------[ cut here ]------------

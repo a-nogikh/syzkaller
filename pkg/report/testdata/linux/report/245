@@ -1,4 +1,5 @@
 TITLE: WARNING: kernel stack regs has bad value
+TYPE: WARNING
 
 [   25.881294] random: sshd: uninitialized urandom read (32 bytes read)
 [   26.143061] unwind stack type:0 next_sp:          (null) mask:0x6 graph_idx:0

@@ -111,18 +111,7 @@ func parseHeaderLine(t *testing.T, test *ParseTest, ln string) {
 	case strings.HasPrefix(ln, altTitlePrefix):
 		test.AltTitles = append(test.AltTitles, ln[len(altTitlePrefix):])
 	case strings.HasPrefix(ln, typePrefix):
-		switch v := ln[len(typePrefix):]; v {
-		case Hang.String():
-			test.Type = Hang
-		case MemoryLeak.String():
-			test.Type = MemoryLeak
-		case DataRace.String():
-			test.Type = DataRace
-		case UnexpectedReboot.String():
-			test.Type = UnexpectedReboot
-		default:
-			t.Fatalf("unknown TYPE value %q", v)
-		}
+		test.Type = Type(ln[len(typePrefix):])
 	case strings.HasPrefix(ln, framePrefix):
 		test.Frame = ln[len(framePrefix):]
 	case strings.HasPrefix(ln, startPrefix):

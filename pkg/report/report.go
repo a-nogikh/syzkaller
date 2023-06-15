@@ -83,6 +83,12 @@ const (
 	MemoryLeak       = Type("LEAK")
 	DataRace         = Type("DATARACE")
 	UnexpectedReboot = Type("REBOOT")
+	UBSAN            = Type("UBSAN")
+	Bug              = Type("BUG")
+	Warning          = Type("WARNING")
+	KASAN            = Type("KASAN")
+	LockdepBug       = Type("LOCKDEP")
+	AtomicSleep      = Type("ATOMIC_SLEEP")
 )
 
 func (t Type) String() string {
@@ -205,7 +211,7 @@ func (reporter *Reporter) ParseFrom(output []byte, minReportPos int) *Report {
 	if bytes.Contains(rep.Output, gceConsoleHangup) {
 		rep.Corrupted = true
 	}
-	rep.Type = extractReportType(rep)
+	rep.Type = reporter.extractReportType(rep)
 	if match := reportFrameRe.FindStringSubmatch(rep.Title); match != nil {
 		rep.Frame = match[1]
 	}
@@ -274,7 +280,7 @@ func (reporter *Reporter) ReportToGuiltyFile(title string, report []byte) string
 	return ii.extractGuiltyFileRaw(title, report)
 }
 
-func extractReportType(rep *Report) Type {
+func (reporter *Reporter) extractReportType(rep *Report) Type {
 	// Type/frame extraction logic should be integrated with oops types.
 	// But for now we do this more ad-hoc analysis here to at least isolate
 	// the rest of the code base from report parsing.
@@ -287,13 +293,13 @@ func extractReportType(rep *Report) Type {
 	if strings.HasPrefix(rep.Title, dataRacePrefix) {
 		return DataRace
 	}
-	if strings.HasPrefix(rep.Title, "INFO: rcu detected stall") ||
-		strings.HasPrefix(rep.Title, "INFO: task hung") ||
-		strings.HasPrefix(rep.Title, "BUG: soft lockup") ||
-		strings.HasPrefix(rep.Title, "INFO: task can't die") {
-		return Hang
+	ii, ok := reporter.impl.(interface {
+		reportType(rep *Report) Type
+	})
+	if !ok {
+		return Unknown
 	}
-	return Unknown
+	return ii.reportType(rep)
 }
 
 func IsSuppressed(reporter *Reporter, output []byte) bool {

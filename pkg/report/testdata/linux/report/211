@@ -1,4 +1,5 @@
 TITLE: BUG: workqueue leaked lock or atomic in addrconf_dad_work
+TYPE: BUG
 
 [   52.362800] BUG: workqueue leaked lock or atomic: kworker/0:1/0x00000000/353
 [   52.362800]      last function: addrconf_dad_work

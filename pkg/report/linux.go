@@ -859,6 +859,43 @@ func (ctx *linux) isCorrupted(title string, report []byte, format oopsFormat) (b
 	return false, ""
 }
 
+func (ctx *linux) reportType(rep *Report) Type {
+	if strings.HasPrefix(rep.Title, "INFO: rcu detected stall") ||
+		strings.HasPrefix(rep.Title, "INFO: task hung") ||
+		strings.HasPrefix(rep.Title, "BUG: soft lockup") ||
+		strings.HasPrefix(rep.Title, "INFO: task can't die") {
+		return Hang
+	}
+	if strings.HasPrefix(rep.Title, "UBSAN: ") {
+		return UBSAN
+	}
+	if strings.Contains(rep.Title, "sleeping function called from invalid context") ||
+		strings.Contains(rep.Title, "scheduling while atomic") {
+		return AtomicSleep
+	}
+	if strings.Contains(rep.Title, "locking bug in") ||
+		strings.Contains(rep.Title, "circular locking") ||
+		strings.Contains(rep.Title, "spinlock lockup") ||
+		strings.Contains(rep.Title, "inconsistent lock state") ||
+		strings.Contains(rep.Title, "bad unlock balance") ||
+		strings.HasPrefix(rep.Title, "possible deadlock in") {
+		return LockdepBug
+	}
+	if strings.HasPrefix(rep.Title, "BUG: ") &&
+		// These are usually not BUG_ON().
+		!strings.Contains(strings.ToLower(rep.Title), "unable to handle") &&
+		!strings.Contains(rep.Title, "kernel NULL pointer dereference") {
+		return Bug
+	}
+	if strings.HasPrefix(rep.Title, "WARNING: ") {
+		return Warning
+	}
+	if strings.HasPrefix(rep.Title, "KASAN: ") {
+		return KASAN
+	}
+	return Unknown
+}
+
 func linuxStallFrameExtractor(frames []string) string {
 	// During rcu stalls and cpu lockups kernel loops in some part of code,
 	// usually across several functions. When the stall is detected, traceback

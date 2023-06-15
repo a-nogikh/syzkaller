@@ -1,4 +1,5 @@
 TITLE: BUG: Bad page map
+TYPE: BUG
 CORRUPTED: Y
 
 [   40.438790] BUG: Bad page map in process syz-executor6  pte:ffff8801a700ff00 pmd:1a700f067

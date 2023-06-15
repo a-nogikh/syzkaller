@@ -1,4 +1,5 @@
 TITLE: WARNING: possible circular locking dependency detected
+TYPE: LOCKDEP
 CORRUPTED: Y
 
 [  308.130685] ======================================================
