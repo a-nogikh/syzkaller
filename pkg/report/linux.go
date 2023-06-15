@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/pkg/symbolizer"
 	"github.com/google/syzkaller/pkg/vcs"
@@ -638,7 +639,7 @@ func (ctx *linux) parseOpcodes(codeSlice string) (parsedOpcodes, error) {
 // decompileOpcodes detects the most meaningful "Code: " lines from the report, decompiles
 // them and appends a human-readable listing to the end of the report.
 func (ctx *linux) decompileOpcodes(text []byte, report *Report) []byte {
-	if report.Type == Hang {
+	if report.Type == dashapi.Hang {
 		// Even though Hang reports do contain the Code: section, there's no point in
 		// decompiling that. So just return the text.
 		return text
@@ -859,19 +860,19 @@ func (ctx *linux) isCorrupted(title string, report []byte, format oopsFormat) (b
 	return false, ""
 }
 
-func (ctx *linux) reportType(rep *Report) Type {
+func (ctx *linux) reportType(rep *Report) dashapi.CrashType {
 	if strings.HasPrefix(rep.Title, "INFO: rcu detected stall") ||
 		strings.HasPrefix(rep.Title, "INFO: task hung") ||
 		strings.HasPrefix(rep.Title, "BUG: soft lockup") ||
 		strings.HasPrefix(rep.Title, "INFO: task can't die") {
-		return Hang
+		return dashapi.Hang
 	}
 	if strings.HasPrefix(rep.Title, "UBSAN: ") {
-		return UBSAN
+		return dashapi.UBSAN
 	}
 	if strings.Contains(rep.Title, "sleeping function called from invalid context") ||
 		strings.Contains(rep.Title, "scheduling while atomic") {
-		return AtomicSleep
+		return dashapi.AtomicSleep
 	}
 	if strings.Contains(rep.Title, "locking bug in") ||
 		strings.Contains(rep.Title, "circular locking") ||
@@ -879,21 +880,21 @@ func (ctx *linux) reportType(rep *Report) Type {
 		strings.Contains(rep.Title, "inconsistent lock state") ||
 		strings.Contains(rep.Title, "bad unlock balance") ||
 		strings.HasPrefix(rep.Title, "possible deadlock in") {
-		return LockdepBug
+		return dashapi.LockdepBug
 	}
 	if strings.HasPrefix(rep.Title, "BUG: ") &&
 		// These are usually not BUG_ON().
 		!strings.Contains(strings.ToLower(rep.Title), "unable to handle") &&
 		!strings.Contains(rep.Title, "kernel NULL pointer dereference") {
-		return Bug
+		return dashapi.Bug
 	}
 	if strings.HasPrefix(rep.Title, "WARNING: ") {
-		return Warning
+		return dashapi.Warning
 	}
 	if strings.HasPrefix(rep.Title, "KASAN: ") {
-		return KASAN
+		return dashapi.KASAN
 	}
-	return Unknown
+	return dashapi.UnknownCrash
 }
 
 func linuxStallFrameExtractor(frames []string) string {

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/build"
 	"github.com/google/syzkaller/pkg/csource"
 	"github.com/google/syzkaller/pkg/log"
@@ -308,7 +309,7 @@ func (inst *inst) test() EnvTestResult {
 			testErr.Title, testErr.Output = bootErr.BootError()
 			ret.RawOutput = testErr.Output
 			rep := inst.reporter.Parse(testErr.Output)
-			if rep != nil && rep.Type == report.UnexpectedReboot {
+			if rep != nil && rep.Type == dashapi.UnexpectedReboot {
 				// Avoid detecting any boot crash as "unexpected kernel reboot".
 				rep = inst.reporter.ParseFrom(testErr.Output, rep.SkipPos)
 			}

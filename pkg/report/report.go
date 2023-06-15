@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/mgrconfig"
 	"github.com/google/syzkaller/pkg/vcs"
 	"github.com/google/syzkaller/sys/targets"
@@ -43,7 +44,7 @@ type Report struct {
 	// If two crashes have a non-empty intersection of Title/AltTitles, they are considered the same bug.
 	AltTitles []string
 	// Bug type (e.g. hang, memory leak, etc).
-	Type Type
+	Type dashapi.CrashType
 	// The indicative function name.
 	Frame string
 	// Report contains whole oops text.
@@ -73,26 +74,6 @@ type Report struct {
 
 func (r Report) String() string {
 	return fmt.Sprintf("crash: %v\n%s", r.Title, r.Report)
-}
-
-type Type string
-
-const (
-	Unknown          = Type("")
-	Hang             = Type("HANG")
-	MemoryLeak       = Type("LEAK")
-	DataRace         = Type("DATARACE")
-	UnexpectedReboot = Type("REBOOT")
-	UBSAN            = Type("UBSAN")
-	Bug              = Type("BUG")
-	Warning          = Type("WARNING")
-	KASAN            = Type("KASAN")
-	LockdepBug       = Type("LOCKDEP")
-	AtomicSleep      = Type("ATOMIC_SLEEP")
-)
-
-func (t Type) String() string {
-	return string(t)
 }
 
 // NewReporter creates reporter for the specified OS/Type.
@@ -280,24 +261,24 @@ func (reporter *Reporter) ReportToGuiltyFile(title string, report []byte) string
 	return ii.extractGuiltyFileRaw(title, report)
 }
 
-func (reporter *Reporter) extractReportType(rep *Report) Type {
+func (reporter *Reporter) extractReportType(rep *Report) dashapi.CrashType {
 	// Type/frame extraction logic should be integrated with oops types.
 	// But for now we do this more ad-hoc analysis here to at least isolate
 	// the rest of the code base from report parsing.
 	if rep.Title == unexpectedKernelReboot {
-		return UnexpectedReboot
+		return dashapi.UnexpectedReboot
 	}
 	if strings.HasPrefix(rep.Title, memoryLeakPrefix) {
-		return MemoryLeak
+		return dashapi.MemoryLeak
 	}
 	if strings.HasPrefix(rep.Title, dataRacePrefix) {
-		return DataRace
+		return dashapi.DataRace
 	}
 	ii, ok := reporter.impl.(interface {
-		reportType(rep *Report) Type
+		reportType(rep *Report) dashapi.CrashType
 	})
 	if !ok {
-		return Unknown
+		return dashapi.UnknownCrash
 	}
 	return ii.reportType(rep)
 }

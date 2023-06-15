@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/mgrconfig"
 	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/pkg/testutil"
@@ -33,7 +34,7 @@ type ParseTest struct {
 	Log        []byte
 	Title      string
 	AltTitles  []string
-	Type       Type
+	Type       dashapi.CrashType
 	Frame      string
 	StartLine  string
 	EndLine    string
@@ -111,7 +112,7 @@ func parseHeaderLine(t *testing.T, test *ParseTest, ln string) {
 	case strings.HasPrefix(ln, altTitlePrefix):
 		test.AltTitles = append(test.AltTitles, ln[len(altTitlePrefix):])
 	case strings.HasPrefix(ln, typePrefix):
-		test.Type = Type(ln[len(typePrefix):])
+		test.Type = dashapi.CrashType(ln[len(typePrefix):])
 	case strings.HasPrefix(ln, framePrefix):
 		test.Frame = ln[len(framePrefix):]
 	case strings.HasPrefix(ln, startPrefix):
@@ -154,7 +155,7 @@ func testParseImpl(t *testing.T, reporter *Reporter, test *ParseTest) {
 	if rep != nil && rep.Title == "" {
 		t.Fatalf("found crash, but title is empty")
 	}
-	title, corrupted, corruptedReason, suppressed, typ, frame := "", false, "", false, Unknown, ""
+	title, corrupted, corruptedReason, suppressed, typ, frame := "", false, "", false, dashapi.UnknownCrash, ""
 	var altTitles []string
 	if rep != nil {
 		title = rep.Title
@@ -236,13 +237,13 @@ func checkReport(t *testing.T, reporter *Reporter, rep *Report, test *ParseTest)
 }
 
 func updateReportTest(t *testing.T, test *ParseTest, title string, altTitles []string, corrupted, suppressed bool,
-	typ Type, frame string) {
+	typ dashapi.CrashType, frame string) {
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "TITLE: %v\n", title)
 	for _, t := range altTitles {
 		fmt.Fprintf(buf, "ALT: %v\n", t)
 	}
-	if typ != Unknown {
+	if typ != dashapi.UnknownCrash {
 		fmt.Fprintf(buf, "TYPE: %v\n", typ)
 	}
 	if test.Frame != "" {

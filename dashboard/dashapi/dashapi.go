@@ -997,3 +997,23 @@ type Recipients []RecipientInfo
 func (r Recipients) Len() int           { return len(r) }
 func (r Recipients) Less(i, j int) bool { return r[i].Address.Address < r[j].Address.Address }
 func (r Recipients) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
+
+type CrashType string
+
+const (
+	UnknownCrash     CrashType = ""
+	Hang             CrashType = "HANG"
+	MemoryLeak       CrashType = "LEAK"
+	DataRace         CrashType = "DATARACE"
+	UnexpectedReboot CrashType = "REBOOT"
+	UBSAN            CrashType = "UBSAN"
+	Bug              CrashType = "BUG"
+	Warning          CrashType = "WARNING"
+	KASAN            CrashType = "KASAN"
+	LockdepBug       CrashType = "LOCKDEP"
+	AtomicSleep      CrashType = "ATOMIC_SLEEP"
+)
+
+func (t CrashType) String() string {
+	return string(t)
+}

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/csource"
 	"github.com/google/syzkaller/pkg/host"
 	"github.com/google/syzkaller/pkg/instance"
@@ -50,7 +51,7 @@ type context struct {
 	target       *targets.Target
 	reporter     *report.Reporter
 	crashTitle   string
-	crashType    report.Type
+	crashType    dashapi.CrashType
 	crashStart   int
 	entries      []*prog.LogEntry
 	instances    chan *reproInstance
@@ -98,7 +99,7 @@ func prepareCtx(crashLog []byte, cfg *mgrconfig.Config, features *host.Features,
 		return nil, ErrNoPrograms
 	}
 	crashStart := len(crashLog)
-	crashTitle, crashType := "", report.Unknown
+	crashTitle, crashType := "", dashapi.UnknownCrash
 	if rep := reporter.Parse(crashLog); rep != nil {
 		crashStart = rep.StartPos
 		crashTitle = rep.Title
@@ -117,10 +118,10 @@ func prepareCtx(crashLog []byte, cfg *mgrconfig.Config, features *host.Features,
 		// No output can only be reproduced with the max timeout.
 		// As a compromise we use the smallest and the largest timeouts.
 		testTimeouts = []time.Duration{testTimeouts[0], testTimeouts[2]}
-	case crashType == report.MemoryLeak:
+	case crashType == dashapi.MemoryLeak:
 		// Memory leaks can't be detected quickly because of expensive setup and scanning.
 		testTimeouts = testTimeouts[1:]
-	case crashType == report.Hang:
+	case crashType == dashapi.Hang:
 		testTimeouts = testTimeouts[2:]
 	}
 	ctx := &context{
@@ -171,9 +172,10 @@ func (ctx *context) run() (*Result, *Stats, error) {
 	return res, ctx.stats, nil
 }
 
-func createStartOptions(cfg *mgrconfig.Config, features *host.Features, crashType report.Type) csource.Options {
+func createStartOptions(cfg *mgrconfig.Config, features *host.Features,
+	crashType dashapi.CrashType) csource.Options {
 	opts := csource.DefaultOpts(cfg)
-	if crashType == report.MemoryLeak {
+	if crashType == dashapi.MemoryLeak {
 		opts.Leak = true
 	}
 	if features != nil {
@@ -538,7 +540,7 @@ func (ctx *context) testWithInstance(callback func(execInterface) (rep *instance
 		ctx.reproLogf(2, "suppressed program crash: %v", rep.Title)
 		return false, nil
 	}
-	if ctx.crashType == report.MemoryLeak && rep.Type != report.MemoryLeak {
+	if ctx.crashType == dashapi.MemoryLeak && rep.Type != dashapi.MemoryLeak {
 		ctx.reproLogf(2, "not a leak crash: %v", rep.Title)
 		return false, nil
 	}
