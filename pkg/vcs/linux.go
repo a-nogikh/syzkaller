@@ -340,7 +340,13 @@ func (ctx *linux) Minimize(target *targets.Target, original, baseline []byte, ty
 		}
 		linuxConfigsForTags(baselineConfig, nil)
 		transformConfig(baselineConfig)
-		minConfig, err := kconf.Minimize(baselineConfig, config, kconfPred, dt)
+		// Don't do too many minimization runs, it will make bug bisections too long.
+		// The purpose is only to reduce the number of build/boot/test errors due to bugs
+		// in unrelated parts of the kernel.
+		// Bisection is not getting much faster with smaller configs, only more reliable,
+		// so there's a trade-off. Try to do best in 6 iterations, that's about 2 hours.
+		const minimizeRuns = 5
+		minConfig, err := kconf.Minimize(baselineConfig, config, kconfPred, minimizeRuns, dt)
 		if err != nil {
 			return nil, err
 		}
