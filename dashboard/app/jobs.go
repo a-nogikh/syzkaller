@@ -435,12 +435,39 @@ func jobFromBugSample(c context.Context, managers map[string]dashapi.ManagerJobs
 		map[string]dashapi.ManagerJobs) (*Job, *db.Key, error){
 		createPatchRetestingJobs,
 		createTreeTestJobs,
+		createTreeBisectionJobs,
 	}
 	r.Shuffle(len(funcs), func(i, j int) { funcs[i], funcs[j] = funcs[j], funcs[i] })
 	for _, f := range funcs {
 		job, jobKey, err := f(c, allBugs, allBugKeys, managers)
 		if job != nil || err != nil {
 			return job, jobKey, err
+		}
+	}
+	return nil, nil, nil
+}
+
+func createTreeBisectionJobs(c context.Context, bugs []*Bug, bugKeys []*db.Key,
+	managers map[string]dashapi.ManagerJobs) (*Job, *db.Key, error) {
+	log.Infof(c, "createTreeBisectionJobs is called for %d bugs", len(bugs))
+	const maxProcess = 3
+	processed := 0
+	for _, bug := range bugs {
+		if processed >= maxProcess {
+			break
+		}
+		any := false
+		for _, mgr := range bug.HappenedOn {
+			newMgr, _ := activeManager(mgr, bug.Namespace)
+			any = any || managers[newMgr].BisectFix
+		}
+		if !any {
+			continue
+		}
+		processed++
+		job, key, err := crossTreeBisection(c, bug, managers)
+		if job != nil || err != nil {
+			return job, key, err
 		}
 	}
 	return nil, nil, nil
@@ -820,7 +847,7 @@ func createJobResp(c context.Context, job *Job, jobKey *db.Key) (*dashapi.JobPol
 		KernelBranch:      job.KernelBranch,
 		MergeBaseRepo:     job.MergeBaseRepo,
 		MergeBaseBranch:   job.MergeBaseBranch,
-		KernelCommit:      build.KernelCommit,
+		KernelCommit:      job.KernelCommit,
 		KernelCommitTitle: build.KernelCommitTitle,
 		KernelCommitDate:  build.KernelCommitDate,
 		KernelConfig:      kernelConfig,
@@ -829,6 +856,9 @@ func createJobResp(c context.Context, job *Job, jobKey *db.Key) (*dashapi.JobPol
 		ReproOpts:         crash.ReproOpts,
 		ReproSyz:          reproSyz,
 		ReproC:            reproC,
+	}
+	if resp.KernelCommit == "" {
+		resp.KernelCommit = build.KernelCommit
 	}
 	switch job.Type {
 	case JobTestPatch:
@@ -1058,11 +1088,19 @@ func doneJob(c context.Context, req *dashapi.JobDoneReq) error {
 	if err != nil {
 		return err
 	}
+	return postJob(c, jobKey, job)
+}
+
+func postJob(c context.Context, jobKey *db.Key, job *Job) error {
 	if job.TreeOrigin {
-		err = treeOriginJobDone(c, jobKey, job)
+		err := treeOriginJobDone(c, jobKey, job)
 		if err != nil {
-			return fmt.Errorf("job %v: failed to execute tree origin handlers: %s", jobID, err)
+			return fmt.Errorf("job %s: failed to execute tree origin handlers: %s", jobKey, err)
 		}
+	}
+	err := doneCrossTreeBisection(c, jobKey, job)
+	if err != nil {
+		return fmt.Errorf("job %s: cross tree bisection handlers failed: %s", jobKey, err)
 	}
 	return nil
 }
@@ -1618,6 +1656,10 @@ func (b *bugJobs) bestBisection() *bugJob {
 			continue
 		}
 		if j.job.InvalidatedBy != "" {
+			continue
+		}
+		if j.job.MergeBaseRepo != "" {
+			// It was a cross-tree bisection.
 			continue
 		}
 		return j

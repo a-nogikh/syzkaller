@@ -401,7 +401,10 @@ func (jp *JobProcessor) process(job *Job) *dashapi.JobDoneReq {
 		jp.Errorf("%s", err)
 		return job.resp
 	}
-
+	if req.KernelRepo == "" {
+		req.KernelRepo = mgr.mgrcfg.Repo
+		req.KernelRepo = mgr.mgrcfg.Branch
+	}
 	required := []struct {
 		name string
 		ok   bool
@@ -459,6 +462,10 @@ func (jp *JobProcessor) bisect(job *Job, mgrcfg *mgrconfig.Config) error {
 			return fmt.Errorf("failed to read baseline config: %v", err)
 		}
 	}
+	err := jp.prepareBisectionRepo(mgrcfg, req)
+	if err != nil {
+		return err
+	}
 	trace := new(bytes.Buffer)
 	cfg := &bisect.Config{
 		Trace: &debugtracer.GenericTracer{
@@ -489,8 +496,8 @@ func (jp *JobProcessor) bisect(job *Job, mgrcfg *mgrconfig.Config) error {
 		Linker:          mgr.mgrcfg.Linker,
 		Ccache:          jp.cfg.Ccache,
 		Kernel: bisect.KernelConfig{
-			Repo:           mgr.mgrcfg.Repo,
-			Branch:         mgr.mgrcfg.Branch,
+			Repo:           req.KernelRepo,
+			Branch:         req.KernelBranch,
 			Commit:         req.KernelCommit,
 			CommitTitle:    req.KernelCommitTitle,
 			Cmdline:        mgr.mgrcfg.KernelCmdline,
@@ -509,6 +516,7 @@ func (jp *JobProcessor) bisect(job *Job, mgrcfg *mgrconfig.Config) error {
 			Syz:  req.ReproSyz,
 			C:    req.ReproC,
 		},
+		CrossTree:      req.MergeBaseRepo != "",
 		Manager:        mgrcfg,
 		BuildSemaphore: buildSem,
 		TestSemaphore:  testSem,
@@ -656,6 +664,23 @@ func (jp *JobProcessor) testPatch(job *Job, mgrcfg *mgrconfig.Config) error {
 		resp.CrashReport = rep.Report
 	}
 	resp.CrashLog = ret.rawOutput
+	return nil
+}
+
+func (jp *JobProcessor) prepareBisectionRepo(mgrcfg *mgrconfig.Config, req *dashapi.JobPollResp) error {
+	if req.MergeBaseRepo == "" {
+		// No need to.
+		return nil
+	}
+	repo, err := vcs.NewRepo(mgrcfg.TargetOS, mgrcfg.Type, mgrcfg.KernelSrc)
+	if err != nil {
+		return fmt.Errorf("failed to create kernel repo: %v", err)
+	}
+	_, err = checkoutKernelOrCommit(repo, req.MergeBaseRepo, req.MergeBaseBranch)
+	if err != nil {
+		return fmt.Errorf("failed to checkout the merge base repo %v on %v: %v",
+			req.MergeBaseRepo, req.MergeBaseBranch, err)
+	}
 	return nil
 }
 

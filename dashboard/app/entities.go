@@ -123,6 +123,21 @@ type Bug struct {
 	Labels         []BugLabel
 	DiscussionInfo []BugDiscussionInfo
 	TreeTests      BugTreeTestInfo
+	FixCandidates  []BugFixCandidate
+}
+
+type FixCandidateSource string
+
+const (
+	BisectionFixCandidate FixCandidateSource = "bisection"
+)
+
+type BugFixCandidate struct {
+	Source FixCandidateSource
+	Repo   string
+	Branch string
+	Commit Commit
+	JobKey string
 }
 
 type BugTreeTestInfo struct {
@@ -544,6 +559,7 @@ type Job struct {
 	CrashID   int64
 
 	// Provided by user:
+	KernelCommit string // if empty, it will be taken from the referenced Crash
 	KernelRepo   string
 	KernelBranch string
 	Patch        int64 // reference to Patch text entity
