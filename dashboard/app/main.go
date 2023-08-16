@@ -1014,7 +1014,7 @@ func handleBugStats(c context.Context, w http.ResponseWriter, r *http.Request) e
 		return fmt.Errorf("failed to query bugs: %w", err)
 	}
 
-	const days = 100
+	const days = 50
 	reports := []struct {
 		name  string
 		stat  stats
@@ -1022,7 +1022,7 @@ func handleBugStats(c context.Context, w http.ResponseWriter, r *http.Request) e
 	}{
 		{
 			name:  "Effect of strace among bugs with repro since May 2022",
-			stat:  newStatsFilter(newStraceEffect(days), bugsHaveRepro),
+			stat:  newStatsFilter(newStraceEffect(days), bugsHaveRepro(timeNow(c), days)),
 			since: time.Date(2022, 5, 1, 0, 0, 0, 0, time.UTC),
 		},
 		{
@@ -1036,13 +1036,41 @@ func handleBugStats(c context.Context, w http.ResponseWriter, r *http.Request) e
 			since: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 		{
-			name:  "Effect of the presence of build assets since Oct 2022",
+			name:  "Effect of the presence of build assets since 2022",
 			stat:  newAssetEffect(days),
-			since: time.Date(2022, 10, 1, 0, 0, 0, 0, time.UTC),
+			since: time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 		{
-			name:  "Effect of cause bisection among bugs with repro since 2022",
-			stat:  newStatsFilter(newBisectCauseEffect(days), bugsHaveRepro),
+			name: "Effect of subsystem since 1 Sept 2022; among those with a repro",
+			stat: newStatsFilter(newSubsystemEffect(days),
+				bugsHaveRepro(timeNow(c), days),
+				excludeBadSubsystems,
+			),
+			since: time.Date(2022, 9, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:  "Effect of cause bisection among bugs with repro since 2020",
+			stat:  newStatsFilter(newBisectCauseEffect(days), bugsHaveRepro(timeNow(c), days)),
+			since: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:  "Effect of type since 2020",
+			stat:  newTypeEffect(days),
+			since: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:  "Effect of crash count since 2020",
+			stat:  newCrashCountEffect(days),
+			since: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:  "Effect of crash count since 2020 (with repro)",
+			stat:  newStatsFilter(newCrashCountEffect(days), bugsHaveRepro(timeNow(c), days)),
+			since: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name:  "Effect of crash count since 2020",
+			stat:  newSubsystemBucketEffect(days),
 			since: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 	}
@@ -1050,8 +1078,8 @@ func handleBugStats(c context.Context, w http.ResponseWriter, r *http.Request) e
 	// Set up common filters.
 	allReportings := config.Namespaces[hdr.Namespace].Reporting
 	commonFilters := []statsFilter{
-		bugsNoLater(timeNow(c), days),                                  // yet make sure bugs are old enough
-		bugsInReportingStage(allReportings[len(allReportings)-1].Name), // only bugs from the last stage
+		bugsNoLater(timeNow(c), days),                    // yet make sure bugs are old enough
+		bugsReachedReportingStage(allReportings[1].Name), // only bugs that passed premoderation
 	}
 	for i, report := range reports {
 		reports[i].stat = newStatsFilter(report.stat, commonFilters...)
@@ -1080,6 +1108,29 @@ func handleBugStats(c context.Context, w http.ResponseWriter, r *http.Request) e
 		fmt.Fprintf(w, "\n\n")
 	}
 
+	fmt.Fprintf(w, "\nOriginally with a subsystem\n")
+	filter := combineFilters(combineFilters(commonFilters...),
+		bugsHaveRepro(timeNow(c), days),
+		bugsNoEarlier(time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)),
+	)
+	for _, input := range inputs {
+		if !filter(input) {
+			continue
+		}
+		if bugHadSubsystem(input) {
+			fmt.Fprintf(w, "%s %s\n", input.bug.displayTitle(), bugExtLink(input.bug))
+		}
+	}
+
+	fmt.Fprintf(w, "\nOriginally without a subsystem\n")
+	for _, input := range inputs {
+		if !filter(input) {
+			continue
+		}
+		if !bugHadSubsystem(input) {
+			fmt.Fprintf(w, "%s %s\n", input.bug.displayTitle(), bugExtLink(input.bug))
+		}
+	}
 	return nil
 }
 
