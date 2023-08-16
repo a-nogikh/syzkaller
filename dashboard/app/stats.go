@@ -6,11 +6,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/stats/syzbotstats"
 	"golang.org/x/net/context"
+
 	"google.golang.org/appengine/v2"
 	db "google.golang.org/appengine/v2/datastore"
 )
@@ -85,6 +87,7 @@ func allBugInputs(c context.Context, ns string) ([]*bugInput, error) {
 	buildToInput := map[*db.Key]*bugInput{}
 	if len(crashKeys) > 0 {
 		crashes := make([]*Crash, len(crashKeys))
+
 		if badKey, err := getAllMulti(c, crashKeys, crashes); err != nil {
 			return nil, fmt.Errorf("failed to fetch crashes for %v: %w", badKey, err)
 		}
@@ -159,6 +162,7 @@ func getBugSummaries(c context.Context, ns, stage string) ([]*syzbotstats.BugSta
 		}
 		obj := &syzbotstats.BugStatSummary{
 			Title:        bug.Title,
+			AltTitles:    bug.AltTitles,
 			ReleasedTime: targetStage.Closed,
 			ResolvedTime: bug.Closed,
 			Strace:       dashapi.CrashFlags(crash.Flags)&dashapi.CrashUnderStrace > 0,
@@ -202,6 +206,14 @@ func getBugSummaries(c context.Context, ns, stage string) ([]*syzbotstats.BugSta
 
 		for _, label := range bug.LabelValues(SubsystemLabel) {
 			obj.Subsystems = append(obj.Subsystems, label.Value)
+		}
+
+		obj.OnlyNext = true
+		for _, mgr := range bug.HappenedOn {
+			if !strings.Contains(mgr, "next") &&
+				mgr != "ci-upstream-net-kasan-gce" {
+				obj.OnlyNext = false
+			}
 		}
 
 		ret = append(ret, obj)
