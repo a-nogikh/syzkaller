@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/dashboard/dashapi"
+	"github.com/google/syzkaller/pkg/stats/syzbotstats"
 	"golang.org/x/net/context"
 	db "google.golang.org/appengine/v2/datastore"
 )
@@ -294,4 +295,74 @@ func newBisectCauseEffect(days int) *reactionFactor {
 	return newReactionFactor(days, "Successful Cause Bisection", func(bi *bugInput) bool {
 		return bi.bug.BisectCause == BisectYes
 	})
+}
+
+func getBugSummaries(c context.Context, ns, stage string) ([]*syzbotstats.BugStatSummary, error) {
+	inputs, err := allBugInputs(c, ns)
+	if err != nil {
+		return nil, err
+	}
+	var ret []*syzbotstats.BugStatSummary
+	for _, input := range inputs {
+		bug, crash := input.bug, input.reportedCrash
+		if crash == nil {
+			continue
+		}
+		targetStage := bugReportingByName(bug, stage)
+		if targetStage == nil || targetStage.Closed.IsZero() {
+			continue
+		}
+		obj := &syzbotstats.BugStatSummary{
+			Title:        bug.Title,
+			ReleasedTime: targetStage.Closed,
+			ResolvedTime: bug.Closed,
+			Strace:       dashapi.CrashFlags(crash.Flags)&dashapi.CrashUnderStrace > 0,
+			Assets:       len(input.build.Assets) > 0,
+		}
+		for _, stage := range bug.Reporting {
+			if stage.ID != "" {
+				obj.IDs = append(obj.IDs, stage.ID)
+			}
+		}
+		if crash.ReproSyz > 0 {
+			obj.ReproTime = crash.Time
+		}
+		if bug.BisectCause == BisectYes {
+			causeBisect, err := queryBestBisection(c, bug, JobBisectCause)
+			if err != nil {
+				return nil, err
+			}
+			obj.CauseBisectTime = causeBisect.job.Finished
+		}
+		if fixTime := input.fixedAt(); !fixTime.IsZero() && fixTime.Before(obj.ResolvedTime) {
+			obj.ResolvedTime = fixTime
+		}
+		if bug.Closed.IsZero() {
+			obj.Status = syzbotstats.BugPending
+		} else if bug.Status == BugStatusFixed || len(bug.Commits) > 0 {
+			obj.Status = syzbotstats.BugFixed
+		} else if bug.Status == BugStatusDup {
+			obj.Status = syzbotstats.BugDup
+		} else if bug.Status == BugStatusInvalid {
+			if input.bugReporting.Auto {
+				obj.Status = syzbotstats.BugAutoInvalidated
+			} else {
+				obj.Status = syzbotstats.BugInvalidated
+			}
+		} else {
+			return nil, fmt.Errorf("invalid status for %q", bug.Title)
+		}
+
+		if bug.NumCrashes > 1 {
+			timeSpan := bug.LastTime.Sub(bug.FirstTime)
+			obj.HitsPerDay = float64(bug.NumCrashes) / timeSpan.Hours() / 24
+		}
+
+		for _, label := range bug.LabelValues(SubsystemLabel) {
+			obj.Subsystems = append(obj.Subsystems, label.Value)
+		}
+
+		ret = append(ret, obj)
+	}
+	return ret, nil
 }

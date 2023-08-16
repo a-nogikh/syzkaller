@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -64,6 +65,7 @@ func initHTTPHandlers() {
 		http.Handle("/"+ns+"/graph/crashes", handlerWrapper(handleGraphCrashes))
 		http.Handle("/"+ns+"/repos", handlerWrapper(handleRepos))
 		http.Handle("/"+ns+"/bug-stats", handlerWrapper(handleBugStats))
+		http.Handle("/"+ns+"/bug-summary", handlerWrapper(handleBugSummary))
 		http.Handle("/"+ns+"/subsystems", handlerWrapper(handleSubsystemsList))
 		http.Handle("/"+ns+"/backports", handlerWrapper(handleBackports))
 		http.Handle("/"+ns+"/s/", handlerWrapper(handleSubsystemPage))
@@ -1246,6 +1248,26 @@ func getBugDiscussionsUI(c context.Context, bug *Bug) ([]*uiBugDiscussion, error
 		return list[i].Last.After(list[j].Last)
 	})
 	return list, nil
+}
+
+func handleBugSummary(c context.Context, w http.ResponseWriter, r *http.Request) error {
+	if accessLevel(c, r) != AccessAdmin {
+		return fmt.Errorf("admin only")
+	}
+	hdr, err := commonHeader(c, r, w, "")
+	if err != nil {
+		return err
+	}
+	stage := r.FormValue("stage")
+	if stage == "" {
+		return fmt.Errorf("stage must be specified")
+	}
+	list, err := getBugSummaries(c, hdr.Namespace, stage)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	return json.NewEncoder(w).Encode(list)
 }
 
 func handleBugStats(c context.Context, w http.ResponseWriter, r *http.Request) error {
