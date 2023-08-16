@@ -5,11 +5,13 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/stats/syzbotstats"
 	"golang.org/x/net/context"
+	appengine "google.golang.org/appengine/v2"
 	db "google.golang.org/appengine/v2/datastore"
 )
 
@@ -155,9 +157,13 @@ func allBugInputs(c context.Context, ns string) ([]*bugInput, error) {
 	buildToInput := map[*db.Key]*bugInput{}
 	if len(crashKeys) > 0 {
 		crashes := make([]*Crash, len(crashKeys))
-		if err := getAllMulti(c, crashKeys, func(i, j int) interface{} {
+		if pos, err := getAllMulti(c, crashKeys, func(i, j int) interface{} {
 			return crashes[i:j]
 		}); err != nil {
+			if pos >= 0 {
+				bug := crashToInput[crashKeys[pos]].bug
+				return nil, fmt.Errorf("could not extract a crash for %q", bug.displayTitle())
+			}
 			return nil, fmt.Errorf("failed to fetch crashes: %w", err)
 		}
 		for i, crash := range crashes {
@@ -175,7 +181,7 @@ func allBugInputs(c context.Context, ns string) ([]*bugInput, error) {
 	// Fetch builds.
 	if len(buildKeys) > 0 {
 		builds := make([]*Build, len(buildKeys))
-		if err := getAllMulti(c, buildKeys, func(i, j int) interface{} {
+		if _, err := getAllMulti(c, buildKeys, func(i, j int) interface{} {
 			return builds[i:j]
 		}); err != nil {
 			return nil, fmt.Errorf("failed to fetch builds: %w", err)
@@ -189,7 +195,7 @@ func allBugInputs(c context.Context, ns string) ([]*bugInput, error) {
 	return inputs, nil
 }
 
-func getAllMulti(c context.Context, key []*db.Key, getDst func(from, to int) interface{}) error {
+func getAllMulti(c context.Context, key []*db.Key, getDst func(from, to int) interface{}) (int, error) {
 	// Circumventing the datastore multi query limitation.
 	const step = 1000
 	for from := 0; from < len(key); from += step {
@@ -197,11 +203,21 @@ func getAllMulti(c context.Context, key []*db.Key, getDst func(from, to int) int
 		if to > len(key) {
 			to = len(key)
 		}
-		if err := db.GetMulti(c, key[from:to], getDst(from, to)); err != nil {
-			return err
+		err := db.GetMulti(c, key[from:to], getDst(from, to))
+		if err == nil {
+			continue
 		}
+		errors, ok := err.(appengine.MultiError)
+		if ok {
+			for pos, err := range errors {
+				if err != nil {
+					return from + pos, err
+				}
+			}
+		}
+		return -1, err
 	}
-	return nil
+	return 0, nil
 }
 
 type statsCounter struct {
@@ -314,6 +330,7 @@ func getBugSummaries(c context.Context, ns, stage string) ([]*syzbotstats.BugSta
 		}
 		obj := &syzbotstats.BugStatSummary{
 			Title:        bug.Title,
+			AltTitles:    bug.AltTitles,
 			ReleasedTime: targetStage.Closed,
 			ResolvedTime: bug.Closed,
 			Strace:       dashapi.CrashFlags(crash.Flags)&dashapi.CrashUnderStrace > 0,
@@ -332,15 +349,17 @@ func getBugSummaries(c context.Context, ns, stage string) ([]*syzbotstats.BugSta
 			if err != nil {
 				return nil, err
 			}
-			obj.CauseBisectTime = causeBisect.job.Finished
+			if causeBisect != nil {
+				obj.CauseBisectTime = causeBisect.job.Finished
+			}
 		}
-		if fixTime := input.fixedAt(); !fixTime.IsZero() && fixTime.Before(obj.ResolvedTime) {
+		if fixTime := input.fixedAt(); !fixTime.IsZero() && (obj.ResolvedTime.IsZero() || fixTime.Before(obj.ResolvedTime)) {
 			obj.ResolvedTime = fixTime
 		}
-		if bug.Closed.IsZero() {
-			obj.Status = syzbotstats.BugPending
-		} else if bug.Status == BugStatusFixed || len(bug.Commits) > 0 {
+		if bug.Status == BugStatusFixed || bug.Closed.IsZero() && len(bug.Commits) > 0 {
 			obj.Status = syzbotstats.BugFixed
+		} else if bug.Closed.IsZero() {
+			obj.Status = syzbotstats.BugPending
 		} else if bug.Status == BugStatusDup {
 			obj.Status = syzbotstats.BugDup
 		} else if bug.Status == BugStatusInvalid {
@@ -353,13 +372,22 @@ func getBugSummaries(c context.Context, ns, stage string) ([]*syzbotstats.BugSta
 			return nil, fmt.Errorf("invalid status for %q", bug.Title)
 		}
 
-		if bug.NumCrashes > 1 {
-			timeSpan := bug.LastTime.Sub(bug.FirstTime)
-			obj.HitsPerDay = float64(bug.NumCrashes) / timeSpan.Hours() / 24
+		timeSpan := bug.LastTime.Sub(bug.FirstTime)
+		if bug.NumCrashes >= 4 && timeSpan >= time.Hour*24 {
+			// We need several crashes to more or less reliably assess the crash rate.
+			obj.HitsPerDay = float64(bug.NumCrashes) / (timeSpan.Hours() / 24)
 		}
 
 		for _, label := range bug.LabelValues(SubsystemLabel) {
 			obj.Subsystems = append(obj.Subsystems, label.Value)
+		}
+
+		obj.OnlyNext = true
+		for _, mgr := range bug.HappenedOn {
+			if !strings.Contains(mgr, "next") &&
+				mgr != "ci-upstream-net-kasan-gce" {
+				obj.OnlyNext = false
+			}
 		}
 
 		ret = append(ret, obj)
