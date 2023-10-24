@@ -12,6 +12,7 @@ type BugStatSummary struct {
 	Title           string
 	AltTitles       []string
 	IDs             []string  // IDs used by syzbot for this bug.
+	FirstTime       time.Time // When the bug was first hit.
 	ReleasedTime    time.Time // When the bug was published.
 	ReproTime       time.Time // When we found the reproducer.
 	CauseBisectTime time.Time // When we found cause bisection.
@@ -26,6 +27,7 @@ type BugStatSummary struct {
 	Type              string
 	SubsystemReported bool
 	ReminderTimes     []time.Time
+	FixHashes         []string // Hashes of fix commits.
 }
 
 type BugStatus string

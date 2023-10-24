@@ -157,13 +157,14 @@ func getBugSummaries(c context.Context, ns, stage string) ([]*syzbotstats.BugSta
 			continue
 		}
 		targetStage := bugReportingByName(bug, stage)
-		if targetStage == nil || targetStage.Closed.IsZero() {
+		if targetStage == nil || targetStage.Reported.IsZero() {
 			continue
 		}
 		obj := &syzbotstats.BugStatSummary{
 			Title:        bug.Title,
 			AltTitles:    bug.AltTitles,
-			ReleasedTime: targetStage.Closed,
+			FirstTime:    bug.FirstTime,
+			ReleasedTime: targetStage.Reported,
 			ResolvedTime: bug.Closed,
 			Strace:       dashapi.CrashFlags(crash.Flags)&dashapi.CrashUnderStrace > 0,
 		}
@@ -171,6 +172,9 @@ func getBugSummaries(c context.Context, ns, stage string) ([]*syzbotstats.BugSta
 			if stage.ID != "" {
 				obj.IDs = append(obj.IDs, stage.ID)
 			}
+		}
+		for _, commit := range bug.CommitInfo {
+			obj.FixHashes = append(obj.FixHashes, commit.Hash)
 		}
 		if crash.ReproSyz > 0 {
 			obj.ReproTime = crash.Time
