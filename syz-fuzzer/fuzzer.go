@@ -10,7 +10,6 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,9 +55,8 @@ type Fuzzer struct {
 	corpusMu     sync.RWMutex
 	corpus       []*prog.Prog
 	corpusHashes map[hash.Sig]struct{}
-	corpusPrios  []int64
-	sumPrios     int64
-
+	hashProgs    sync.Map // uint32 -> []*prog.Prog map.
+	hashList     []uint32 // protected by corpusMu.
 	signalMu     sync.RWMutex
 	corpusSignal signal.Signal // signal of inputs in corpus
 	maxSignal    signal.Signal // max signal ever observed including flakes
@@ -68,13 +66,11 @@ type Fuzzer struct {
 	logMu       sync.Mutex
 }
 
-type FuzzerSnapshot struct {
-	corpus      []*prog.Prog
-	corpusPrios []int64
-	sumPrios    int64
-}
-
 type Stat int
+
+type FuzzerSnapshot struct {
+	corpus []*prog.Prog
+}
 
 const (
 	StatGenerate Stat = iota
@@ -514,40 +510,85 @@ func (fuzzer *Fuzzer) checkDisabledCalls(p *prog.Prog) {
 	}
 }
 
-func (fuzzer *FuzzerSnapshot) chooseProgram(r *rand.Rand) *prog.Prog {
-	randVal := r.Int63n(fuzzer.sumPrios + 1)
-	idx := sort.Search(len(fuzzer.corpusPrios), func(i int) bool {
-		return fuzzer.corpusPrios[i] >= randVal
-	})
-	return fuzzer.corpus[idx]
+func (fuzzer *Fuzzer) snapshot() FuzzerSnapshot {
+	fuzzer.corpusMu.RLock()
+	defer fuzzer.corpusMu.RUnlock()
+	return FuzzerSnapshot{fuzzer.corpus}
+}
+
+func (fuzzer *Fuzzer) updateCorpusMap(hashes signal.Signal, p *prog.Prog) {
+	baseSlice := ([]*prog.Prog{p})
+	for hashRaw := range hashes.Serialize().Elems {
+		hash := uint32(hashRaw)
+		for {
+			old, loaded := fuzzer.hashProgs.LoadOrStore(hash, &baseSlice)
+			if !loaded {
+				fuzzer.corpusMu.Lock()
+				fuzzer.hashList = append(fuzzer.hashList, hash)
+				fuzzer.corpusMu.Unlock()
+				break
+			}
+			oldVal := *old.(*[]*prog.Prog)
+			if len(oldVal) > 10 {
+				// No sense to store more.
+				break
+			}
+			newVal := append(oldVal, p)
+			ok := fuzzer.hashProgs.CompareAndSwap(hash, old, &newVal)
+			if ok {
+				break
+			}
+		}
+	}
+}
+
+func (fuzzer *Fuzzer) chooseProgram(r *rand.Rand) *prog.Prog {
+	fuzzer.corpusMu.RLock()
+	hashes := fuzzer.hashList
+	fuzzer.corpusMu.RUnlock()
+	if len(hashes) == 0 {
+		return nil
+	}
+	// Ideally we should distribute weights inversely proportional to
+	// the number of progs that cover a specific hash.
+	// But it's much easier to approximate it by randomly selecting
+	// several hashes and picking the least covered one.
+
+	const attempts = 10
+	var smallestProgs []*prog.Prog
+
+	for i := 0; i < attempts; i++ {
+		hash := hashes[r.Intn(len(hashes))]
+		progsValue, ok := fuzzer.hashProgs.Load(hash)
+		if !ok {
+			// This may happen during updateCorpusMap().
+			continue
+		}
+		progs := *progsValue.(*[]*prog.Prog)
+		if len(smallestProgs) == 0 || len(smallestProgs) > len(progs) {
+			smallestProgs = progs
+		}
+	}
+	return smallestProgs[r.Intn(len(smallestProgs))]
 }
 
 func (fuzzer *Fuzzer) addInputToCorpus(p *prog.Prog, sign signal.Signal, sig hash.Sig) {
 	fuzzer.corpusMu.Lock()
-	if _, ok := fuzzer.corpusHashes[sig]; !ok {
+	var ok bool
+	if _, ok = fuzzer.corpusHashes[sig]; !ok {
 		fuzzer.corpus = append(fuzzer.corpus, p)
 		fuzzer.corpusHashes[sig] = struct{}{}
-		prio := int64(len(sign))
-		if sign.Empty() {
-			prio = 1
-		}
-		fuzzer.sumPrios += prio
-		fuzzer.corpusPrios = append(fuzzer.corpusPrios, fuzzer.sumPrios)
 	}
 	fuzzer.corpusMu.Unlock()
-
+	if !ok {
+		fuzzer.updateCorpusMap(sign, p)
+	}
 	if !sign.Empty() {
 		fuzzer.signalMu.Lock()
 		fuzzer.corpusSignal.Merge(sign)
 		fuzzer.maxSignal.Merge(sign)
 		fuzzer.signalMu.Unlock()
 	}
-}
-
-func (fuzzer *Fuzzer) snapshot() FuzzerSnapshot {
-	fuzzer.corpusMu.RLock()
-	defer fuzzer.corpusMu.RUnlock()
-	return FuzzerSnapshot{fuzzer.corpus, fuzzer.corpusPrios, fuzzer.sumPrios}
 }
 
 func (fuzzer *Fuzzer) addMaxSignal(sign signal.Signal) {
