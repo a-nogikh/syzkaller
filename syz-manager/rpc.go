@@ -326,10 +326,10 @@ func (serv *RPCServer) NewInput(a *rpctype.NewInputArgs, r *int) error {
 }
 
 func (serv *RPCServer) Poll(a *rpctype.PollArgs, r *rpctype.PollRes) error {
-	serv.stats.mergeNamed(a.Stats)
-
 	serv.mu.Lock()
 	defer serv.mu.Unlock()
+
+	serv.stats.mergeNamed(a.Stats)
 
 	f := serv.fuzzers[a.Name]
 	if f == nil {
