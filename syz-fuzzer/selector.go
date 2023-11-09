@@ -5,6 +5,7 @@ package main
 
 import (
 	"math/rand"
+	"sort"
 	"sync"
 
 	"github.com/google/syzkaller/pkg/signal"
@@ -12,10 +13,15 @@ import (
 )
 
 type progSelector struct {
-	perHashProgs map[uint32][]*prog.Prog
+	perHashProgs map[uint32][]selectorRecord
 	allHashes    []uint32
 	noHashes     []*prog.Prog
 	mu           sync.RWMutex
+}
+
+type selectorRecord struct {
+	p      *prog.Prog
+	hashes int
 }
 
 func (ps *progSelector) addInput(p *prog.Prog, hashes signal.Signal) {
@@ -29,8 +35,9 @@ func (ps *progSelector) addInput(p *prog.Prog, hashes signal.Signal) {
 	}
 	if ps.perHashProgs == nil {
 		// Let's do lazy init to simplify object construction.
-		ps.perHashProgs = map[uint32][]*prog.Prog{}
+		ps.perHashProgs = map[uint32][]selectorRecord{}
 	}
+	save := selectorRecord{p: p, hashes: hashes.Len()}
 	// Update each hash from the signal.
 	for hashRaw := range hashes.Serialize().Elems {
 		hash := uint32(hashRaw)
@@ -39,15 +46,20 @@ func (ps *progSelector) addInput(p *prog.Prog, hashes signal.Signal) {
 			ps.allHashes = append(ps.allHashes, hash)
 			// Let's reduce load on the allocator/garbage collector.
 			const startCapacity = 4
-			ps.perHashProgs[hash] = make([]*prog.Prog, 0, startCapacity)
+			ps.perHashProgs[hash] = make([]selectorRecord, 0, startCapacity)
 		}
-		// If a hash is covered by many progs already, it does not matter
-		// anymore by how many exactly.
 		const perHashLimit = 32
-		if len(old) >= perHashLimit {
-			continue
+		if len(old) < perHashLimit {
+			ps.perHashProgs[hash] = append(old, save)
+		} else {
+			// Keep the biggest.
+			sort.Slice(old, func(i, j int) bool {
+				return old[i].hashes > old[j].hashes
+			})
+			if save.hashes > old[len(old)-1].hashes {
+				old[len(old)-1] = save
+			}
 		}
-		ps.perHashProgs[hash] = append(old, p)
 	}
 }
 
@@ -72,7 +84,7 @@ func (ps *progSelector) chooseProgram(r *rand.Rand) *prog.Prog {
 	// randomize the number of selections to give all counts a chance.
 	attempts := 1 + r.Intn(4)
 
-	var smallestProgs []*prog.Prog
+	var smallestProgs []selectorRecord
 	for i := 0; i < attempts; i++ {
 		hash := ps.allHashes[r.Intn(total)]
 		progs := ps.perHashProgs[hash]
@@ -84,5 +96,14 @@ func (ps *progSelector) chooseProgram(r *rand.Rand) *prog.Prog {
 		// This should never happen.
 		panic("smallestProgs is empty")
 	}
-	return smallestProgs[r.Intn(len(smallestProgs))]
+
+	attempts = 1 + r.Intn(4)
+	var biggest *selectorRecord
+	for i := 0; i < attempts; i++ {
+		tmp := smallestProgs[r.Intn(len(smallestProgs))]
+		if biggest == nil || biggest.hashes < tmp.hashes {
+			biggest = &tmp
+		}
+	}
+	return biggest.p
 }
