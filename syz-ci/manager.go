@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -651,15 +652,29 @@ func (mgr *Manager) pollCommits(buildCommit string) ([]string, []dashapi.Commit,
 	if err != nil || len(resp.PendingCommits) == 0 && resp.ReportEmail == "" {
 		return nil, nil, err
 	}
+
+	// We don't want to spend too much time querying commits from the history,
+	// so let's pick a random subset of them each time.
+	const sampleCommits = 25
+
+	if len(resp.PendingCommits) > sampleCommits {
+		rand.New(rand.NewSource(time.Now().UnixNano())).Shuffle(
+			len(resp.PendingCommits), func(i, j int) {
+				resp.PendingCommits[i], resp.PendingCommits[j] =
+					resp.PendingCommits[j], resp.PendingCommits[i]
+			})
+		resp.PendingCommits = resp.PendingCommits[:sampleCommits]
+	}
+
 	var present []string
 	if len(resp.PendingCommits) != 0 {
-		commits, err := mgr.repo.ListRecentCommits(buildCommit)
+		commits, _, err := mgr.repo.GetCommitsByTitles(resp.PendingCommits)
 		if err != nil {
 			return nil, nil, err
 		}
 		m := make(map[string]bool, len(commits))
 		for _, com := range commits {
-			m[vcs.CanonicalizeCommit(com)] = true
+			m[vcs.CanonicalizeCommit(com.Title)] = true
 		}
 		for _, com := range resp.PendingCommits {
 			if m[vcs.CanonicalizeCommit(com)] {
