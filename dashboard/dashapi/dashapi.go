@@ -40,9 +40,42 @@ func New(client, addr, key string) (*Dashboard, error) {
 	return NewCustom(client, addr, key, http.NewRequest, http.DefaultClient.Do, nil, nil)
 }
 
-func NewMock(mocker RequestMocker) *Dashboard {
+// MockControl can be used to dynamically mock dashboard methods.
+// Go does not let us define per-method template parameters,
+// so there's a separate SetHandler() method to add new mocks.
+type DashboardMock struct {
+	perCall map[string]func(in, out interface{}) error
+}
+
+func (mc *DashboardMock) Dashboard() *Dashboard {
 	return &Dashboard{
-		mocker: mocker,
+		mocker: func(method string, req, reply interface{}) error {
+			f, ok := mc.perCall[method]
+			if !ok {
+				panic("non mocked dashapi call: " + method)
+			}
+			return f(req, reply)
+		},
+	}
+}
+
+func NewMock() *DashboardMock {
+	return &DashboardMock{
+		perCall: make(map[string]func(in, out interface{}) error),
+	}
+}
+
+func SetHandler[Req, Resp any](m *DashboardMock, name string, f func(Req) (Resp, error)) {
+	m.perCall[name] = func(req, reply interface{}) error {
+		var convertedReq Req
+		if req != nil {
+			convertedReq = req.(Req)
+		}
+		tmp, err := f(convertedReq)
+		if reply != nil {
+			reflect.ValueOf(reply).Elem().Set(reflect.ValueOf(tmp).Elem())
+		}
+		return err
 	}
 }
 

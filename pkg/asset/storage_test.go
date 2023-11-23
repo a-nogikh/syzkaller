@@ -23,39 +23,42 @@ import (
 type addBuildAssetCallback func(obj dashapi.NewAsset) error
 
 type dashMock struct {
+	mock          *dashapi.DashboardMock
 	downloadURLs  map[string]bool
 	addBuildAsset addBuildAssetCallback
 }
 
 func newDashMock() *dashMock {
-	return &dashMock{downloadURLs: map[string]bool{}}
+	dm := &dashMock{
+		downloadURLs: map[string]bool{},
+		mock:         dashapi.NewMock(),
+	}
+	dashapi.SetHandler(dm.mock, "add_build_assets", dm.addBuildAssets)
+	dashapi.SetHandler(dm.mock, "needed_assets", dm.needAssets)
+	return dm
 }
 
-func (dm *dashMock) do(method string, req, mockReply interface{}) error {
-	switch method {
-	case "add_build_assets":
-		addBuildAssets := req.(*dashapi.AddBuildAssetsReq)
-		for _, obj := range addBuildAssets.Assets {
-			if dm.addBuildAsset != nil {
-				if err := dm.addBuildAsset(obj); err != nil {
-					return err
-				}
+func (dm *dashMock) addBuildAssets(req *dashapi.AddBuildAssetsReq) (any, error) {
+	for _, obj := range req.Assets {
+		if dm.addBuildAsset != nil {
+			if err := dm.addBuildAsset(obj); err != nil {
+				return nil, err
 			}
-			dm.downloadURLs[obj.DownloadURL] = true
 		}
-		return nil
-	case "needed_assets":
-		resp := mockReply.(*dashapi.NeededAssetsResp)
-		for url := range dm.downloadURLs {
-			resp.DownloadURLs = append(resp.DownloadURLs, url)
-		}
-		return nil
+		dm.downloadURLs[obj.DownloadURL] = true
 	}
-	return nil
+	return nil, nil
+}
+func (dm *dashMock) needAssets(req any) (*dashapi.NeededAssetsResp, error) {
+	resp := &dashapi.NeededAssetsResp{}
+	for url := range dm.downloadURLs {
+		resp.DownloadURLs = append(resp.DownloadURLs, url)
+	}
+	return resp, nil
 }
 
 func (dm *dashMock) getDashapi() *dashapi.Dashboard {
-	return dashapi.NewMock(dm.do)
+	return dm.mock.Dashboard()
 }
 
 func makeStorage(t *testing.T, dash *dashapi.Dashboard) (*Storage, *dummyStorageBackend) {
