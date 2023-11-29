@@ -4,14 +4,13 @@
 package ast
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/google/syzkaller/sys/targets"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestParseAll(t *testing.T) {
@@ -47,14 +46,9 @@ func TestParseAll(t *testing.T) {
 				if n1 == nil {
 					t.Fatalf("got nil node")
 				}
-				if !reflect.DeepEqual(n1, n2) {
-					t.Fatalf("formatting changed code:\n%#v\nvs:\n%#v", n1, n2)
-				}
+				assert.Equal(t, n1, n2, "formating changed code")
 			}
-			data3 := Format(desc.Clone())
-			if !bytes.Equal(data, data3) {
-				t.Fatalf("Clone lost data")
-			}
+			assert.Equal(t, data, Format(desc.Clone()))
 			nodes0 := 0
 			desc.Walk(func(n Node) {
 				nodes0++

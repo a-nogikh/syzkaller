@@ -129,3 +129,17 @@ func (n *Field) walk(cb func(Node)) {
 		cb(c)
 	}
 }
+
+func (n *BinaryExpression) walk(cb func(Node)) {
+	cb(n.Left)
+	cb(n.Right)
+}
+
+func (n *Type) ForeachLeafType(cb func(*Type)) {
+	if n.Expression != nil {
+		n.Expression.Left.ForeachLeafType(cb)
+		n.Expression.Right.ForeachLeafType(cb)
+	} else {
+		cb(n)
+	}
+}

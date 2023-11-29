@@ -8,3 +8,10 @@ incdir <some/path>
 
 strflags0 = "foo", strflags1
 strflags1 = "bar"
+
+expressions {
+	f0	int8	(if[value[X] & Y])
+	f1	int8	(if[X & Y == Z])
+	f2	int8	(if[X & Y & Z == value[X] & A])
+	f3	int8	(if[X & (A == B) & Z != C])
+}
