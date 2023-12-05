@@ -78,16 +78,28 @@ func (comp *compiler) extractConsts() map[string]*ConstInfo {
 				comp.addConst(infos, pos, comp.target.SyscallPrefix+n.CallName)
 			}
 			for _, attr := range n.Attrs {
-				if callAttrs[attr.Ident].HasArg {
+				if callAttrs[attr.Ident].Type == intAttr {
 					comp.addConst(infos, attr.Pos, attr.Args[0].Ident)
 				}
 			}
 		case *ast.Struct:
 			for _, attr := range n.Attrs {
-				if structOrUnionAttrs(n)[attr.Ident].HasArg {
+				attrDesc := structOrUnionAttrs(n)[attr.Ident]
+				if attrDesc.Type == intAttr {
 					comp.addConst(infos, attr.Pos, attr.Args[0].Ident)
 				}
 			}
+			foreachFieldAttr(n, func(attr *ast.Type, desc *attrDesc) {
+				if desc.Type != exprAttr {
+					return
+				}
+				attr.Args[0].ForeachLeafType(func(t *ast.Type) {
+					if t.Ident == valueIdent {
+						return
+					}
+					comp.addConst(infos, t.Pos, t.Ident)
+				})
+			})
 		}
 		switch decl.(type) {
 		case *ast.Call, *ast.Struct, *ast.Resource, *ast.TypeDef:
@@ -100,6 +112,18 @@ func (comp *compiler) extractConsts() map[string]*ConstInfo {
 		}
 	}))
 	return convertConstInfo(infos, comp.fileMeta)
+}
+
+func foreachFieldAttr(n *ast.Struct, cb func(*ast.Type, *attrDesc)) {
+	for _, field := range n.Fields {
+		for _, attr := range field.Attrs {
+			attrDesc := structOrUnionFieldAttrs(n)[attr.Ident]
+			if attrDesc == nil {
+				return
+			}
+			cb(attr, attrDesc)
+		}
+	}
 }
 
 func (comp *compiler) extractTypeConsts(infos map[string]*constInfo, n ast.Node) {
@@ -247,16 +271,28 @@ func (comp *compiler) patchConsts(consts0 map[string]uint64) {
 				}
 			case *ast.Call:
 				for _, attr := range n.Attrs {
-					if callAttrs[attr.Ident].HasArg {
+					if callAttrs[attr.Ident].Type == intAttr {
 						comp.patchTypeConst(attr.Args[0], consts, &missing)
 					}
 				}
 			case *ast.Struct:
 				for _, attr := range n.Attrs {
-					if structOrUnionAttrs(n)[attr.Ident].HasArg {
+					attrDesc := structOrUnionAttrs(n)[attr.Ident]
+					if attrDesc.Type == intAttr {
 						comp.patchTypeConst(attr.Args[0], consts, &missing)
 					}
 				}
+				foreachFieldAttr(n, func(attr *ast.Type, desc *attrDesc) {
+					if desc.Type != exprAttr {
+						return
+					}
+					attr.Args[0].ForeachLeafType(func(t *ast.Type) {
+						if t.Ident == valueIdent {
+							return
+						}
+						comp.patchTypeConst(t, consts, &missing)
+					})
+				})
 			}
 			if missing == "" {
 				continue

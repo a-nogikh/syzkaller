@@ -72,6 +72,7 @@ type Field struct {
 	Type
 	HasDirection bool
 	Direction    Dir
+	Condition    ValueExpression
 }
 
 func (f *Field) Dir(def Dir) Dir {
@@ -79,6 +80,39 @@ func (f *Field) Dir(def Dir) Dir {
 		return f.Direction
 	}
 	return def
+}
+
+type ValueExpression interface {
+	fmt.GoStringer
+}
+
+type BinaryOperator int64
+
+const (
+	OperatorCompareEq BinaryOperator = iota
+	OperatorCompareNeq
+	OperatorBinaryAnd
+)
+
+type BinaryOperation struct {
+	Operator BinaryOperator
+	Left     ValueExpression
+	Right    ValueExpression
+}
+
+func (bo BinaryOperation) GoString() string {
+	return fmt.Sprintf("&prog.BinaryOperation{%#v,%#v,%#v}", bo.Operator, bo.Left, bo.Right)
+}
+
+type Value struct {
+	// If Path is empty, Value is to be used.
+	Value uint64
+	// Path to the field.
+	Path []string
+}
+
+func (v *Value) GoString() string {
+	return fmt.Sprintf("&prog.Value{%#v,%#v}", v.Value, v.Path)
 }
 
 type BinaryFormat int

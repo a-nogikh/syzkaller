@@ -969,7 +969,7 @@ func init() {
 			if overlayField >= 0 {
 				typ1.OverlayField = overlayField
 			}
-			attrs := comp.parseAttrs(structAttrs, s, s.Attrs)
+			attrs := comp.parseIntAttrs(structAttrs, s, s.Attrs)
 			if align := attrs[attrAlign]; align != 0 {
 				typ1.TypeAlign = align
 			} else if attrs[attrPacked] != 0 {

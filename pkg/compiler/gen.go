@@ -115,13 +115,16 @@ func (comp *compiler) genSyscall(n *ast.Call, argSizes []uint64) *prog.Syscall {
 		ret = comp.genType(n.Ret, comp.ptrSize)
 	}
 	var attrs prog.SyscallAttrs
-	descAttrs := comp.parseAttrs(callAttrs, n, n.Attrs)
+	descAttrs := comp.parseIntAttrs(callAttrs, n, n.Attrs)
 	for desc, val := range descAttrs {
 		fld := reflect.ValueOf(&attrs).Elem().FieldByName(desc.Name)
-		if desc.HasArg {
+		switch desc.Type {
+		case intAttr:
 			fld.SetUint(val)
-		} else {
+		case flagAttr:
 			fld.SetBool(val != 0)
+		default:
+			panic(fmt.Sprintf("unexpected attrDesc type: %q", desc.Type))
 		}
 	}
 	fields, _ := comp.genFieldArray(n.Args, argSizes)
@@ -236,7 +239,7 @@ func (comp *compiler) layoutArray(t *prog.ArrayType) {
 
 func (comp *compiler) layoutUnion(t *prog.UnionType) {
 	structNode := comp.structs[t.TypeName]
-	attrs := comp.parseAttrs(unionAttrs, structNode, structNode.Attrs)
+	attrs := comp.parseIntAttrs(unionAttrs, structNode, structNode.Attrs)
 	t.TypeSize = 0
 	if attrs[attrVarlen] != 0 {
 		return
@@ -267,7 +270,7 @@ func (comp *compiler) layoutStruct(t *prog.StructType) {
 			varlen = true
 		}
 	}
-	attrs := comp.parseAttrs(structAttrs, structNode, structNode.Attrs)
+	attrs := comp.parseIntAttrs(structAttrs, structNode, structNode.Attrs)
 	t.AlignAttr = attrs[attrAlign]
 	comp.layoutStructFields(t, varlen, attrs[attrPacked] != 0)
 	t.TypeSize = 0
@@ -457,8 +460,8 @@ func genPad(size uint64) prog.Field {
 func (comp *compiler) genFieldArray(fields []*ast.Field, argSizes []uint64) ([]prog.Field, int) {
 	outOverlay := -1
 	for i, f := range fields {
-		attrs := comp.parseAttrs(structFieldAttrs, f, f.Attrs)
-		if attrs[attrOutOverlay] > 0 {
+		intAttrs := comp.parseIntAttrs(structFieldAttrs, f, f.Attrs)
+		if intAttrs[attrOutOverlay] > 0 {
 			outOverlay = i
 		}
 	}
@@ -476,8 +479,7 @@ func (comp *compiler) genFieldArray(fields []*ast.Field, argSizes []uint64) ([]p
 	return res, outOverlay
 }
 
-func (comp *compiler) genFieldDir(f *ast.Field) (prog.Dir, bool) {
-	attrs := comp.parseAttrs(structFieldAttrs, f, f.Attrs)
+func (comp *compiler) genFieldDir(attrs map[*attrDesc]uint64) (prog.Dir, bool) {
 	switch {
 	case attrs[attrIn] != 0:
 		return prog.DirIn, true
@@ -491,16 +493,17 @@ func (comp *compiler) genFieldDir(f *ast.Field) (prog.Dir, bool) {
 }
 
 func (comp *compiler) genField(f *ast.Field, argSize uint64, overlayDir prog.Dir) prog.Field {
+	intAttrs, exprAttrs := comp.parseAttrs(structFieldAttrs, f, f.Attrs)
 	dir, hasDir := overlayDir, true
 	if overlayDir == prog.DirInOut {
-		dir, hasDir = comp.genFieldDir(f)
+		dir, hasDir = comp.genFieldDir(intAttrs)
 	}
-
 	return prog.Field{
 		Name:         f.Name.Name,
 		Type:         comp.genType(f.Type, argSize),
 		HasDirection: hasDir,
 		Direction:    dir,
+		Condition:    exprAttrs[attrIf],
 	}
 }
 
@@ -520,6 +523,65 @@ func (comp *compiler) genType(t *ast.Type, argSize uint64) prog.Type {
 	}
 	base.IsVarlen = desc.Varlen != nil && desc.Varlen(comp, t, args)
 	return desc.Gen(comp, t, args, base)
+}
+
+const valueIdent = "value"
+
+var binaryOperatorMap = map[ast.Operator]prog.BinaryOperator{
+	ast.OperatorCompareEq:  prog.OperatorCompareEq,
+	ast.OperatorCompareNeq: prog.OperatorCompareNeq,
+	ast.OperatorBinaryAnd:  prog.OperatorBinaryAnd,
+}
+
+func (comp *compiler) genValueExpression(t *ast.Type) prog.ValueExpression {
+	if binary := t.Expression; binary != nil {
+		operator, ok := binaryOperatorMap[binary.Operator]
+		if !ok {
+			comp.error(binary.Pos, "unknown binary operator")
+			return nil
+		}
+		return &prog.BinaryOperation{
+			Operator: operator,
+			Left:     comp.genValueExpression(binary.Left),
+			Right:    comp.genValueExpression(binary.Right),
+		}
+	} else {
+		return comp.genValue(t)
+	}
+}
+
+func (comp *compiler) genValue(val *ast.Type) *prog.Value {
+	if val.Ident == valueIdent {
+		if len(val.Args) != 1 {
+			comp.error(val.Pos, "value reference must have only one argument")
+			return nil
+		}
+		arg := val.Args[0]
+		if arg.Args != nil {
+			comp.error(val.Pos, "value aguments must not have any further arguments")
+			return nil
+		}
+		path := []string{arg.Ident}
+		for _, elem := range arg.Colon {
+			if elem.Args != nil {
+				comp.error(arg.Pos, "value path elements must not have any attributes")
+				return nil
+			}
+			path = append(path, elem.Ident)
+		}
+		return &prog.Value{Path: path}
+	}
+	if val.Expression != nil || val.HasString {
+		comp.error(val.Pos, "the token must be either an integer or an identifier")
+		return nil
+	}
+	if len(val.Args) != 0 {
+		comp.error(val.Pos, "consts in expressions must not have any arguments")
+		return nil
+	}
+	return &prog.Value{
+		Value: val.Value,
+	}
 }
 
 func genCommon(name string, size uint64, opt bool) prog.TypeCommon {
