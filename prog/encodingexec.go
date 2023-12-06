@@ -151,7 +151,7 @@ func (w *execContext) writeCallProps(props CallProps) {
 
 func (w *execContext) writeCopyin(c *Call) {
 	ForeachArg(c, func(arg Arg, ctx *ArgCtx) {
-		if ctx.Base == nil {
+		if arg == nil || ctx.Base == nil {
 			return
 		}
 		addr := w.target.PhysicalAddr(ctx.Base) + ctx.Offset

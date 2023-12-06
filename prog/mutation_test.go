@@ -182,6 +182,9 @@ func TestSizeMutateArg(t *testing.T) {
 			}
 			ctx.mutateArg()
 			ForeachArg(p.Calls[0], func(arg Arg, ctx *ArgCtx) {
+				if arg == nil {
+					return
+				}
 				if _, ok := arg.Type().(*IntType); !ok {
 					return
 				}

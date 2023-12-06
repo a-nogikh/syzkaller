@@ -64,6 +64,9 @@ func clone(arg Arg, newargs map[*ResultArg]*ResultArg) Arg {
 		arg1 = a1
 		a1.Inner = make([]Arg, len(a.Inner))
 		for i, arg2 := range a.Inner {
+			if arg2 == nil {
+				continue
+			}
 			a1.Inner[i] = clone(arg2, newargs)
 		}
 	case *UnionArg:

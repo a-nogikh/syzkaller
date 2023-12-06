@@ -581,7 +581,7 @@ func (r *randGen) generateParticularCall(s *state, meta *Syscall) (calls []*Call
 		panic(fmt.Sprintf("generating no_generate call: %v", meta.Name))
 	}
 	c := MakeCall(meta, nil)
-	c.Args, calls = r.generateArgs(s, meta.Args, DirIn)
+	c.Args, calls = r.generateArgs(s, meta.Args, DirIn, 0)
 	r.target.assignSizesCall(c)
 	return append(calls, c)
 }
@@ -649,18 +649,38 @@ func (target *Target) DataMmapProg() *Prog {
 	}
 }
 
-func (r *randGen) generateArgs(s *state, fields []Field, dir Dir) ([]Arg, []*Call) {
+func (r *randGen) generateArgs(s *state, fields []Field, dir Dir, overlayField int) ([]Arg, []*Call) {
 	var calls []*Call
 	args := make([]Arg, len(fields))
 
-	// Generate all args. Size args have the default value 0 for now.
-	for i, field := range fields {
+	generate := func(i int, field Field) {
 		arg, calls1 := r.generateArg(s, field.Type, field.Dir(dir))
 		if arg == nil {
 			panic(fmt.Sprintf("generated arg is nil for field '%v', fields: %+v", field.Type.Name(), fields))
 		}
 		args[i] = arg
 		calls = append(calls, calls1...)
+	}
+
+	// Generate all args. Size args have the default value 0 for now.
+	for i, field := range fields {
+		if field.Condition != nil {
+			// This pass without conditional fields.
+			continue
+		}
+		generate(i, field)
+	}
+
+	// Now look at the conditional fields.
+	for i, field := range fields {
+		if field.Condition == nil {
+			continue
+		}
+		if field.Condition.Evaluate(r.target, args, fields, overlayField) == 0 {
+			// Skip this field.
+			continue
+		}
+		generate(i, field)
 	}
 
 	return args, calls
@@ -853,7 +873,7 @@ func (a *ArrayType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls []*C
 }
 
 func (a *StructType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls []*Call) {
-	args, calls := r.generateArgs(s, a.Fields, dir)
+	args, calls := r.generateArgs(s, a.Fields, dir, a.OverlayField)
 	group := MakeGroupArg(a, dir, args)
 	return group, calls
 }

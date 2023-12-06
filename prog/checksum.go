@@ -31,6 +31,9 @@ func calcChecksumsCall(c *Call) (map[Arg]CsumInfo, map[Arg]struct{}) {
 
 	// Find all csum fields.
 	ForeachArg(c, func(arg Arg, _ *ArgCtx) {
+		if arg == nil {
+			return
+		}
 		if typ, ok := arg.Type().(*CsumType); ok {
 			switch typ.Kind {
 			case CsumInet:
@@ -50,6 +53,9 @@ func calcChecksumsCall(c *Call) (map[Arg]CsumInfo, map[Arg]struct{}) {
 	// Build map of each field to its parent struct.
 	parentsMap := make(map[Arg]Arg)
 	ForeachArg(c, func(arg Arg, _ *ArgCtx) {
+		if arg == nil {
+			return
+		}
 		if _, ok := arg.Type().(*StructType); ok {
 			for _, field := range arg.(*GroupArg).Inner {
 				parentsMap[InnerArg(field)] = arg

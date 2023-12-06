@@ -84,6 +84,7 @@ func (f *Field) Dir(def Dir) Dir {
 
 type ValueExpression interface {
 	fmt.GoStringer
+	Evaluate(target *Target, args []Arg, fields []Field, overlayField int) uint64
 }
 
 type BinaryOperator int64
@@ -100,7 +101,7 @@ type BinaryOperation struct {
 	Right    ValueExpression
 }
 
-func (bo BinaryOperation) GoString() string {
+func (bo *BinaryOperation) GoString() string {
 	return fmt.Sprintf("&prog.BinaryOperation{%#v,%#v,%#v}", bo.Operator, bo.Left, bo.Right)
 }
 

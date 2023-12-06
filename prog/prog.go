@@ -228,6 +228,9 @@ func (arg *GroupArg) Size() uint64 {
 			if i == typ.OverlayField {
 				offset = 0
 			}
+			if fld == nil {
+				continue
+			}
 			offset += fld.Size()
 			// Add dynamic alignment at the end and before the overlay part.
 			if i+1 == len(arg.Inner) || i+1 == typ.OverlayField {
@@ -317,6 +320,9 @@ func (arg *ResultArg) Size() uint64 {
 
 // Returns inner arg for pointer args.
 func InnerArg(arg Arg) Arg {
+	if arg == nil {
+		return nil
+	}
 	if _, ok := arg.Type().(*PtrType); ok {
 		res := arg.(*PointerArg).Res
 		if res == nil {
@@ -328,6 +334,9 @@ func InnerArg(arg Arg) Arg {
 }
 
 func isDefault(arg Arg) bool {
+	if arg == nil {
+		return false
+	}
 	return arg.Type().isDefaultArg(arg)
 }
 
@@ -369,6 +378,10 @@ func replaceArg(arg, arg1 Arg) {
 		}
 		a.ArgCommon = a1.ArgCommon
 		for i := range a.Inner {
+			if a.Inner[i] == nil {
+				a.Inner[i] = a1.Inner[i]
+				continue
+			}
 			replaceArg(a.Inner[i], a1.Inner[i])
 		}
 	default:

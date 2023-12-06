@@ -1,0 +1,19 @@
+# Copyright 2023 syzkaller project authors. All rights reserved.
+# Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
+
+# Syscalls used for testing conditional expressions.
+
+define FIELD_FLAG1	= 2
+define FIELD_FLAG2	= 4
+
+field1 {
+	f1	const[0xff, int32]
+}
+
+conditional_struct {
+	mask	int32
+	f1	field1	(if[value[mask] & FIELD_FLAG1])
+	f2	int64	(if[value[mask] & FIELD_FLAG2])
+} [packed]
+
+test$conditional_struct(a ptr[in, conditional_struct])

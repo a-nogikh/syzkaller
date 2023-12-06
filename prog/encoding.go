@@ -407,14 +407,10 @@ func (p *parser) parseArg(typ Type, dir Dir) (Arg, error) {
 	if err != nil {
 		return nil, err
 	}
-	if arg == nil {
-		if typ != nil {
-			arg = typ.DefaultArg(dir)
-		} else if r != "" {
+	if r != "" {
+		if arg == nil {
 			return nil, fmt.Errorf("named nil argument")
 		}
-	}
-	if r != "" {
 		if res, ok := arg.(*ResultArg); ok {
 			p.vars[r] = res
 		} else {
@@ -503,6 +499,8 @@ func (p *parser) parseAuto(typ Type, dir Dir) (Arg, error) {
 			inner = append(inner, innerArg)
 		}
 		return MakeGroupArg(typ, dir, inner), nil
+	case *BufferType:
+		return typ.DefaultArg(dir), nil
 	default:
 		return nil, fmt.Errorf("wrong type %T for AUTO", typ)
 	}

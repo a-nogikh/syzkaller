@@ -220,10 +220,6 @@ func TestDeserialize(t *testing.T) {
 			StrictErr: "wrong addr arg",
 		},
 		{
-			In:  `test_excessive_args2(nil)`,
-			Out: `test_excessive_args2(0x0)`,
-		},
-		{
 			In:        `test$type_confusion1(&(0x7f0000000000)=@unknown)`,
 			Out:       `test$type_confusion1(&(0x7f0000000000))`,
 			StrictErr: "wrong union option",

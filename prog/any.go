@@ -88,6 +88,9 @@ func (target *Target) isComplexPtr(arg *PointerArg) bool {
 	}
 	complex, unsupported := false, false
 	ForeachSubArg(arg.Res, func(a1 Arg, ctx *ArgCtx) {
+		if a1 == nil {
+			return
+		}
 		switch typ := a1.Type().(type) {
 		case *StructType:
 			if typ.OverlayField != 0 {
@@ -259,6 +262,9 @@ func (target *Target) squashGroup(arg *GroupArg, elems *[]Arg) {
 	}
 	var bitfield, fieldsSize uint64
 	for _, fld := range arg.Inner {
+		if fld == nil {
+			continue
+		}
 		fieldsSize += fld.Size()
 		// Squash bitfields separately.
 		if fld.Type().IsBitfield() {

@@ -39,20 +39,36 @@ func (target *Target) assignSizes(args []Arg, fields []Field, parentsMap map[Arg
 	}
 }
 
-func (target *Target) assignSizeStruct(dst *ConstArg, buf Arg, path []string, parentsMap map[Arg]Arg) {
-	arg := buf.(*GroupArg)
-	typ := arg.Type().(*StructType)
-	target.assignSize(dst, buf, path, arg.Inner, typ.Fields, parentsMap, typ.OverlayField)
-}
-
 func (target *Target) assignSize(dst *ConstArg, pos Arg, path []string, args []Arg,
 	fields []Field, parentsMap map[Arg]Arg, overlayField int) {
+	found := target.findArg(pos, path, args, fields, parentsMap, overlayField)
+	if found != nil {
+		dst.Val = target.computeSize(found.arg, found.offset, dst.Type().(*LenType))
+	}
+}
+
+type foundArg struct {
+	arg    Arg
+	offset uint64
+}
+
+func (target *Target) findFieldStruct(buf Arg, path []string, parentsMap map[Arg]Arg) *foundArg {
+	arg := buf.(*GroupArg)
+	typ := arg.Type().(*StructType)
+	return target.findArg(buf, path, arg.Inner, typ.Fields, parentsMap, typ.OverlayField)
+}
+
+func (target *Target) findArg(pos Arg, path []string, args []Arg, fields []Field,
+	parentsMap map[Arg]Arg, overlayField int) *foundArg {
 	elem := path[0]
 	path = path[1:]
 	var offset uint64
 	for i, buf := range args {
 		if i == overlayField {
 			offset = 0
+		}
+		if buf == nil {
+			continue
 		}
 		if elem != fields[i].Name {
 			offset += buf.Size()
@@ -62,51 +78,51 @@ func (target *Target) assignSize(dst *ConstArg, pos Arg, path []string, args []A
 			// If path points into squashed argument, we don't have the target argument.
 			// In such case we simply leave size argument as is. It can't happen during generation,
 			// only during mutation and mutation can set size to random values, so it should be fine.
-			return
+			return nil
 		}
 		buf = InnerArg(buf)
 		if buf == nil {
-			dst.Val = 0 // target is an optional pointer
-			return
+			return &foundArg{nil, offset}
 		}
 		if len(path) != 0 {
-			target.assignSizeStruct(dst, buf, path, parentsMap)
-			return
+			return target.findFieldStruct(buf, path, parentsMap)
 		}
-		dst.Val = target.computeSize(buf, offset, dst.Type().(*LenType))
-		return
+		return &foundArg{buf, offset}
 	}
 	if elem == ParentRef {
 		buf := parentsMap[pos]
 		if len(path) != 0 {
-			target.assignSizeStruct(dst, buf, path, parentsMap)
-			return
+			return target.findFieldStruct(buf, path, parentsMap)
 		}
-		dst.Val = target.computeSize(buf, noOffset, dst.Type().(*LenType))
-		return
+		return &foundArg{buf, noOffset}
 	}
 	for buf := parentsMap[pos]; buf != nil; buf = parentsMap[buf] {
 		if elem != buf.Type().TemplateName() {
 			continue
 		}
 		if len(path) != 0 {
-			target.assignSizeStruct(dst, buf, path, parentsMap)
-			return
+			return target.findFieldStruct(buf, path, parentsMap)
 		}
-		dst.Val = target.computeSize(buf, noOffset, dst.Type().(*LenType))
-		return
+		return &foundArg{buf, noOffset}
 	}
 	var fieldNames []string
 	for _, field := range fields {
 		fieldNames = append(fieldNames, field.Name)
 	}
-	panic(fmt.Sprintf("len field %q references non existent field %q, pos=%q, argsMap: %v, path: %v",
-		dst.Type().Name(), elem, pos.Type().Name(), fieldNames, path))
+	posName := "nil"
+	if pos != nil {
+		posName = pos.Type().Name()
+	}
+	panic(fmt.Sprintf("path references non existent field %q, pos=%q, argsMap: %v, path: %v",
+		elem, posName, fieldNames, path))
 }
 
 const noOffset = ^uint64(0)
 
 func (target *Target) computeSize(arg Arg, offset uint64, lenType *LenType) uint64 {
+	if arg == nil {
+		return 0
+	}
 	if lenType.Offset {
 		if offset == noOffset {
 			panic("offset of a non-field")
@@ -136,6 +152,9 @@ func (target *Target) assignSizesArray(args []Arg, fields []Field, autos map[Arg
 	parentsMap := make(map[Arg]Arg)
 	for _, arg := range args {
 		ForeachSubArg(arg, func(arg Arg, _ *ArgCtx) {
+			if arg == nil {
+				return
+			}
 			if _, ok := arg.Type().(*StructType); ok {
 				for _, field := range arg.(*GroupArg).Inner {
 					parentsMap[InnerArg(field)] = arg
@@ -146,6 +165,9 @@ func (target *Target) assignSizesArray(args []Arg, fields []Field, autos map[Arg
 	target.assignSizes(args, fields, parentsMap, args, fields, autos, 0)
 	for _, arg := range args {
 		ForeachSubArg(arg, func(arg Arg, _ *ArgCtx) {
+			if arg == nil {
+				return
+			}
 			if typ, ok := arg.Type().(*StructType); ok {
 				target.assignSizes(arg.(*GroupArg).Inner, typ.Fields, parentsMap, args, fields, autos, typ.OverlayField)
 			}

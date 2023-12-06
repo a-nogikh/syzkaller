@@ -53,6 +53,7 @@ func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[
 			ok = ctx.removeCall()
 		}
 	}
+	ctx.patchConditionalFields()
 	p.sanitizeFix()
 	p.debugValidate()
 	if got := len(p.Calls); got < 1 || got > ncalls {
@@ -215,6 +216,69 @@ func (ctx *mutator) mutateArg() bool {
 	return true
 }
 
+func (ctx *mutator) patchConditionalFields() {
+	type change struct {
+		call *Call
+		typ  Type
+		arg  *Arg
+		dir  Dir
+	}
+	var fieldsToDrop, fieldsToGenerate []change
+	for _, c := range ctx.p.Calls {
+		ForeachArg(c, func(arg Arg, argCtx *ArgCtx) {
+			if arg != nil && ctx.p.Target.isAnyPtr(arg.Type()) {
+				argCtx.Stop = true
+				return
+			}
+			if len(argCtx.Fields) == 0 {
+				return
+			}
+			groupArg, ok := argCtx.ParentArg.(*GroupArg)
+			if !ok {
+				return
+			}
+			structType, ok := groupArg.Type().(*StructType)
+			if !ok {
+				return
+			}
+			field := argCtx.Fields[argCtx.InField]
+			if field.Condition == nil {
+				return
+			}
+			mustBe := field.Condition.Evaluate(ctx.p.Target,
+				groupArg.Inner, argCtx.Fields, structType.OverlayField) != 0
+			if mustBe && arg == nil {
+				fieldsToGenerate = append(fieldsToGenerate, change{
+					call: c,
+					typ:  field.Type,
+					arg:  &groupArg.Inner[argCtx.InField],
+					dir:  field.Dir(groupArg.Dir()),
+				})
+				argCtx.Stop = true
+			}
+			if !mustBe && arg != nil {
+				fieldsToDrop = append(fieldsToDrop, change{
+					arg: &groupArg.Inner[argCtx.InField],
+				})
+				argCtx.Stop = true
+			}
+		})
+	}
+	for _, w := range fieldsToDrop {
+		removeArg(*w.arg)
+		*w.arg = nil
+	}
+	for _, w := range fieldsToGenerate {
+		var newCalls []*Call
+		s := analyze(ctx.ct, ctx.corpus, ctx.p, w.call)
+		*w.arg, newCalls = ctx.r.generateArg(s, w.typ, w.dir)
+		if len(newCalls)+len(ctx.p.Calls) > ctx.ncalls {
+			newCalls = newCalls[ctx.ncalls-len(ctx.p.Calls):]
+		}
+		ctx.p.insertBefore(w.call, newCalls)
+	}
+}
+
 // Select a call based on the complexity of the arguments.
 func chooseCall(p *Prog, r *randGen) int {
 	var prioSum float64
@@ -222,6 +286,9 @@ func chooseCall(p *Prog, r *randGen) int {
 	for _, c := range p.Calls {
 		var totalPrio float64
 		ForeachArg(c, func(arg Arg, ctx *ArgCtx) {
+			if arg == nil {
+				return
+			}
 			prio, stopRecursion := arg.Type().getMutationPrio(p.Target, arg, false)
 			totalPrio += prio
 			ctx.Stop = stopRecursion
@@ -533,6 +600,9 @@ const (
 )
 
 func (ma *mutationArgs) collectArg(arg Arg, ctx *ArgCtx) {
+	if arg == nil {
+		return
+	}
 	ignoreSpecial := ma.ignoreSpecial
 	ma.ignoreSpecial = false
 

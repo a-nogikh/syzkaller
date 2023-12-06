@@ -7,7 +7,7 @@ ioctl$IOCTL_GET_NCIDEV_IDX(r0, AUTO, &AUTO=<r1=>0x0)
 
 r2 = syz_init_net_socket$nl_generic(AUTO, AUTO, AUTO)
 r3 = syz_genetlink_get_family_id$nfc(&AUTO, r2)
-sendmsg$NFC_CMD_DEV_UP(r2, &AUTO={0x0, 0x0, &AUTO={&AUTO={AUTO, r3, 0x1, 0x123, 0x234, {AUTO, 0x0, 0x0}, [@NFC_ATTR_DEVICE_INDEX={AUTO, AUTO, r1, nil}]}, AUTO}, 0x1, 0x0, 0x0, 0x0}, 0x0)
+sendmsg$NFC_CMD_DEV_UP(r2, &AUTO={0x0, 0x0, &AUTO={&AUTO={AUTO, r3, 0x1, 0x123, 0x234, {AUTO, 0x0, 0x0}, [@NFC_ATTR_DEVICE_INDEX={AUTO, AUTO, r1, AUTO}]}, AUTO}, 0x1, 0x0, 0x0, 0x0}, 0x0)
 
 # Mock communication with the device.
 # NCI core should send reset, init and discover commands.
@@ -21,7 +21,7 @@ write$nci(r0, &AUTO=@NCI_OP_RF_DISCOVER_MAP_RSP={AUTO, 0x0, AUTO, AUTO, 0x0, 0x0
 
 # Enable polling.
 
-sendmsg$NFC_CMD_START_POLL(r2, &AUTO={0x0, 0x0, &AUTO={&AUTO={AUTO, r3, 0x1, 0x123, 0x234, {AUTO, 0x0, 0x0}, [@NFC_ATTR_DEVICE_INDEX={AUTO, AUTO, r1, nil}, @NFC_ATTR_PROTOCOLS={AUTO, AUTO, 0xffffffff, nil}]}, AUTO}, 0x1, 0x0, 0x0, 0x0}, 0x0)
+sendmsg$NFC_CMD_START_POLL(r2, &AUTO={0x0, 0x0, &AUTO={&AUTO={AUTO, r3, 0x1, 0x123, 0x234, {AUTO, 0x0, 0x0}, [@NFC_ATTR_DEVICE_INDEX={AUTO, AUTO, r1, AUTO}, @NFC_ATTR_PROTOCOLS={AUTO, AUTO, 0xffffffff, AUTO}]}, AUTO}, 0x1, 0x0, 0x0, 0x0}, 0x0)
 
 read$nci(r0, &AUTO=""/100, AUTO)
 write$nci(r0, &AUTO=@NCI_OP_CORE_SET_CONFIG_RSP={AUTO, 0x0, AUTO, AUTO, 0x0, {0x0, 0x0, ""}}, AUTO)

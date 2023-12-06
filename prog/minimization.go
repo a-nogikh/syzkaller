@@ -178,6 +178,9 @@ func (typ *TypeCommon) minimize(ctx *minimizeArgsCtx, arg Arg, path string) bool
 func (typ *StructType) minimize(ctx *minimizeArgsCtx, arg Arg, path string) bool {
 	a := arg.(*GroupArg)
 	for i, innerArg := range a.Inner {
+		if innerArg == nil {
+			continue
+		}
 		if ctx.do(innerArg, typ.Fields[i].Name, path) {
 			return true
 		}

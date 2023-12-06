@@ -60,6 +60,9 @@ func (s *state) analyze(c *Call) {
 
 func (s *state) analyzeImpl(c *Call, resources bool) {
 	ForeachArg(c, func(arg Arg, _ *ArgCtx) {
+		if arg == nil {
+			return
+		}
 		switch a := arg.(type) {
 		case *PointerArg:
 			switch {
@@ -105,11 +108,13 @@ func (s *state) analyzeImpl(c *Call, resources bool) {
 }
 
 type ArgCtx struct {
-	Parent *[]Arg      // GroupArg.Inner (for structs) or Call.Args containing this arg.
-	Fields []Field     // Fields of the parent struct/syscall.
-	Base   *PointerArg // Pointer to the base of the heap object containing this arg.
-	Offset uint64      // Offset of this arg from the base.
-	Stop   bool        // If set by the callback, subargs of this arg are not visited.
+	Parent    *[]Arg      // GroupArg.Inner (for structs) or Call.Args containing this arg.
+	ParentArg Arg         // Set for GroupArg.
+	Fields    []Field     // Fields of the parent struct/syscall.
+	InField   int         // If Fields is non-empty, it's the field we're currently in.
+	Base      *PointerArg // Pointer to the base of the heap object containing this arg.
+	Offset    uint64      // Offset of this arg from the base.
+	Stop      bool        // If set by the callback, subargs of this arg are not visited.
 }
 
 func ForeachSubArg(arg Arg, f func(Arg, *ArgCtx)) {
@@ -123,7 +128,8 @@ func ForeachArg(c *Call, f func(Arg, *ArgCtx)) {
 	}
 	ctx.Parent = &c.Args
 	ctx.Fields = c.Meta.Args
-	for _, arg := range c.Args {
+	for i, arg := range c.Args {
+		ctx.InField = i
 		foreachArgImpl(arg, ctx, f)
 	}
 }
@@ -135,6 +141,7 @@ func foreachArgImpl(arg Arg, ctx *ArgCtx, f func(Arg, *ArgCtx)) {
 	if ctx.Stop {
 		return
 	}
+	ctx.InField = 0
 	switch a := arg.(type) {
 	case *GroupArg:
 		overlayField := 0
@@ -143,12 +150,19 @@ func foreachArgImpl(arg Arg, ctx *ArgCtx, f func(Arg, *ArgCtx)) {
 			ctx.Fields = typ.Fields
 			overlayField = typ.OverlayField
 		}
+		ctx.ParentArg = a
 		var totalSize uint64
 		for i, arg1 := range a.Inner {
 			if i == overlayField {
 				ctx.Offset = ctx0.Offset
 			}
+			if ctx.Fields != nil {
+				ctx.InField = i
+			}
 			foreachArgImpl(arg1, ctx, f)
+			if arg1 == nil {
+				continue
+			}
 			size := arg1.Size()
 			ctx.Offset += size
 			if totalSize < ctx.Offset {
@@ -158,8 +172,8 @@ func foreachArgImpl(arg Arg, ctx *ArgCtx, f func(Arg, *ArgCtx)) {
 		claimedSize := a.Size()
 		varlen := a.Type().Varlen()
 		if varlen && totalSize > claimedSize || !varlen && totalSize != claimedSize {
-			panic(fmt.Sprintf("bad group arg size %v, should be <= %v for %#v type %#v",
-				totalSize, claimedSize, a, a.Type().Name()))
+			panic(fmt.Sprintf("bad group arg size %v, should be <= %v for %#v type %#v; fields %#v",
+				totalSize, claimedSize, a, a.Type().Name(), a.Inner))
 		}
 	case *PointerArg:
 		if a.Res != nil {
