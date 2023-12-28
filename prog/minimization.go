@@ -14,9 +14,14 @@ import (
 // whether it is equal to the original program or not. If it is equivalent then
 // the simplification attempt is committed and the process continues.
 func Minimize(p0 *Prog, callIndex0 int, crash bool, pred0 func(*Prog, int) bool) (*Prog, int) {
+	var mutatedCall *Call
 	pred := func(p *Prog, callIndex int) bool {
 		p.sanitizeFix()
 		p.debugValidate()
+		if mutatedCall != nil {
+			// Optimize computations and only patch modified calls.
+			mutatedCall.setDefaultConditions(p.Target)
+		}
 		return pred0(p, callIndex)
 	}
 	name0 := ""
@@ -49,6 +54,7 @@ func Minimize(p0 *Prog, callIndex0 int, crash bool, pred0 func(*Prog, int) bool)
 	again:
 		ctx.p = p0.Clone()
 		ctx.call = ctx.p.Calls[i]
+		mutatedCall = ctx.p.Calls[i]
 		for j, field := range ctx.call.Meta.Args {
 			if ctx.do(ctx.call.Args[j], field.Name, "") {
 				goto again
