@@ -1131,7 +1131,7 @@ func (p *parser) auto(arg Arg) Arg {
 func (p *parser) fixupAutos(prog *Prog) {
 	s := analyze(nil, nil, prog, nil)
 	for _, c := range prog.Calls {
-		p.target.assignSizesArray(c.Args, c.Meta.Args, p.autos)
+		p.target.assignSizesArray(c.Args, c.Meta.Args, p.autos, callParentsCache(c))
 		ForeachArg(c, func(arg Arg, _ *ArgCtx) {
 			if !p.autos[arg] {
 				return

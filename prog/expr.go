@@ -54,10 +54,10 @@ func (v *Value) Evaluate(finder ArgFinder) (uint64, bool) {
 }
 
 func argFinderConstructor(t *Target, c *Call) func(*UnionArg) ArgFinder {
-	parentsMap := callParentsMap(c)
+	parents := callParentsCache(c)
 	return func(unionArg *UnionArg) ArgFinder {
 		return func(path []string) Arg {
-			f := t.findArg(unionArg.Option, path, nil, nil, parentsMap, 0)
+			f := t.findArg(unionArg.Option, path, nil, nil, parents, 0)
 			if f == nil {
 				return nil
 			}
@@ -67,14 +67,6 @@ func argFinderConstructor(t *Target, c *Call) func(*UnionArg) ArgFinder {
 			return f.arg
 		}
 	}
-}
-
-func callParentsMap(c *Call) map[Arg]Arg {
-	parentsMap := map[Arg]Arg{}
-	ForeachArg(c, func(arg Arg, _ *ArgCtx) {
-		saveToParentsMap(arg, parentsMap)
-	})
-	return parentsMap
 }
 
 func (r *randGen) patchConditionalFields(c *Call, s *state) (extra []*Call, changed bool) {
