@@ -14,15 +14,15 @@ const (
 	SyscallRef = "syscall"
 )
 
-func (target *Target) assignSizes(args []Arg, fields []Field, parentsMap map[Arg]Arg,
+func (target *Target) assignSizes(args []Arg, fields []Field, parents parentMapper,
 	syscallArgs []Arg, syscallFields []Field, autos map[Arg]bool, overlayField int) {
 	for _, arg := range args {
-		target.assignArgSize(arg, args, fields, parentsMap, syscallArgs,
+		target.assignArgSize(arg, args, fields, parents, syscallArgs,
 			syscallFields, autos, overlayField)
 	}
 }
 
-func (target *Target) assignArgSize(arg Arg, args []Arg, fields []Field, parentsMap map[Arg]Arg,
+func (target *Target) assignArgSize(arg Arg, args []Arg, fields []Field, parents parentMapper,
 	syscallArgs []Arg, syscallFields []Field, autos map[Arg]bool, overlayField int) {
 	if arg = InnerArg(arg); arg == nil {
 		return // Pointer to optional len field, no need to fill in value.
@@ -39,15 +39,55 @@ func (target *Target) assignArgSize(arg Arg, args []Arg, fields []Field, parents
 	}
 	a := arg.(*ConstArg)
 	if typ.Path[0] == SyscallRef {
-		target.assignSize(a, nil, typ.Path[1:], syscallArgs, syscallFields, parentsMap, 0)
+		target.assignSize(a, nil, typ.Path[1:], syscallArgs, syscallFields, parents, 0)
 	} else {
-		target.assignSize(a, a, typ.Path, args, fields, parentsMap, overlayField)
+		target.assignSize(a, a, typ.Path, args, fields, parents, overlayField)
+	}
+}
+
+type parentMapper func(Arg) Arg
+
+func argsParentsCache(args []Arg) parentMapper {
+	// We assume that the object does not change during this closure's life.
+	var cache map[Arg]Arg
+	return func(a Arg) Arg {
+		if cache == nil {
+			cache = map[Arg]Arg{}
+			for _, arg := range args {
+				ForeachSubArg(arg, func(arg Arg, _ *ArgCtx) {
+					saveToParentsMap(arg, cache)
+				})
+			}
+		}
+		return cache[a]
+	}
+}
+
+func callParentsCache(c *Call) parentMapper {
+	// We assume that the object does not change during this closure's life.
+	generated := false
+	return func(a Arg) Arg {
+		if ret, ok := c.parentsCache[a]; ok {
+			return ret
+		}
+		if generated {
+			return nil
+		}
+		if c.parentsCache == nil {
+			c.parentsCache = map[Arg]Arg{}
+		}
+		for _, arg := range c.Args {
+			ForeachSubArg(arg, func(arg Arg, _ *ArgCtx) {
+				saveToParentsMap(arg, c.parentsCache)
+			})
+		}
+		return c.parentsCache[a]
 	}
 }
 
 func (target *Target) assignSize(dst *ConstArg, pos Arg, path []string, args []Arg,
-	fields []Field, parentsMap map[Arg]Arg, overlayField int) {
-	found := target.findArg(pos, path, args, fields, parentsMap, overlayField)
+	fields []Field, parents parentMapper, overlayField int) {
+	found := target.findArg(pos, path, args, fields, parents, overlayField)
 	if found != nil && !found.isAnyPtr {
 		dst.Val = target.computeSize(found.arg, found.offset, dst.Type().(*LenType))
 	}
@@ -59,20 +99,20 @@ type foundArg struct {
 	isAnyPtr bool
 }
 
-func (target *Target) findFieldStruct(buf Arg, path []string, parentsMap map[Arg]Arg) *foundArg {
+func (target *Target) findFieldStruct(buf Arg, path []string, parents parentMapper) *foundArg {
 	switch arg := buf.(type) {
 	case *GroupArg:
 		typ := arg.Type().(*StructType)
-		return target.findArg(buf, path, arg.Inner, typ.Fields, parentsMap, typ.OverlayField)
+		return target.findArg(buf, path, arg.Inner, typ.Fields, parents, typ.OverlayField)
 	case *UnionArg:
-		return target.findArg(buf, path, nil, nil, parentsMap, 0)
+		return target.findArg(buf, path, nil, nil, parents, 0)
 	default:
 		panic(fmt.Sprintf("unexpected arg type %#v", arg))
 	}
 }
 
 func (target *Target) findArg(pos Arg, path []string, args []Arg, fields []Field,
-	parentsMap map[Arg]Arg, overlayField int) *foundArg {
+	parents parentMapper, overlayField int) *foundArg {
 	elem := path[0]
 	path = path[1:]
 	var offset uint64
@@ -98,23 +138,23 @@ func (target *Target) findArg(pos Arg, path []string, args []Arg, fields []Field
 			return &foundArg{nil, offset, false}
 		}
 		if len(path) != 0 {
-			return target.findFieldStruct(buf, path, parentsMap)
+			return target.findFieldStruct(buf, path, parents)
 		}
 		return &foundArg{buf, offset, false}
 	}
 	if elem == ParentRef {
-		buf := parentsMap[pos]
+		buf := parents(pos)
 		if len(path) != 0 {
-			return target.findFieldStruct(buf, path, parentsMap)
+			return target.findFieldStruct(buf, path, parents)
 		}
 		return &foundArg{buf, noOffset, false}
 	}
-	for buf := parentsMap[pos]; buf != nil; buf = parentsMap[buf] {
+	for buf := parents(pos); buf != nil; buf = parents(buf) {
 		if elem != buf.Type().TemplateName() {
 			continue
 		}
 		if len(path) != 0 {
-			return target.findFieldStruct(buf, path, parentsMap)
+			return target.findFieldStruct(buf, path, parents)
 		}
 		return &foundArg{buf, noOffset, false}
 	}
@@ -173,28 +213,23 @@ func saveToParentsMap(arg Arg, parentsMap map[Arg]Arg) {
 	}
 }
 
-func (target *Target) assignSizesArray(args []Arg, fields []Field, autos map[Arg]bool) {
-	parentsMap := make(map[Arg]Arg)
-	for _, arg := range args {
-		ForeachSubArg(arg, func(arg Arg, _ *ArgCtx) {
-			saveToParentsMap(arg, parentsMap)
-		})
-	}
-	target.assignSizes(args, fields, parentsMap, args, fields, autos, 0)
+func (target *Target) assignSizesArray(args []Arg, fields []Field, autos map[Arg]bool,
+	parents parentMapper) {
+	target.assignSizes(args, fields, parents, args, fields, autos, 0)
 	for _, arg := range args {
 		ForeachSubArg(arg, func(arg Arg, _ *ArgCtx) {
 			if typ, ok := arg.Type().(*StructType); ok {
-				target.assignSizes(arg.(*GroupArg).Inner, typ.Fields, parentsMap, args, fields, autos, typ.OverlayField)
+				target.assignSizes(arg.(*GroupArg).Inner, typ.Fields, parents, args, fields, autos, typ.OverlayField)
 			}
 			if v, ok := arg.(*UnionArg); ok {
-				target.assignArgSize(v.Option, nil, nil, parentsMap, args, fields, autos, 0)
+				target.assignArgSize(v.Option, nil, nil, parents, args, fields, autos, 0)
 			}
 		})
 	}
 }
 
 func (target *Target) assignSizesCall(c *Call) {
-	target.assignSizesArray(c.Args, c.Meta.Args, nil)
+	target.assignSizesArray(c.Args, c.Meta.Args, nil, callParentsCache(c))
 }
 
 func (r *randGen) mutateSize(arg *ConstArg, parent []Arg, fields []Field) bool {
