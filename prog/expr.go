@@ -53,28 +53,17 @@ func (v *Value) Evaluate(finder ArgFinder) (uint64, bool) {
 	return constArg.Val, true
 }
 
-func argFinderConstructor(t *Target, c *Call) func(*UnionArg) ArgFinder {
-	parentsMap := callParentsMap(c)
-	return func(unionArg *UnionArg) ArgFinder {
-		return func(path []string) Arg {
-			f := t.findArg(unionArg.Option, path, nil, nil, parentsMap, 0)
-			if f == nil {
-				return nil
-			}
-			if f.isAnyPtr {
-				return SquashedArgFound
-			}
-			return f.arg
+func makeArgFinder(t *Target, c *Call, unionArg *UnionArg, parents ParentStack) ArgFinder {
+	return func(path []string) Arg {
+		f := t.findArg(unionArg.Option, path, nil, nil, parents, 0)
+		if f == nil {
+			return nil
 		}
+		if f.isAnyPtr {
+			return SquashedArgFound
+		}
+		return f.arg
 	}
-}
-
-func callParentsMap(c *Call) map[Arg]Arg {
-	parentsMap := map[Arg]Arg{}
-	ForeachArg(c, func(arg Arg, _ *ArgCtx) {
-		saveToParentsMap(arg, parentsMap)
-	})
-	return parentsMap
 }
 
 func (r *randGen) patchConditionalFields(c *Call, s *state) (extra []*Call, changed bool) {
@@ -88,8 +77,7 @@ func (r *randGen) patchConditionalFields(c *Call, s *state) (extra []*Call, chan
 	var anyPatched bool
 	for {
 		replace := map[Arg]Arg{}
-		makeArgFinder := argFinderConstructor(r.target, c)
-		forEachStaleUnion(r.target, c, makeArgFinder,
+		forEachStaleUnion(r.target, c,
 			func(unionArg *UnionArg, unionType *UnionType, needIdx int) {
 				newType, newDir := unionType.Fields[needIdx].Type,
 					unionType.Fields[needIdx].Dir(unionArg.Dir())
@@ -111,34 +99,35 @@ func (r *randGen) patchConditionalFields(c *Call, s *state) (extra []*Call, chan
 	return extraCalls, anyPatched
 }
 
-func forEachStaleUnion(target *Target, c *Call, makeArgFinder func(*UnionArg) ArgFinder,
-	cb func(*UnionArg, *UnionType, int)) {
-	ForeachArg(c, func(arg Arg, argCtx *ArgCtx) {
-		if target.isAnyPtr(arg.Type()) {
+func forEachStaleUnion(target *Target, c *Call, cb func(*UnionArg, *UnionType, int)) {
+	for _, callArg := range c.Args {
+		ForeachSubArgWithStack(callArg, func(arg Arg, argCtx *ArgCtx) {
+			if target.isAnyPtr(arg.Type()) {
+				argCtx.Stop = true
+				return
+			}
+			unionArg, ok := arg.(*UnionArg)
+			if !ok {
+				return
+			}
+			unionType, ok := arg.Type().(*UnionType)
+			if !ok || !unionType.isConditional() {
+				return
+			}
+			argFinder := makeArgFinder(target, c, unionArg, argCtx.ParentStack)
+			needIdx, ok := calculateUnionArg(unionArg, unionType, argFinder)
+			if !ok {
+				// Let it stay as is.
+				return
+			}
+			if unionArg.Index == needIdx {
+				// No changes are needed.
+				return
+			}
+			cb(unionArg, unionType, needIdx)
 			argCtx.Stop = true
-			return
-		}
-		unionArg, ok := arg.(*UnionArg)
-		if !ok {
-			return
-		}
-		unionType, ok := arg.Type().(*UnionType)
-		if !ok || !unionType.isConditional() {
-			return
-		}
-		argFinder := makeArgFinder(unionArg)
-		needIdx, ok := calculateUnionArg(unionArg, unionType, argFinder)
-		if !ok {
-			// Let it stay as is.
-			return
-		}
-		if unionArg.Index == needIdx {
-			// No changes are needed.
-			return
-		}
-		cb(unionArg, unionType, needIdx)
-		argCtx.Stop = true
-	})
+		})
+	}
 }
 
 func calculateUnionArg(arg *UnionArg, typ *UnionType, finder ArgFinder) (int, bool) {
@@ -174,12 +163,10 @@ var ErrViolatedConditions = errors.New("conditional fields rules violation")
 
 func (c *Call) checkConditions(target *Target) error {
 	var ret error
-	makeArgFinder := argFinderConstructor(target, c)
-	forEachStaleUnion(target, c, makeArgFinder,
-		func(a *UnionArg, t *UnionType, need int) {
-			ret = fmt.Errorf("%w union %s field is %s, but %s satisfies conditions",
-				ErrViolatedConditions, t.Name(), t.Fields[a.Index].Name, t.Fields[need].Name)
-		})
+	forEachStaleUnion(target, c, func(a *UnionArg, t *UnionType, need int) {
+		ret = fmt.Errorf("%w union %s field is %s, but %s satisfies conditions",
+			ErrViolatedConditions, t.Name(), t.Fields[a.Index].Name, t.Fields[need].Name)
+	})
 	return ret
 }
 
@@ -188,8 +175,7 @@ func (c *Call) setDefaultConditions(target *Target) bool {
 	// Replace stale conditions with the default values of their correct types.
 	for {
 		replace := map[Arg]Arg{}
-		makeArgFinder := argFinderConstructor(target, c)
-		forEachStaleUnion(target, c, makeArgFinder,
+		forEachStaleUnion(target, c,
 			func(unionArg *UnionArg, unionType *UnionType, needIdx int) {
 				field := unionType.Fields[needIdx]
 				replace[unionArg] = MakeUnionArg(unionType,
