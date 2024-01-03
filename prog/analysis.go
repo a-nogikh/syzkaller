@@ -104,20 +104,39 @@ func (s *state) analyzeImpl(c *Call, resources bool) {
 	})
 }
 
+type ParentStack []Arg
+
+func AllocStack() ParentStack {
+	// Let's save some allocations during stack traversal.
+	return make([]Arg, 0, 4)
+}
+
+func PushStack(ps ParentStack, a Arg) ParentStack {
+	return append(ps, a)
+}
+
+func PopStack(ps ParentStack) (ParentStack, Arg) {
+	if len(ps) > 0 {
+		return ps[:len(ps)-1], ps[len(ps)-1]
+	}
+	return ps, nil
+}
+
 type ArgCtx struct {
-	Parent *[]Arg      // GroupArg.Inner (for structs) or Call.Args containing this arg.
-	Fields []Field     // Fields of the parent struct/syscall.
-	Base   *PointerArg // Pointer to the base of the heap object containing this arg.
-	Offset uint64      // Offset of this arg from the base.
-	Stop   bool        // If set by the callback, subargs of this arg are not visited.
+	Parent      *[]Arg      // GroupArg.Inner (for structs) or Call.Args containing this arg.
+	Fields      []Field     // Fields of the parent struct/syscall.
+	Base        *PointerArg // Pointer to the base of the heap object containing this arg.
+	Offset      uint64      // Offset of this arg from the base.
+	Stop        bool        // If set by the callback, subargs of this arg are not visited.
+	ParentStack ParentStack // Struct and union arguments by which the argument can be reached.
 }
 
 func ForeachSubArg(arg Arg, f func(Arg, *ArgCtx)) {
-	foreachArgImpl(arg, &ArgCtx{}, f)
+	foreachArgImpl(arg, &ArgCtx{ParentStack: AllocStack()}, f)
 }
 
 func ForeachArg(c *Call, f func(Arg, *ArgCtx)) {
-	ctx := &ArgCtx{}
+	ctx := &ArgCtx{ParentStack: AllocStack()}
 	if c.Ret != nil {
 		foreachArgImpl(c.Ret, ctx, f)
 	}
@@ -131,6 +150,11 @@ func ForeachArg(c *Call, f func(Arg, *ArgCtx)) {
 func foreachArgImpl(arg Arg, ctx *ArgCtx, f func(Arg, *ArgCtx)) {
 	ctx0 := *ctx
 	defer func() { *ctx = ctx0 }()
+
+	switch arg.Type().(type) {
+	case *StructType, *UnionType:
+		ctx.ParentStack = PushStack(ctx.ParentStack, arg)
+	}
 	f(arg, ctx)
 	if ctx.Stop {
 		return
