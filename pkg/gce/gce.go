@@ -15,11 +15,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"strings"
 	"time"
 
+	oslogin "cloud.google.com/go/oslogin/apiv1beta"
+	osloginpb "cloud.google.com/go/oslogin/apiv1beta/osloginpb"
+	"github.com/google/syzkaller/pkg/osutil"
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -105,6 +109,36 @@ func NewContext(customZoneID string) (*Context, error) {
 	if ctx.InternalIP == "" {
 		return nil, fmt.Errorf("failed to get current instance internal IP")
 	}
+
+	c, err := oslogin.NewClient(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
+	serviceAccount, err := ctx.getMeta(`instance/service-accounts/default/email`)
+	if err != nil {
+		return nil, err
+	}
+
+	req := &osloginpb.GetLoginProfileRequest{
+		Name: `users/` + serviceAccount,
+		View: osloginpb.LoginProfileView_SECURITY_KEY,
+	}
+	resp, err := c.GetLoginProfile(context.Background(), req)
+	if err != nil {
+		return nil, err
+	}
+
+	username := resp.GetPosixAccounts()[0].GetUsername()
+	log.Printf("USER: %s\n", username)
+
+	keyId := 0
+	for name, info := range resp.GetSecurityKeys() {
+		log.Printf("KEY %s: %v\n", name, info)
+		osutil.WriteFile(fmt.Sprintf("/tmp/key%d", keyId), []byte(info.GetPrivateKey()))
+	}
+
+	panic("AAA")
 	return ctx, nil
 }
 

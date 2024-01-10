@@ -35,6 +35,12 @@ cloud.google.com/go/logging/logadmin
 cloud.google.com/go/longrunning
 cloud.google.com/go/longrunning/autogen
 cloud.google.com/go/longrunning/autogen/longrunningpb
+# cloud.google.com/go/oslogin v1.12.2
+## explicit; go 1.19
+cloud.google.com/go/oslogin/apiv1beta
+cloud.google.com/go/oslogin/apiv1beta/osloginpb
+cloud.google.com/go/oslogin/common/commonpb
+cloud.google.com/go/oslogin/internal
 # cloud.google.com/go/profiler v0.4.0
 ## explicit; go 1.19
 cloud.google.com/go/profiler
