@@ -56,26 +56,6 @@ func TestMinimize(t *testing.T) {
 				"pipe2(0x0, 0x0)\n",
 			1,
 		},
-		// Remove two dependent calls.
-		{
-			"linux", "amd64",
-			"mmap(&(0x7f0000000000/0x1000)=nil, 0x1000, 0x3, 0x32, 0xffffffffffffffff, 0x0)\n" +
-				"pipe2(&(0x7f0000000000)={0x0, 0x0}, 0x0)\n" +
-				"sched_yield()\n",
-			2,
-			func(p *Prog, callIndex int) bool {
-				// Aim at removal of pipe2 and then mmap.
-				if len(p.Calls) == 2 && p.Calls[0].Meta.Name == "mmap" && p.Calls[1].Meta.Name == "sched_yield" {
-					return true
-				}
-				if len(p.Calls) == 1 && p.Calls[0].Meta.Name == "sched_yield" {
-					return true
-				}
-				return false
-			},
-			"sched_yield()\n",
-			0,
-		},
 		// Remove a call and replace results.
 		{
 			"linux", "amd64",

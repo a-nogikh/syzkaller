@@ -93,6 +93,9 @@ func (ctx *sliceCtx[T]) splitChunks(someNeeded bool) error {
 			continue
 		}
 		ctx.Logf("split chunk #%d of len %d into %d parts", i, len(chunk.elements), splitInto)
+		if len(chunk.elements) <= 3 {
+			splitInto = len(chunk.elements)
+		}
 		chunks := splitChunk[T](chunk.elements, splitInto)
 		if len(chunks) == 1 && someNeeded {
 			ctx.Logf("no way to further split the chunk")
@@ -116,6 +119,7 @@ func (ctx *sliceCtx[T]) splitChunks(someNeeded bool) error {
 					ctx.Logf("the chunk can be dropped")
 					continue
 				}
+				ctx.Logf("the chunk must stay")
 			} else {
 				ctx.Logf("no need to test this chunk, it's definitely needed")
 			}

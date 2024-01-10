@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+
+	"github.com/google/syzkaller/pkg/bisect/minimize"
 )
 
 // Minimize minimizes program p into an equivalent program using the equivalence
@@ -67,23 +69,43 @@ func Minimize(p0 *Prog, callIndex0 int, crash bool, pred0 func(*Prog, int) bool)
 }
 
 func removeCalls(p0 *Prog, callIndex0 int, crash bool, pred func(*Prog, int) bool) (*Prog, int) {
-	for i := len(p0.Calls) - 1; i >= 0; i-- {
-		if i == callIndex0 {
-			continue
-		}
-		callIndex := callIndex0
-		if i < callIndex {
-			callIndex--
-		}
-		p := p0.Clone()
-		p.RemoveCall(i)
-		if !pred(p, callIndex) {
-			continue
-		}
-		p0 = p
-		callIndex0 = callIndex
+	if callIndex0 >= 0 && len(p0.Calls) <= 1 {
+		return p0, callIndex0
 	}
-	return p0, callIndex0
+	dropCalls := func(arr []int) (*Prog, int) {
+		p := p0.Clone()
+		callIndex := callIndex0
+		for i := len(p.Calls) - 1; i >= 0; i-- {
+			keep := i == callIndex0
+			if len(arr) > 0 && arr[len(arr)-1] == i {
+				keep = true
+				arr = arr[:len(arr)-1]
+			}
+			if keep {
+				continue
+			}
+			if i < callIndex0 {
+				callIndex--
+			}
+			p.RemoveCall(i)
+		}
+		return p, callIndex
+	}
+	// First check if we can drop everything except
+
+	indices := []int{}
+	for i := 0; i < len(p0.Calls); i++ {
+		if i != callIndex0 {
+			indices = append(indices, i)
+		}
+	}
+	leftIndices, _ := minimize.Slice(minimize.Config[int]{
+		Pred: func(arr []int) (bool, error) {
+			p, callIndex := dropCalls(arr)
+			return pred(p, callIndex), nil
+		},
+	}, indices)
+	return dropCalls(leftIndices)
 }
 
 func resetCallProps(p0 *Prog, callIndex0 int, pred func(*Prog, int) bool) *Prog {
