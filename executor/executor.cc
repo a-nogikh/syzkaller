@@ -868,6 +868,7 @@ void execute_one()
 			continue;
 		}
 
+		uint64 wait_ms = 0;
 		// Normal syscall.
 		if (call_num >= ARRAY_SIZE(syscalls))
 			failmsg("invalid syscall number", "call_num=%llu", call_num);
@@ -878,8 +879,16 @@ void execute_one()
 			prog_extra_timeout = call->attrs.prog_timeout * slowdown_scale;
 		if (strncmp(syscalls[call_num].name, "syz_usb", strlen("syz_usb")) == 0)
 			prog_extra_cover_timeout = std::max(prog_extra_cover_timeout, 500 * slowdown_scale);
-		if (strncmp(syscalls[call_num].name, "syz_80211_inject_frame", strlen("syz_80211_inject_frame")) == 0)
+		if (strncmp(syscalls[call_num].name, "syz_80211_inject_frame", strlen("syz_80211_inject_frame")) == 0) {
 			prog_extra_cover_timeout = std::max(prog_extra_cover_timeout, 300 * slowdown_scale);
+			wait_ms = 30;
+		}
+		if (strncmp(syscalls[call_num].name, "syz_emit_ethernet", strlen("syz_emit_ethernet")) == 0) {
+			wait_ms = 30;
+		}
+		if (strncmp(syscalls[call_num].name, "write$tun", strlen("write$tun")) == 0) {
+			wait_ms = 30;
+		}
 		uint64 copyout_index = read_input(&input_pos);
 		uint64 num_args = read_input(&input_pos);
 		if (num_args > kMaxArgs)
@@ -889,6 +898,11 @@ void execute_one()
 			args[i] = read_arg(&input_pos);
 		for (uint64 i = num_args; i < kMaxArgs; i++)
 			args[i] = 0;
+
+		if (wait_ms > 0) {
+			sleep_ms(wait_ms);
+		}
+
 		thread_t* th = schedule_call(call_index++, call_num, copyout_index,
 					     num_args, args, input_pos, call_props);
 
