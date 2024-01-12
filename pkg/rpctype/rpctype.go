@@ -200,3 +200,9 @@ type RunTestDoneArgs struct {
 	Info   []*ipc.ProgInfo
 	Error  string
 }
+
+type LogMessageReq struct {
+	Level   int
+	Fuzzer  string
+	Message string
+}

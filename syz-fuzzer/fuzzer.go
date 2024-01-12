@@ -465,7 +465,12 @@ func (fuzzer *Fuzzer) poll(needCandidates bool, stats map[string]uint64) bool {
 }
 
 func (fuzzer *Fuzzer) sendInputToManager(inp rpctype.Input) {
-	fuzzer.parallelNewInputs <- struct{}{}
+	select {
+	case fuzzer.parallelNewInputs <- struct{}{}:
+	default:
+		fuzzer.logMessage(0, "sendInputToManager contention")
+		fuzzer.parallelNewInputs <- struct{}{}
+	}
 	go func() {
 		defer func() { <-fuzzer.parallelNewInputs }()
 		a := &rpctype.NewInputArgs{
@@ -627,6 +632,19 @@ func (fuzzer *Fuzzer) checkNewCallSignal(p *prog.Prog, info *ipc.CallInfo, call 
 	fuzzer.signalMu.Unlock()
 	fuzzer.signalMu.RLock()
 	return true
+}
+
+func (fuzzer *Fuzzer) logMessage(level int, msg string, args ...interface{}) {
+	go func() {
+		a := &rpctype.LogMessageReq{
+			Level:   level,
+			Fuzzer:  fuzzer.name,
+			Message: fmt.Sprintf(msg, args...),
+		}
+		if err := fuzzer.manager.Call("Manager.LogMessage", a, nil); err != nil {
+			log.SyzFatalf("Manager.LogMessage call failed: %v", err)
+		}
+	}()
 }
 
 func signalPrio(p *prog.Prog, info *ipc.CallInfo, call int) (prio uint8) {
