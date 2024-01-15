@@ -575,6 +575,16 @@ func (r *randGen) nOutOf(n, outOf int) bool {
 }
 
 func (r *randGen) generateCall(s *state, p *Prog, insertionPoint int) []*Call {
+	if r.oneOf(10) {
+		var ok []int
+		for id, call := range r.target.Syscalls {
+			if s.ct.Generatable(call.ID) {
+				ok = append(ok, id)
+			}
+		}
+		meta := r.target.Syscalls[ok[r.Intn(len(ok))]]
+		return r.generateParticularCall(s, meta)
+	}
 	biasCall := -1
 	if insertionPoint > 0 {
 		// Choosing the base call is based on the insertion point of the new calls sequence.
