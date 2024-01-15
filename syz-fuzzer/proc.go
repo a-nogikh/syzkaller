@@ -92,6 +92,7 @@ func (proc *Proc) loop() {
 		} else {
 			// Mutate an existing prog.
 			p := fuzzerSnapshot.chooseProgram(proc.rnd).Clone()
+			proc.exploreNewCalls(p)
 			p.Mutate(proc.rnd, prog.RecommendedCalls, ct, proc.fuzzer.noMutate, fuzzerSnapshot.corpus)
 			log.Logf(1, "#%v: mutated", proc.pid)
 			proc.executeAndCollide(proc.execOpts, p, ProgNormal, StatFuzz)
@@ -220,6 +221,15 @@ func (proc *Proc) smashInput(item *WorkSmash) {
 		log.Logf(1, "#%v: smash mutated", proc.pid)
 		proc.executeAndCollide(proc.execOpts, p, ProgNormal, StatSmash)
 	}
+	for i := 0; i < 10; i++ {
+		proc.exploreNewCalls(item.p)
+	}
+}
+
+func (proc *Proc) exploreNewCalls(p *prog.Prog) {
+	newP := p.Clone()
+	newP.Explore(proc.rnd, prog.RecommendedCalls, proc.fuzzer.choiceTable)
+	proc.execute(proc.execOpts, newP, ProgNormal, StatSmash)
 }
 
 func (proc *Proc) failCall(p *prog.Prog, call int) {

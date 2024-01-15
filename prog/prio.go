@@ -247,6 +247,16 @@ func (ct *ChoiceTable) Enabled(call int) bool {
 	return ct.Generatable(call) || ct.noGenerateCalls[call]
 }
 
+func (ct *ChoiceTable) EnabledCalls() []*Syscall {
+	var ret []*Syscall
+	for id := range ct.runs {
+		if ct.Generatable(id) {
+			ret = append(ret, ct.target.Syscalls[id])
+		}
+	}
+	return ret
+}
+
 func (ct *ChoiceTable) Generatable(call int) bool {
 	return ct.runs[call] != nil
 }

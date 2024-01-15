@@ -916,3 +916,26 @@ func storeInt(data []byte, v uint64, size int) {
 		panic(fmt.Sprintf("storeInt: bad size %v", size))
 	}
 }
+
+func (p *Prog) Explore(rs rand.Source, ncalls int, ct *ChoiceTable) {
+	r := newRand(p.Target, rs)
+	s := newState(p.Target, ct, nil)
+	allCalls := ct.EnabledCalls()
+	for i := 0; len(p.Calls) < ncalls; i++ {
+		var calls []*Call
+		if i%5 == 0 {
+			calls = r.generateCall(s, p, len(p.Calls))
+		} else {
+			calls = r.generateParticularCall(s, allCalls[r.Intn(len(allCalls))])
+		}
+		for _, c := range calls {
+			s.analyze(c)
+			p.Calls = append(p.Calls, c)
+		}
+	}
+	for i := len(p.Calls) - 1; i >= ncalls; i-- {
+		p.RemoveCall(i)
+	}
+	p.sanitizeFix()
+	p.debugValidate()
+}

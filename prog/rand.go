@@ -31,6 +31,7 @@ type randGen struct {
 }
 
 func newRand(target *Target, rs rand.Source) *randGen {
+
 	return &randGen{
 		Rand:     rand.New(rs),
 		target:   target,
