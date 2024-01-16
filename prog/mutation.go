@@ -326,6 +326,8 @@ func (t *LenType) mutate(r *randGen, s *state, arg Arg, ctx ArgCtx) (calls []*Ca
 }
 
 func (t *ResourceType) mutate(r *randGen, s *state, arg Arg, ctx ArgCtx) (calls []*Call, retry, preserve bool) {
+	r.inMutate = true
+	defer func() { r.inMutate = false }()
 	return regenerate(r, s, arg)
 }
 

@@ -27,6 +27,7 @@ type randGen struct {
 	*rand.Rand
 	target             *Target
 	inGenerateResource bool
+	inMutate           bool
 	recDepth           map[string]int
 }
 
@@ -737,6 +738,10 @@ func (r *randGen) generateArgImpl(s *state, typ Type, dir Dir, ignoreSpecial boo
 }
 
 func (a *ResourceType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls []*Call) {
+	return generateResource(a, r, s, dir, false)
+}
+
+func generateResource(a *ResourceType, r *randGen, s *state, dir Dir, inMutate bool) (arg Arg, calls []*Call) {
 	canRecurse := false
 	if !r.inGenerateResource {
 		// Don't allow recursion for resourceCentric/createResource.
@@ -746,7 +751,12 @@ func (a *ResourceType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls [
 		defer func() { r.inGenerateResource = false }()
 		canRecurse = true
 	}
-	if canRecurse && r.nOutOf(8, 10) ||
+	useExisting := r.nOutOf(8, 10)
+	if canRecurse && r.inMutate {
+		// If we mutate the argument, there's little sense to reuse the same resource.
+		useExisting = r.nOutOf(1, 10)
+	}
+	if canRecurse && useExisting ||
 		!canRecurse && r.nOutOf(19, 20) {
 		arg = r.existingResource(s, a, dir)
 		if arg != nil {
