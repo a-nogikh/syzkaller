@@ -16,20 +16,37 @@ import (
 	"github.com/google/syzkaller/pkg/image"
 )
 
+type progCall struct {
+	p    *Prog
+	call int
+}
+
 type state struct {
-	target    *Target
-	ct        *ChoiceTable
-	corpus    []*Prog
-	files     map[string]bool
-	resources map[string][]*ResultArg
-	strings   map[string]bool
-	ma        *memAlloc
-	va        *vmaAlloc
+	target        *Target
+	ct            *ChoiceTable
+	corpus        []*Prog
+	corpusPerCall map[*Syscall][]progCall
+	files         map[string]bool
+	resources     map[string][]*ResultArg
+	strings       map[string]bool
+	ma            *memAlloc
+	va            *vmaAlloc
+}
+
+func makeCorpusPerCall(corpus []*Prog) map[*Syscall][]progCall {
+	corpusPerCall := map[*Syscall][]progCall{}
+	for _, p := range corpus {
+		for i, c := range p.Calls {
+			corpusPerCall[c.Meta] = append(corpusPerCall[c.Meta], progCall{p, i})
+		}
+	}
+	return corpusPerCall
 }
 
 // analyze analyzes the program p up to but not including call c.
-func analyze(ct *ChoiceTable, corpus []*Prog, p *Prog, c *Call) *state {
+func analyze(ct *ChoiceTable, corpus []*Prog, corpusPerCall map[*Syscall][]progCall, p *Prog, c *Call) *state {
 	s := newState(p.Target, ct, corpus)
+	s.corpusPerCall = corpusPerCall
 	resources := true
 	for _, c1 := range p.Calls {
 		if c1 == c {

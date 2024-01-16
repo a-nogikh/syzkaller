@@ -30,12 +30,13 @@ func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[
 		ncalls = len(p.Calls)
 	}
 	ctx := &mutator{
-		p:        p,
-		r:        r,
-		ncalls:   ncalls,
-		ct:       ct,
-		noMutate: noMutate,
-		corpus:   corpus,
+		p:             p,
+		r:             r,
+		ncalls:        ncalls,
+		ct:            ct,
+		noMutate:      noMutate,
+		corpus:        corpus,
+		corpusPerCall: makeCorpusPerCall(corpus),
 	}
 	for stop, ok := false, false; !stop; stop = ok && len(p.Calls) != 0 && r.oneOf(3) {
 		switch {
@@ -63,12 +64,13 @@ func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[
 // Internal state required for performing mutations -- currently this matches
 // the arguments passed to Mutate().
 type mutator struct {
-	p        *Prog        // The program to mutate.
-	r        *randGen     // The randGen instance.
-	ncalls   int          // The allowed maximum calls in mutated program.
-	ct       *ChoiceTable // ChoiceTable for syscalls.
-	noMutate map[int]bool // Set of IDs of syscalls which should not be mutated.
-	corpus   []*Prog      // The entire corpus, including original program p.
+	p             *Prog        // The program to mutate.
+	r             *randGen     // The randGen instance.
+	ncalls        int          // The allowed maximum calls in mutated program.
+	ct            *ChoiceTable // ChoiceTable for syscalls.
+	noMutate      map[int]bool // Set of IDs of syscalls which should not be mutated.
+	corpus        []*Prog      // The entire corpus, including original program p.
+	corpusPerCall map[*Syscall][]progCall
 }
 
 // This function selects a random other program p0 out of the corpus, and
@@ -118,7 +120,7 @@ func (ctx *mutator) squashAny() bool {
 	// Note: we need to call analyze before we mutate the blob.
 	// After mutation the blob can grow out of bounds of the data area
 	// and analyze will crash with out-of-bounds access while marking existing allocations.
-	s := analyze(ctx.ct, ctx.corpus, p, ptr.call)
+	s := analyze(ctx.ct, ctx.corpus, ctx.corpusPerCall, p, ptr.call)
 	// TODO(dvyukov): we probably want special mutation for ANY.
 	// E.g. merging adjacent ANYBLOBs (we don't create them,
 	// but they can appear in future); or replacing ANYRES
@@ -148,7 +150,7 @@ func (ctx *mutator) insertCall() bool {
 	if idx < len(p.Calls) {
 		c = p.Calls[idx]
 	}
-	s := analyze(ctx.ct, ctx.corpus, p, c)
+	s := analyze(ctx.ct, ctx.corpus, ctx.corpusPerCall, p, c)
 	calls := r.generateCall(s, p, idx)
 	p.insertBefore(c, calls)
 	for len(p.Calls) > ctx.ncalls {
@@ -191,7 +193,7 @@ func (ctx *mutator) mutateArg() bool {
 		if len(ma.args) == 0 {
 			return false
 		}
-		s := analyze(ctx.ct, ctx.corpus, p, c)
+		s := analyze(ctx.ct, ctx.corpus, ctx.corpusPerCall, p, c)
 		arg, argCtx := ma.chooseArg(r.Rand)
 		calls, ok1 := p.Target.mutateArg(r, s, arg, argCtx, &updateSizes)
 		if !ok1 {

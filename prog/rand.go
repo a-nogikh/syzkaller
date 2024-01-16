@@ -586,7 +586,37 @@ func (r *randGen) generateCall(s *state, p *Prog, insertionPoint int) []*Call {
 	}
 	idx := s.ct.choose(r.Rand, biasCall)
 	meta := r.target.Syscalls[idx]
+	if r.oneOf(3) {
+		calls := r.takeCallFromCorpus(s, meta)
+		if calls != nil {
+			return calls
+		}
+	}
 	return r.generateParticularCall(s, meta)
+}
+
+func (r *randGen) takeCallFromCorpus(s *state, meta *Syscall) []*Call {
+	candidates := s.corpusPerCall[meta]
+	if len(candidates) == 0 {
+		return nil
+	}
+	cand := candidates[r.Intn(len(candidates))]
+	p := cand.p
+	call := cloneCall(p.Calls[cand.call], nil)
+
+	replace := map[Arg]struct{}{}
+	ForeachArg(call, func(arg Arg, _ *ArgCtx) {
+		_, ok := arg.Type().(*ResourceType)
+		if ok && arg != call.Ret {
+			replace[arg] = struct{}{}
+		}
+	})
+	var calls []*Call
+	for arg := range replace {
+		addCalls, _, _ := regenerate(r, s, arg)
+		calls = append(calls, addCalls...)
+	}
+	return append(calls, call)
 }
 
 func (r *randGen) generateParticularCall(s *state, meta *Syscall) (calls []*Call) {
