@@ -491,7 +491,7 @@ of the `type` field. For example, if `type` is `0x1`, then it's `int`:
 some_call(&AUTO={0x1, @int=0x1})
 ```
 
-If no condition matches, syzkaller would pick the last filed that **must always
+If no condition matches, syzkaller would pick the last field that **must always
 have no condition**.
 
 ```
@@ -507,8 +507,8 @@ alternatives [
 ] [varlen]
 ```
 
-Syzkaller will always obey these restrictions. Specifically, it will select the
-first union field whose condition is satisfied.
+Syzkaller will always obey these restrictions. During prog mutation and generation
+it will select a random union field whose condition is satisfied.
 
 
 ### Expression syntax
