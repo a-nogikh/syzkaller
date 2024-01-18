@@ -101,6 +101,9 @@ func (proc *Proc) loop() {
 
 func (proc *Proc) triageInput(item *WorkTriage) {
 	log.Logf(1, "#%v: triaging type=%x", proc.pid, item.flags)
+	if item.flags&ProgMinimized == 0 {
+		proc.env.Restart()
+	}
 
 	prio := signalPrio(item.p, &item.info, item.call)
 	inputSignal := signal.FromRaw(item.info.Signal, prio)

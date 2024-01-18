@@ -221,6 +221,13 @@ func MakeEnv(config *Config, pid int) (*Env, error) {
 	return env, nil
 }
 
+func (env *Env) Restart() {
+	if env.cmd != nil {
+		env.cmd.close()
+		env.cmd = nil
+	}
+}
+
 func (env *Env) Close() error {
 	if env.cmd != nil {
 		env.cmd.close()
