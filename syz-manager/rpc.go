@@ -120,7 +120,7 @@ func (serv *RPCServer) Connect(a *rpctype.ConnectArgs, r *rpctype.ConnectRes) er
 	r.NoMutateCalls = serv.cfg.NoMutateCalls
 	r.GitRevision = prog.GitRevision
 	r.TargetRevision = serv.cfg.Target.Revision
-	if serv.mgr.rotateCorpus() && serv.rnd.Intn(5) == 0 {
+	if serv.mgr.rotateCorpus() && serv.rnd.Intn(2) == 0 {
 		// We do rotation every other time because there are no objective
 		// proofs regarding its efficiency either way.
 		// Also, rotation gives significantly skewed syscall selection
