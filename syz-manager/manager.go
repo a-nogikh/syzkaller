@@ -334,12 +334,7 @@ type ReproResult struct {
 func (mgr *Manager) vmLoop() {
 	log.Logf(0, "booting test machines...")
 	log.Logf(0, "wait for the connection from test machine...")
-	instancesPerRepro := 3
 	vmCount := mgr.vmPool.Count()
-	maxReproVMs := vmCount - mgr.cfg.FuzzingVMs
-	if instancesPerRepro > maxReproVMs && maxReproVMs > 0 {
-		instancesPerRepro = maxReproVMs
-	}
 	instances := SequentialResourcePool(vmCount, 10*time.Second*mgr.cfg.Timeouts.Scale)
 	runDone := make(chan *RunResult, 1)
 	pendingRepro := make(map[*Crash]bool)
@@ -372,17 +367,17 @@ func (mgr *Manager) vmLoop() {
 
 		canRepro := func() bool {
 			return phase >= phaseTriagedHub && len(reproQueue) != 0 &&
-				(int(atomic.LoadUint32(&mgr.numReproducing))+1)*instancesPerRepro <= maxReproVMs
+				(int(atomic.LoadUint32(&mgr.numReproducing))+1)*mgr.instancesPerRepro(false) <= mgr.maxReproVMs()
 		}
 
 		if shutdown != nil {
 			for canRepro() {
-				vmIndexes := instances.Take(instancesPerRepro)
+				last := len(reproQueue) - 1
+				crash := reproQueue[last]
+				vmIndexes := instances.Take(mgr.instancesPerRepro(crash.fromHub))
 				if vmIndexes == nil {
 					break
 				}
-				last := len(reproQueue) - 1
-				crash := reproQueue[last]
 				reproQueue[last] = nil
 				reproQueue = reproQueue[:last]
 				atomic.AddUint32(&mgr.numReproducing, 1)
@@ -472,6 +467,24 @@ func (mgr *Manager) vmLoop() {
 			goto wait
 		}
 	}
+}
+
+func (mgr *Manager) instancesPerRepro(fromHub bool) int {
+	const byDefault = 3
+	maxReproVMs := mgr.maxReproVMs()
+	instancesPerRepro := byDefault
+	if instancesPerRepro > maxReproVMs && maxReproVMs > 0 {
+		instancesPerRepro = maxReproVMs
+	}
+	const instancesForHub = 2
+	if fromHub && instancesPerRepro > instancesForHub {
+		instancesPerRepro = instancesForHub
+	}
+	return instancesPerRepro
+}
+
+func (mgr *Manager) maxReproVMs() int {
+	return mgr.vmPool.Count() - mgr.cfg.FuzzingVMs
 }
 
 func reportReproError(err error) {
