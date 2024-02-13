@@ -456,7 +456,6 @@ func (mgr *Manager) vmLoop() {
 					log.Logf(1, "repro '%v' came from syz-hub, not reporting the failure",
 						res.report0.Title)
 				} else {
-					log.Logf(1, "report repro failure of '%v'", res.report0.Title)
 					mgr.saveFailedRepro(res.report0, res.stats)
 				}
 			} else {
@@ -1038,6 +1037,7 @@ func (mgr *Manager) needRepro(crash *Crash) bool {
 
 func (mgr *Manager) saveFailedRepro(rep *report.Report, stats *repro.Stats) {
 	reproLog := fullReproLog(stats)
+	log.Logf(1, "report repro failure of '%v' (log size is %d)", rep.Title, len(reproLog))
 	if mgr.dash != nil {
 		if rep.Type == crash_pkg.MemoryLeak {
 			// Don't send failed leak repro attempts to dashboard
