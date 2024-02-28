@@ -54,7 +54,7 @@ func TestDeterminism(t *testing.T) {
 	}
 }
 
-func generateProg(t *testing.T, target *Target, rs rand.Source, ct *ChoiceTable, corpus []*Prog) *Prog {
+func generateProg(t *testing.T, target *Target, rs rand.Source, ct ChoiceTable, corpus []*Prog) *Prog {
 	p := target.Generate(rs, 5, ct)
 	p.Mutate(rs, 10, ct, nil, corpus)
 	for i, c := range p.Calls {

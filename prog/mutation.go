@@ -24,7 +24,7 @@ const maxBlobLen = uint64(100 << 10)
 // ct:          ChoiceTable for syscalls.
 // noMutate:    Set of IDs of syscalls which should not be mutated.
 // corpus:      The entire corpus, including original program p.
-func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[int]bool, corpus []*Prog) {
+func (p *Prog) Mutate(rs rand.Source, ncalls int, ct ChoiceTable, noMutate map[int]bool, corpus []*Prog) {
 	r := newRand(p.Target, rs)
 	if ncalls < len(p.Calls) {
 		ncalls = len(p.Calls)
@@ -66,7 +66,7 @@ type mutator struct {
 	p        *Prog        // The program to mutate.
 	r        *randGen     // The randGen instance.
 	ncalls   int          // The allowed maximum calls in mutated program.
-	ct       *ChoiceTable // ChoiceTable for syscalls.
+	ct       ChoiceTable  // ChoiceTable for syscalls.
 	noMutate map[int]bool // Set of IDs of syscalls which should not be mutated.
 	corpus   []*Prog      // The entire corpus, including original program p.
 }

@@ -181,14 +181,21 @@ func normalizePrio(prios [][]int32) {
 
 // ChooseTable allows to do a weighted choice of a syscall for a given syscall
 // based on call-to-call priorities and a set of enabled and generatable syscalls.
-type ChoiceTable struct {
+type ChoiceTable interface {
+	Enabled(call int) bool
+	Generatable(call int) bool
+	Choose(r *rand.Rand, bias int) int
+}
+
+// ChoiceTableImpl is the basic implementation of ChooseTable.
+type ChoiceTableImpl struct {
 	target          *Target
 	runs            [][]int32
 	calls           []*Syscall
 	noGenerateCalls map[int]bool
 }
 
-func (target *Target) BuildChoiceTable(corpus []*Prog, enabled map[*Syscall]bool) *ChoiceTable {
+func (target *Target) BuildChoiceTable(corpus []*Prog, enabled map[*Syscall]bool) *ChoiceTableImpl {
 	if enabled == nil {
 		enabled = make(map[*Syscall]bool)
 		for _, c := range target.Syscalls {
@@ -243,18 +250,18 @@ func (target *Target) BuildChoiceTable(corpus []*Prog, enabled map[*Syscall]bool
 			run[i][j] = sum
 		}
 	}
-	return &ChoiceTable{target, run, generatableCalls, noGenerateCalls}
+	return &ChoiceTableImpl{target, run, generatableCalls, noGenerateCalls}
 }
 
-func (ct *ChoiceTable) Enabled(call int) bool {
+func (ct *ChoiceTableImpl) Enabled(call int) bool {
 	return ct.Generatable(call) || ct.noGenerateCalls[call]
 }
 
-func (ct *ChoiceTable) Generatable(call int) bool {
+func (ct *ChoiceTableImpl) Generatable(call int) bool {
 	return ct.runs[call] != nil
 }
 
-func (ct *ChoiceTable) choose(r *rand.Rand, bias int) int {
+func (ct *ChoiceTableImpl) Choose(r *rand.Rand, bias int) int {
 	if bias < 0 {
 		bias = ct.calls[r.Intn(len(ct.calls))].ID
 	}

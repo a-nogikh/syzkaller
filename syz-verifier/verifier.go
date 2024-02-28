@@ -40,7 +40,7 @@ type Verifier struct {
 	runnerBin         string
 	executorBin       string
 	progGeneratorInit sync.WaitGroup
-	choiceTable       *prog.ChoiceTable
+	choiceTable       prog.ChoiceTable
 	progIdx           int
 	addr              string
 	srv               *RPCServer

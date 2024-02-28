@@ -41,7 +41,7 @@ type Fuzzer struct {
 	gate        *ipc.Gate
 	workQueue   *WorkQueue
 	needPoll    chan struct{}
-	choiceTable *prog.ChoiceTable
+	choiceTable prog.ChoiceTable
 	noMutate    map[int]bool
 	// The stats field cannot unfortunately be just an uint64 array, because it
 	// results in "unaligned 64-bit atomic operation" errors on 32-bit platforms.

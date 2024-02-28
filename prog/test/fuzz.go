@@ -65,7 +65,7 @@ func FuzzParseLog(data []byte) int {
 }
 
 var fuzzBuffer = make([]byte, prog.ExecBufferSize)
-var fuzzTarget, fuzzChoiceTable = func() (*prog.Target, *prog.ChoiceTable) {
+var fuzzTarget, fuzzChoiceTable = func() (*prog.Target, prog.ChoiceTable) {
 	prog.Debug()
 	target, err := prog.GetTarget(targets.TestOS, targets.TestArch64)
 	if err != nil {

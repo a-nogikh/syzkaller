@@ -439,7 +439,7 @@ func runMutationTests(t *testing.T, tests [][2]string, valid bool) {
 	}
 }
 
-func buildTestContext(test [2]string, target *Target) (rs rand.Source, ct *ChoiceTable, p, goal *Prog, err error) {
+func buildTestContext(test [2]string, target *Target) (rs rand.Source, ct ChoiceTable, p, goal *Prog, err error) {
 	p, err = target.Deserialize([]byte(test[0]), Strict)
 	if err != nil {
 		return

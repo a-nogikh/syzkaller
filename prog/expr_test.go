@@ -176,7 +176,7 @@ func TestConditionalMinimize(t *testing.T) {
 	}
 }
 
-func genConditionalFieldProg(target *Target, ct *ChoiceTable, r *randGen) *Prog {
+func genConditionalFieldProg(target *Target, ct ChoiceTable, r *randGen) *Prog {
 	s := newState(target, ct, nil)
 	calls := r.generateParticularCall(s, target.SyscallMap["test$conditional_struct"])
 	return &Prog{

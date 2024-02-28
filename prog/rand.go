@@ -585,7 +585,7 @@ func (r *randGen) generateCall(s *state, p *Prog, insertionPoint int) []*Call {
 			biasCall = insertionCall.ID
 		}
 	}
-	idx := s.ct.choose(r.Rand, biasCall)
+	idx := s.ct.Choose(r.Rand, biasCall)
 	meta := r.target.Syscalls[idx]
 	return r.generateParticularCall(s, meta)
 }

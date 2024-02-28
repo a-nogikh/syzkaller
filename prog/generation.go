@@ -9,7 +9,7 @@ import (
 
 // Generate generates a random program with ncalls calls.
 // ct contains a set of allowed syscalls, if nil all syscalls are used.
-func (target *Target) Generate(rs rand.Source, ncalls int, ct *ChoiceTable) *Prog {
+func (target *Target) Generate(rs rand.Source, ncalls int, ct ChoiceTable) *Prog {
 	p := &Prog{
 		Target: target,
 	}

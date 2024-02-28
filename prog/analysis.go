@@ -18,7 +18,7 @@ import (
 
 type state struct {
 	target    *Target
-	ct        *ChoiceTable
+	ct        ChoiceTable
 	corpus    []*Prog
 	files     map[string]bool
 	resources map[string][]*ResultArg
@@ -28,7 +28,7 @@ type state struct {
 }
 
 // analyze analyzes the program p up to but not including call c.
-func analyze(ct *ChoiceTable, corpus []*Prog, p *Prog, c *Call) *state {
+func analyze(ct ChoiceTable, corpus []*Prog, p *Prog, c *Call) *state {
 	s := newState(p.Target, ct, corpus)
 	resources := true
 	for _, c1 := range p.Calls {
@@ -40,7 +40,7 @@ func analyze(ct *ChoiceTable, corpus []*Prog, p *Prog, c *Call) *state {
 	return s
 }
 
-func newState(target *Target, ct *ChoiceTable, corpus []*Prog) *state {
+func newState(target *Target, ct ChoiceTable, corpus []*Prog) *state {
 	s := &state{
 		target:    target,
 		ct:        ct,
