@@ -131,7 +131,7 @@ func (mgr *Manager) collectStats() []UIStat {
 		{Name: "uptime", Value: fmt.Sprint(time.Since(mgr.startTime) / 1e9 * 1e9)},
 		{Name: "fuzzing", Value: fmt.Sprint(mgr.fuzzingTime / 60e9 * 60e9)},
 		{Name: "corpus", Value: fmt.Sprint(mgr.corpus.Stat().Progs), Link: "/corpus"},
-		{Name: "triage queue", Value: fmt.Sprint(len(mgr.candidates))},
+		{Name: "triage queue", Value: fmt.Sprint(mgr.stats.triageQueueLen.get())},
 		{Name: "signal", Value: fmt.Sprint(rawStats["signal"])},
 		{Name: "coverage", Value: fmt.Sprint(rawStats["coverage"]), Link: "/cover"},
 	}

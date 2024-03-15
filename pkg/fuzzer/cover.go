@@ -9,6 +9,9 @@ import (
 	"github.com/google/syzkaller/pkg/signal"
 )
 
+// TODO: we need to channel the new max signal to distribute it among VMs.
+// Or make rpc.go explicitly call GrabNewSignal() on every exchange call??
+
 // Cover keeps track of the signal known to the fuzzer.
 type Cover struct {
 	mu        sync.RWMutex
@@ -33,6 +36,12 @@ func (cover *Cover) addRawMaxSignal(signal []uint32, prio uint8) signal.Signal {
 	cover.maxSignal.Merge(diff)
 	cover.newSignal.Merge(diff)
 	return diff
+}
+
+func (cover *Cover) CopyMaxSignal() signal.Signal {
+	cover.mu.RLock()
+	defer cover.mu.RUnlock()
+	return cover.maxSignal.Copy()
 }
 
 func (cover *Cover) GrabNewSignal() signal.Signal {

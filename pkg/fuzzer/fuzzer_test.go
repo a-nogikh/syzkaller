@@ -22,6 +22,7 @@ import (
 	"github.com/google/syzkaller/pkg/csource"
 	"github.com/google/syzkaller/pkg/ipc"
 	"github.com/google/syzkaller/pkg/ipc/ipcconfig"
+	"github.com/google/syzkaller/pkg/rpctype"
 	"github.com/google/syzkaller/pkg/testutil"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys/targets"
@@ -40,9 +41,10 @@ func TestFuzz(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	corpusUpdates := make(chan corpus.NewItemEvent)
 	fuzzer := NewFuzzer(ctx, &Config{
 		Debug:  true,
-		Corpus: corpus.NewCorpus(ctx),
+		Corpus: corpus.NewMonitoredCorpus(ctx, corpusUpdates),
 		Logf: func(level int, msg string, args ...interface{}) {
 			if level > 1 {
 				return
@@ -53,7 +55,6 @@ func TestFuzz(t *testing.T) {
 		EnabledCalls: map[*prog.Syscall]bool{
 			target.SyscallMap["syz_test_fuzzer1"]: true,
 		},
-		NewInputs: make(chan corpus.NewInput),
 	}, rand.New(testutil.RandSource(t)), target)
 
 	go func() {
@@ -61,8 +62,8 @@ func TestFuzz(t *testing.T) {
 			select {
 			case <-ctx.Done():
 				return
-			case c := <-fuzzer.Config.NewInputs:
-				t.Logf("new prog:\n%s", c.Prog)
+			case u := <-corpusUpdates:
+				t.Logf("new prog:\n%s", u.ProgData)
 			}
 		}
 	}()
@@ -128,7 +129,7 @@ func emulateExec(req *Request) (*Result, string, error) {
 		if req.NeedCover {
 			callInfo.Cover = []uint32{cover}
 		}
-		if req.NeedSignal {
+		if req.NeedSignal != rpctype.NoSignal {
 			callInfo.Signal = []uint32{cover}
 		}
 		info.Calls = append(info.Calls, callInfo)
@@ -162,7 +163,7 @@ func (f *testFuzzer) oneMore() bool {
 	defer f.mu.Unlock()
 	f.iter++
 	if f.iter%100 == 0 {
-		stat := f.fuzzer.Stat()
+		stat := f.fuzzer.Stats()
 		f.t.Logf("<iter %d>: corpus %d, signal %d, max signal %d, crash types %d",
 			f.iter, stat.Progs, stat.Signal, stat.MaxSignal, len(f.crashes))
 	}
@@ -238,7 +239,7 @@ var crashRe = regexp.MustCompile(`{{CRASH: (.*?)}}`)
 func (proc *executorProc) execute(req *Request) (*Result, string, error) {
 	execOpts := proc.execOpts
 	// TODO: it's duplicated from fuzzer.go.
-	if req.NeedSignal {
+	if req.NeedSignal != rpctype.NoSignal {
 		execOpts.Flags |= ipc.FlagCollectSignal
 	}
 	if req.NeedCover {

@@ -13,15 +13,15 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/pkg/corpus"
-	"github.com/google/syzkaller/pkg/hash"
 	"github.com/google/syzkaller/pkg/ipc"
+	"github.com/google/syzkaller/pkg/rpctype"
+	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/prog"
 )
 
 type Fuzzer struct {
-	Config         *Config
-	Cover          *Cover
-	NeedCandidates chan struct{}
+	Config *Config
+	Cover  *Cover
 
 	ctx    context.Context
 	mu     sync.Mutex
@@ -39,18 +39,13 @@ type Fuzzer struct {
 	nextJobID    atomic.Int64
 
 	queuedCandidates atomic.Int64
-	// If the source of candidates runs out of them, we risk
-	// generating too many needCandidate requests (one for
-	// each Config.MinCandidates). We prevent this with candidatesRequested.
-	candidatesRequested atomic.Bool
 }
 
 func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
 	target *prog.Target) *Fuzzer {
 	f := &Fuzzer{
-		Config:         cfg,
-		Cover:          &Cover{},
-		NeedCandidates: make(chan struct{}, 1),
+		Config: cfg,
+		Cover:  &Cover{},
 
 		ctx:    ctx,
 		stats:  map[string]uint64{},
@@ -85,17 +80,15 @@ type Config struct {
 	NoMutateCalls  map[int]bool
 	LeakChecking   bool
 	FetchRawCover  bool
-	// If the number of queued candidates is less than MinCandidates,
-	// NeedCandidates is triggered.
-	MinCandidates uint
-	NewInputs     chan corpus.NewInput
+	NewInputFilter func(input *corpus.NewInput) bool
 }
 
 type Request struct {
 	Prog         *prog.Prog
 	NeedCover    bool
 	NeedRawCover bool
-	NeedSignal   bool
+	NeedSignal   rpctype.SignalType
+	SignalFilter signal.Signal // If specified, the resulting signal MAY be a subset of it.
 	NeedHints    bool
 	// Fields that are only relevant within pkg/fuzzer.
 	flags   ProgTypes
@@ -113,7 +106,7 @@ func (fuzzer *Fuzzer) Done(req *Request, res *Result) {
 	// Triage individual calls.
 	// We do it before unblocking the waiting threads because
 	// it may result it concurrent modification of req.Prog.
-	if req.NeedSignal && res.Info != nil {
+	if req.NeedSignal != rpctype.NoSignal && res.Info != nil {
 		for call, info := range res.Info.Calls {
 			fuzzer.triageProgCall(req.Prog, &info, call, req.flags)
 		}
@@ -164,7 +157,6 @@ func signalPrio(p *prog.Prog, info *ipc.CallInfo, call int) (prio uint8) {
 
 type Candidate struct {
 	Prog      *prog.Prog
-	Hash      hash.Sig
 	Smashed   bool
 	Minimized bool
 }
@@ -177,13 +169,6 @@ func (fuzzer *Fuzzer) NextInput() *Request {
 	if req.stat == statCandidate {
 		if fuzzer.queuedCandidates.Add(-1) < 0 {
 			panic("queuedCandidates is out of sync")
-		}
-	}
-	if fuzzer.NeedCandidatesNow() &&
-		!fuzzer.candidatesRequested.CompareAndSwap(false, true) {
-		select {
-		case fuzzer.NeedCandidates <- struct{}{}:
-		default:
 		}
 	}
 	return req
@@ -224,16 +209,11 @@ func (fuzzer *Fuzzer) Logf(level int, msg string, args ...interface{}) {
 	fuzzer.Config.Logf(level, msg, args...)
 }
 
-func (fuzzer *Fuzzer) NeedCandidatesNow() bool {
-	return fuzzer.queuedCandidates.Load() < int64(fuzzer.Config.MinCandidates)
-}
-
 func (fuzzer *Fuzzer) AddCandidates(candidates []Candidate) {
 	fuzzer.queuedCandidates.Add(int64(len(candidates)))
 	for _, candidate := range candidates {
 		fuzzer.pushExec(candidateRequest(candidate), priority{candidatePrio})
 	}
-	fuzzer.candidatesRequested.Store(false)
 }
 
 func (fuzzer *Fuzzer) rand() *rand.Rand {
@@ -247,7 +227,7 @@ func (fuzzer *Fuzzer) pushExec(req *Request, prio priority) {
 	if req.stat == "" {
 		panic("Request.Stat field must be set")
 	}
-	if req.NeedHints && (req.NeedCover || req.NeedSignal) {
+	if req.NeedHints && (req.NeedCover || req.NeedSignal != rpctype.NoSignal) {
 		panic("Request.NeedHints is mutually exclusive with other fields")
 	}
 	fuzzer.nextExec.push(&priorityQueueItem[*Request]{
@@ -350,14 +330,16 @@ func (fuzzer *Fuzzer) logCurrentStats() {
 	}
 }
 
-type Stat struct {
+type Stats struct {
 	CoverStat
 	corpus.Stat
+	Candidates int
 }
 
-func (fuzzer *Fuzzer) Stat() Stat {
-	return Stat{
-		CoverStat: fuzzer.Cover.Stat(),
-		Stat:      fuzzer.Config.Corpus.Stat(),
+func (fuzzer *Fuzzer) Stats() Stats {
+	return Stats{
+		CoverStat:  fuzzer.Cover.Stat(),
+		Stat:       fuzzer.Config.Corpus.Stat(),
+		Candidates: int(fuzzer.queuedCandidates.Load()),
 	}
 }

@@ -31,6 +31,7 @@ type Stats struct {
 	corpusCoverFiltered Stat
 	corpusSignal        Stat
 	maxSignal           Stat
+	triageQueueLen      Stat
 
 	mu         sync.Mutex
 	namedStats map[string]uint64

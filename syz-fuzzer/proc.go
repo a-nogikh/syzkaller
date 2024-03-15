@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/syzkaller/pkg/fuzzer"
 	"github.com/google/syzkaller/pkg/ipc"
 	"github.com/google/syzkaller/pkg/log"
+	"github.com/google/syzkaller/pkg/rpctype"
 	"github.com/google/syzkaller/prog"
 )
 
@@ -44,9 +44,13 @@ func newProc(tool *FuzzerTool, execOpts *ipc.ExecOpts, pid int) (*Proc, error) {
 func (proc *Proc) loop() {
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano() + int64(proc.pid)))
 	for {
-		req := proc.tool.fuzzer.NextInput()
+		req := <-proc.tool.inputs
+		p := proc.tool.deserializeInput(req.ProgData)
+		if p == nil {
+			log.SyzFatalf("failed to deserialize input")
+		}
 		opts := *proc.execOpts
-		if !req.NeedSignal {
+		if req.NeedSignal == rpctype.NoSignal {
 			opts.Flags &= ^ipc.FlagCollectSignal
 		}
 		if req.NeedCover {
@@ -62,18 +66,25 @@ func (proc *Proc) loop() {
 		const restartIn = 600
 		restart := rnd.Intn(restartIn) == 0
 		if (restart || proc.tool.resetAccState) &&
-			(req.NeedCover || req.NeedSignal || req.NeedHints) {
+			(req.NeedCover || req.NeedSignal != rpctype.NoSignal || req.NeedHints) {
 			proc.env.ForceRestart()
 		}
-		info := proc.executeRaw(&opts, req.Prog)
-		proc.tool.fuzzer.Done(req, &fuzzer.Result{
-			Info: info,
-		})
+		info := proc.executeRaw(&opts, p)
+		if req.NeedSignal == rpctype.NewSignal {
+			proc.tool.diffMaxSignal(info)
+		}
+		if req.SignalFilter != nil {
+			// TODO: we can filter without maps if req.SignalFilter is sorted.
+			filterProgInfo(info, req.SignalFilter)
+		}
+		proc.tool.results <- rpctype.ExecutionResult{
+			ID:   req.ID,
+			Info: *info,
+		}
 	}
 }
 
 func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog) *ipc.ProgInfo {
-	proc.tool.checkDisabledCalls(p)
 	for try := 0; ; try++ {
 		var output []byte
 		var info *ipc.ProgInfo

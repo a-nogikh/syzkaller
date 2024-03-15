@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/hash"
-	"github.com/google/syzkaller/pkg/rpctype"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/prog"
 )
@@ -21,6 +20,7 @@ type Corpus struct {
 	mu      sync.RWMutex
 	progs   map[string]*Item
 	signal  signal.Signal // signal of inputs in corpus
+	cover   cover.Cover
 	updates chan<- NewItemEvent
 	ProgramsList
 }
@@ -62,15 +62,6 @@ func (item Item) StringCall() string {
 	return stringCall(item.Prog, item.Call)
 }
 
-// RPCInputShort() does not include coverage.
-func (item Item) RPCInputShort() rpctype.Input {
-	return rpctype.Input{
-		Call:   item.Call,
-		Prog:   item.ProgData,
-		Signal: item.Signal.Serialize(),
-	}
-}
-
 func stringCall(p *prog.Prog, call int) string {
 	if call != -1 {
 		return p.Calls[call].Meta.Name
@@ -90,20 +81,11 @@ func (item NewInput) StringCall() string {
 	return stringCall(item.Prog, item.Call)
 }
 
-func (item NewInput) RPCInput() rpctype.Input {
-	return rpctype.Input{
-		Call:     item.Call,
-		Prog:     item.Prog.Serialize(),
-		Signal:   item.Signal.Serialize(),
-		Cover:    item.Cover,
-		RawCover: item.RawCover,
-	}
-}
-
 type NewItemEvent struct {
 	Sig      string
 	Exists   bool
 	ProgData []byte
+	NewCover []uint32
 }
 
 func (corpus *Corpus) Save(inp NewInput) {
@@ -154,6 +136,7 @@ func (corpus *Corpus) Save(inp NewInput) {
 		corpus.saveProgram(inp.Prog, inp.Signal)
 	}
 	corpus.signal.Merge(inp.Signal)
+	newCover := corpus.cover.MergeDiff(inp.Cover)
 	if corpus.updates != nil {
 		select {
 		case <-corpus.ctx.Done():
@@ -161,6 +144,7 @@ func (corpus *Corpus) Save(inp NewInput) {
 			Sig:      sig,
 			Exists:   exists,
 			ProgData: progData,
+			NewCover: newCover,
 		}:
 		}
 	}
@@ -198,6 +182,7 @@ func (corpus *Corpus) Item(sig string) *Item {
 type Stat struct {
 	Progs  int
 	Signal int
+	Cover  int
 }
 
 func (corpus *Corpus) Stat() Stat {
@@ -206,6 +191,7 @@ func (corpus *Corpus) Stat() Stat {
 	return Stat{
 		Progs:  len(corpus.progs),
 		Signal: len(corpus.signal),
+		Cover:  len(corpus.cover),
 	}
 }
 
