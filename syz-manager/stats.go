@@ -32,6 +32,8 @@ type Stats struct {
 	corpusCoverFiltered Stat
 	corpusSignal        Stat
 	maxSignal           Stat
+	triageQueueLen      Stat
+	fuzzerJobs          Stat
 
 	mu         sync.Mutex
 	namedStats map[string]uint64
@@ -73,6 +75,7 @@ func (stats *Stats) all() map[string]uint64 {
 		"signal":            stats.corpusSignal.get(),
 		"max signal":        stats.maxSignal.get(),
 		"rpc traffic (MB)":  stats.rpcTraffic.get() / 1e6,
+		"fuzzer jobs":       stats.fuzzerJobs.get(),
 	}
 	if stats.haveHub {
 		m["hub: send prog add"] = stats.hubSendProgAdd.get()
