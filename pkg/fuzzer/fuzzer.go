@@ -369,3 +369,15 @@ func (fuzzer *Fuzzer) Stats() Stats {
 		RunningJobs: int(fuzzer.runningJobs.Load()),
 	}
 }
+
+func (fuzzer *Fuzzer) RotateMaxSignal(items int) {
+	corpusSignal := fuzzer.Config.Corpus.Signal()
+	pureMaxSignal := fuzzer.Cover.pureMaxSignal(corpusSignal)
+	if pureMaxSignal.Len() < items {
+		items = pureMaxSignal.Len()
+	}
+	fuzzer.Logf(1, "rotate %d max signal elements", items)
+
+	delta := pureMaxSignal.RandomSubset(fuzzer.rand(), items)
+	fuzzer.Cover.subtract(delta)
+}
