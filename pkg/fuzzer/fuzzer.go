@@ -188,13 +188,21 @@ func (fuzzer *Fuzzer) nextInput() *Request {
 	// The fuzzer may get biased to one specific part of the kernel.
 	// Periodically generate random programs to ensure that the coverage
 	// is more uniform.
-	if !fuzzer.outOfQueue.Load() ||
-		fuzzer.outOfQueueNext.Add(1)%400 > 0 {
+	outOfQueue := fuzzer.outOfQueue.Load() && fuzzer.outOfQueueNext.Add(1)%400 == 0
+	if !outOfQueue {
 		nextExec := fuzzer.nextExec.tryPop()
 		if nextExec != nil {
 			return nextExec.value
 		}
 	}
+	rnd := fuzzer.rand()
+	// With a small probability, start a new hints job.
+	// This way we give another chance to the corpus items that
+	// were not fully smashed.
+	if !outOfQueue && fuzzer.Config.Comparisons && rnd.Float64() < 0.01 {
+		fuzzer.startJob(fuzzer.randomHintsJob(rnd))
+	}
+
 	// Either generate a new input or mutate an existing one.
 	mutateRate := 0.95
 	if !fuzzer.Config.Coverage {
@@ -202,7 +210,6 @@ func (fuzzer *Fuzzer) nextInput() *Request {
 		// more frequently because fallback signal is weak.
 		mutateRate = 0.5
 	}
-	rnd := fuzzer.rand()
 	if rnd.Float64() < mutateRate {
 		req := mutateProgRequest(fuzzer, rnd)
 		if req != nil {

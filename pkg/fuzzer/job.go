@@ -280,14 +280,10 @@ type smashJob struct {
 func (job *smashJob) run(fuzzer *Fuzzer) {
 	fuzzer.Logf(2, "smashing the program %s (call=%d):", job.p, job.call)
 	if fuzzer.Config.Comparisons && job.call >= 0 {
-		fuzzer.startJob(&hintsJob{
-			p:           job.p.Clone(),
-			call:        job.call,
-			jobPriority: newJobPriority(smashPrio),
-		})
+		fuzzer.startJob(newHintsJob(job.p.Clone(), job.call))
 	}
 
-	const iters = 100
+	const iters = 50
 	rnd := fuzzer.rand()
 	for i := 0; i < iters; i++ {
 		p := job.p.Clone()
@@ -367,6 +363,20 @@ type hintsJob struct {
 	jobPriority
 }
 
+func newHintsJob(p *prog.Prog, call int) *hintsJob {
+	return &hintsJob{
+		p:           p,
+		call:        call,
+		jobPriority: newJobPriority(smashPrio),
+	}
+}
+
+func (fuzzer *Fuzzer) randomHintsJob(rnd *rand.Rand) *hintsJob {
+	programs := fuzzer.Config.Corpus.Programs()
+	p := programs[rnd.Intn(len(programs))].Clone()
+	return newHintsJob(p, rnd.Intn(len(p.Calls)))
+}
+
 func (job *hintsJob) run(fuzzer *Fuzzer) {
 	// First execute the original program to dump comparisons from KCOV.
 	p := job.p
@@ -380,14 +390,37 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
 	}
 	// Then mutate the initial program for every match between
 	// a syscall argument and a comparison operand.
-	// Execute each of such mutants to check if it gives new coverage.
+
+	const maxIterations = 50
+
+	// As the total number of hint mutations may be quite large,
+	// let's apply the reservoir sampling algorithm to choose
+	// maxIterations of them.
+	var total int
+	var candidates []*prog.Prog
+	r := fuzzer.rand()
 	p.MutateWithHints(job.call, result.Info.Calls[job.call].Comps,
 		func(p *prog.Prog) bool {
-			result := fuzzer.exec(job, &Request{
-				Prog:       p,
-				NeedSignal: rpctype.NewSignal,
-				stat:       statHint,
-			})
-			return !result.Stop
+			if len(candidates) < maxIterations {
+				candidates = append(candidates, p.Clone())
+				return true
+			}
+			total++
+			if idx := r.Intn(total); idx < maxIterations {
+				candidates[idx] = p.Clone()
+			}
+			return true
 		})
+
+	// Now execute the resulting candidate programs.
+	for _, p := range candidates {
+		result := fuzzer.exec(job, &Request{
+			Prog:       p,
+			NeedSignal: rpctype.NewSignal,
+			stat:       statHint,
+		})
+		if result.Stop {
+			return
+		}
+	}
 }
