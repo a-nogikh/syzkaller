@@ -13,6 +13,7 @@ const (
 	statMinimize       = "exec minimize"
 	statSmash          = "exec smash"
 	statHint           = "exec hints"
+	statFuzzHint       = "exec fuzz hints"
 	statSeed           = "exec seeds"
 	statCollide        = "exec collide"
 	statExecTotal      = "exec total"

@@ -175,6 +175,7 @@ func (fuzzer *Fuzzer) NextInput() *Request {
 
 func (fuzzer *Fuzzer) nextInput() *Request {
 	nextExec := fuzzer.nextExec.tryPop()
+	var skippedInput bool
 
 	// The fuzzer may become too interested in potentially very long hint and smash jobs.
 	// Let's leave more space for new input space exploration.
@@ -183,6 +184,14 @@ func (fuzzer *Fuzzer) nextInput() *Request {
 			return nextExec.value
 		} else {
 			fuzzer.nextExec.push(nextExec)
+			skippedInput = true
+		}
+	}
+	rnd := fuzzer.rand()
+	if !skippedInput && fuzzer.Config.Comparisons && rnd.Intn(100) == 5 {
+		job := randomHintJob(fuzzer, rnd)
+		if job != nil {
+			fuzzer.startJob(job)
 		}
 	}
 
@@ -193,7 +202,6 @@ func (fuzzer *Fuzzer) nextInput() *Request {
 		// more frequently because fallback signal is weak.
 		mutateRate = 0.5
 	}
-	rnd := fuzzer.rand()
 	if rnd.Float64() < mutateRate {
 		req := mutateProgRequest(fuzzer, rnd)
 		if req != nil {

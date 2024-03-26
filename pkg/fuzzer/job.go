@@ -75,6 +75,21 @@ func genProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *Request {
 	}
 }
 
+func randomHintJob(fuzzer *Fuzzer, rnd *rand.Rand) job {
+	progs := fuzzer.Config.Corpus.Programs()
+	if len(progs) == 0 {
+		return nil
+	}
+	p := progs[rnd.Intn(len(progs))].Clone()
+	p.Mutate(rnd,
+		prog.RecommendedCalls,
+		fuzzer.ChoiceTable(),
+		fuzzer.Config.NoMutateCalls,
+		progs,
+	)
+	return newHintsJob(p, -1)
+}
+
 func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *Request {
 	p := fuzzer.Config.Corpus.ChooseProgram(rnd)
 	if p == nil {
@@ -394,13 +409,28 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
 	// Then mutate the initial program for every match between
 	// a syscall argument and a comparison operand.
 	// Execute each of such mutants to check if it gives new coverage.
-	p.MutateWithHints(job.call, result.Info.Calls[job.call].Comps,
-		func(p *prog.Prog) bool {
-			result := fuzzer.exec(job, &Request{
-				Prog:       p,
-				NeedSignal: rpctype.NewSignal,
-				stat:       statHint,
+
+	stat := statHint
+	if job.call < 0 {
+		stat = statFuzzHint
+	}
+
+	for i := 0; i < len(p.Calls); i++ {
+		comps := result.Info.Calls[i].Comps
+		if len(comps) == 0 {
+			continue
+		}
+		if job.call >= 0 && job.call != i {
+			continue
+		}
+		p.MutateWithHints(i, comps,
+			func(p *prog.Prog) bool {
+				result := fuzzer.exec(job, &Request{
+					Prog:       p,
+					NeedSignal: rpctype.NewSignal,
+					stat:       stat,
+				})
+				return !result.Stop
 			})
-			return !result.Stop
-		})
+	}
 }
