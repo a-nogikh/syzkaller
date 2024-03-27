@@ -6,8 +6,10 @@ package fuzzer
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"math/rand"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +41,8 @@ type Fuzzer struct {
 
 	runningJobs      atomic.Int64
 	queuedCandidates atomic.Int64
+
+	perFuzzOpts map[string]*big.Float
 }
 
 func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
@@ -56,7 +60,8 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
 		// regenerating the table, we don't want to repeat it right away.
 		ctRegenerate: make(chan struct{}),
 
-		nextExec: makePriorityQueue[*Request](),
+		nextExec:    makePriorityQueue[*Request](),
+		perFuzzOpts: map[string]*big.Float{},
 	}
 	f.updateChoiceTable(nil)
 	go f.choiceTableUpdater()
@@ -88,10 +93,11 @@ type Request struct {
 	NeedHints    bool
 	SignalFilter signal.Signal // If specified, the resulting signal MAY be a subset of it.
 	// Fields that are only relevant within pkg/fuzzer.
-	flags   ProgTypes
-	stat    string
-	result  *Result
-	resultC chan *Result
+	flags    ProgTypes
+	stat     string
+	result   *Result
+	resultC  chan *Result
+	fuzzOpts *prog.MutateOpts
 }
 
 type Result struct {
@@ -99,39 +105,61 @@ type Result struct {
 	Stop bool
 }
 
+var discountRate = big.NewFloat(0.998)
+
 func (fuzzer *Fuzzer) Done(req *Request, res *Result) {
 	// Triage individual calls.
 	// We do it before unblocking the waiting threads because
 	// it may result it concurrent modification of req.Prog.
+	var total int
 	if req.NeedSignal != rpctype.NoSignal && res.Info != nil {
 		for call, info := range res.Info.Calls {
-			fuzzer.triageProgCall(req.Prog, &info, call, req.flags)
+			total += fuzzer.triageProgCall(req.Prog, &info, call, req.flags)
 		}
-		fuzzer.triageProgCall(req.Prog, &res.Info.Extra, -1, req.flags)
+		total += fuzzer.triageProgCall(req.Prog, &res.Info.Extra, -1, req.flags)
 	}
 	// Unblock threads that wait for the result.
 	req.result = res
 	if req.resultC != nil {
 		req.resultC <- res
 	}
+	var fuzzOpts string
+	if req.fuzzOpts != nil {
+		fuzzOpts = fmt.Sprintf("%+v", req.fuzzOpts)
+	}
+
 	// Update stats.
 	fuzzer.mu.Lock()
 	fuzzer.stats[req.stat]++
+	if fuzzOpts != "" {
+		value := fuzzer.perFuzzOpts[fuzzOpts]
+		if value == nil {
+			value = big.NewFloat(0)
+		}
+		if total > 0 {
+			total = 1
+		}
+		xf := new(big.Float).SetPrec(100).SetInt64(int64(total))
+		value = value.SetPrec(100)
+		value.Mul(value, discountRate)
+		value.Add(value, xf)
+		fuzzer.perFuzzOpts[fuzzOpts] = value
+	}
+
 	fuzzer.mu.Unlock()
 }
 
-func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *ipc.CallInfo, call int,
-	flags ProgTypes) {
+func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *ipc.CallInfo, call int, flags ProgTypes) int {
 	prio := signalPrio(p, info, call)
 	newMaxSignal := fuzzer.Cover.addRawMaxSignal(info.Signal, prio)
 	if newMaxSignal.Empty() {
-		return
+		return 0
 	}
 	if flags&progInTriage > 0 {
 		// We are already triaging this exact prog.
 		// All newly found coverage is flaky.
 		fuzzer.Logf(2, "found new flaky signal in call %d in %s", call, p)
-		return
+		return newMaxSignal.Len()
 	}
 	fuzzer.Logf(2, "found new signal in call %d in %s", call, p)
 	fuzzer.startJob(&triageJob{
@@ -142,6 +170,7 @@ func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *ipc.CallInfo, call int,
 		flags:       flags,
 		jobPriority: triageJobPrio(flags),
 	})
+	return newMaxSignal.Len()
 }
 
 func signalPrio(p *prog.Prog, info *ipc.CallInfo, call int) (prio uint8) {
@@ -324,6 +353,25 @@ func (fuzzer *Fuzzer) logCurrentStats() {
 			fuzzer.nextExec.Len(), fuzzer.runningJobs.Load(), m.Alloc/1000/1000)
 		fuzzer.Logf(0, "%s", str)
 	}
+}
+
+type PerOpts struct {
+	Opts  string
+	Value float64
+}
+
+func (fuzzer *Fuzzer) QueryOpts() []PerOpts {
+	fuzzer.mu.Lock()
+	var keyValues []PerOpts
+	for key, value := range fuzzer.perFuzzOpts {
+		val, _ := value.Float64()
+		keyValues = append(keyValues, PerOpts{Opts: key, Value: val})
+	}
+	fuzzer.mu.Unlock()
+	sort.Slice(keyValues, func(i, j int) bool {
+		return keyValues[i].Value > keyValues[j].Value
+	})
+	return keyValues
 }
 
 func (fuzzer *Fuzzer) RotateMaxSignal(items int) {

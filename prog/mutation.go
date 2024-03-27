@@ -25,6 +25,36 @@ const maxBlobLen = uint64(100 << 10)
 // noMutate:    Set of IDs of syscalls which should not be mutated.
 // corpus:      The entire corpus, including original program p.
 func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[int]bool, corpus []*Prog) {
+	p.MutateWithOpts(rs, ncalls, ct, noMutate, corpus, DefaultMutateOpts)
+}
+
+var DefaultMutateOpts = MutateOpts{
+	ExpectedIterations: 3,
+	MutateArgCount:     3,
+	// Total weight is 1000.
+	SquashWeight:     200,
+	SpliceWeight:     8,
+	InsertWeight:     510,
+	MutateArgWeight:  255,
+	RemoveCallWeight: 27,
+}
+
+type MutateOpts struct {
+	ExpectedIterations int
+	MutateArgCount     int
+	SquashWeight       int
+	SpliceWeight       int
+	InsertWeight       int
+	MutateArgWeight    int
+	RemoveCallWeight   int
+}
+
+func (o MutateOpts) weight() int {
+	return o.SquashWeight + o.SpliceWeight + o.InsertWeight + o.MutateArgWeight + o.RemoveCallWeight
+}
+
+func (p *Prog) MutateWithOpts(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[int]bool, corpus []*Prog, opts MutateOpts) {
+	totalWeight := opts.weight()
 	r := newRand(p.Target, rs)
 	if ncalls < len(p.Calls) {
 		ncalls = len(p.Calls)
@@ -36,22 +66,33 @@ func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[
 		ct:       ct,
 		noMutate: noMutate,
 		corpus:   corpus,
+		opts:     opts,
 	}
-	for stop, ok := false, false; !stop; stop = ok && len(p.Calls) != 0 && r.oneOf(3) {
-		switch {
-		case r.oneOf(5):
+	for stop, ok := false, false; !stop; stop = ok && len(p.Calls) != 0 && r.oneOf(opts.ExpectedIterations) {
+		val := r.Intn(totalWeight)
+		val -= opts.SquashWeight
+		if val < 0 {
 			// Not all calls have anything squashable,
 			// so this has lower priority in reality.
 			ok = ctx.squashAny()
-		case r.nOutOf(1, 100):
-			ok = ctx.splice()
-		case r.nOutOf(20, 31):
-			ok = ctx.insertCall()
-		case r.nOutOf(10, 11):
-			ok = ctx.mutateArg()
-		default:
-			ok = ctx.removeCall()
+			continue
 		}
+		val -= opts.SpliceWeight
+		if val < 0 {
+			ok = ctx.splice()
+			continue
+		}
+		val -= opts.InsertWeight
+		if val < 0 {
+			ok = ctx.insertCall()
+			continue
+		}
+		val -= opts.MutateArgWeight
+		if val < 0 {
+			ok = ctx.mutateArg()
+			continue
+		}
+		ok = ctx.removeCall()
 	}
 	p.sanitizeFix()
 	p.debugValidate()
@@ -69,6 +110,7 @@ type mutator struct {
 	ct       *ChoiceTable // ChoiceTable for syscalls.
 	noMutate map[int]bool // Set of IDs of syscalls which should not be mutated.
 	corpus   []*Prog      // The entire corpus, including original program p.
+	opts     MutateOpts
 }
 
 // This function selects a random other program p0 out of the corpus, and
@@ -184,7 +226,7 @@ func (ctx *mutator) mutateArg() bool {
 		return false
 	}
 	updateSizes := true
-	for stop, ok := false, false; !stop; stop = ok && r.oneOf(3) {
+	for stop, ok := false, false; !stop; stop = ok && r.oneOf(ctx.opts.MutateArgCount) {
 		ok = true
 		ma := &mutationArgs{target: p.Target}
 		ForeachArg(c, ma.collectArg)

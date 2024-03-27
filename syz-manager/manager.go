@@ -1416,6 +1416,7 @@ func (mgr *Manager) machineChecked(a *rpctype.CheckArgs, enabledSyscalls map[*pr
 	mgr.loadCorpus()
 	go mgr.fuzzerLoop(fuzzerObj)
 	go mgr.fuzzerSignalRotation(fuzzerObj)
+	go mgr.saveExperimentLoop(fuzzerObj)
 }
 
 // We need this method since we're not supposed to access Manager fields from RPCServer.
@@ -1451,6 +1452,22 @@ func (mgr *Manager) fuzzerSignalRotation(fuzzer *fuzzer.Fuzzer) {
 		fuzzer.RotateMaxSignal(rotateSignals)
 		lastRotation = time.Now()
 		lastExecTotal = mgr.stats.execTotal.get()
+	}
+}
+
+func (mgr *Manager) saveExperimentLoop(fuzzer *fuzzer.Fuzzer) {
+	for {
+		time.Sleep(time.Second * 30)
+		opts := fuzzer.QueryOpts()
+		file, err := os.Create("/tmp/best-opts.txt")
+		if err != nil {
+			log.Errorf("failed to open %v", err)
+			continue
+		}
+		for _, kv := range opts {
+			file.WriteString(fmt.Sprintf("%s: %v\n", kv.Opts, kv.Value))
+		}
+		file.Close()
 	}
 }
 

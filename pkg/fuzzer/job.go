@@ -81,16 +81,35 @@ func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *Request {
 		return nil
 	}
 	newP := p.Clone()
-	newP.Mutate(rnd,
+	usedOpts := generateOpts(rnd)
+	newP.MutateWithOpts(rnd,
 		prog.RecommendedCalls,
 		fuzzer.ChoiceTable(),
 		fuzzer.Config.NoMutateCalls,
 		fuzzer.Config.Corpus.Programs(),
+		*usedOpts,
 	)
 	return &Request{
 		Prog:       newP,
 		NeedSignal: rpctype.NewSignal,
 		stat:       statFuzz,
+		fuzzOpts:   usedOpts,
+	}
+}
+
+func oneOf[T any](rnd *rand.Rand, values ...T) T {
+	return values[rnd.Intn(len(values))]
+}
+
+func generateOpts(rnd *rand.Rand) *prog.MutateOpts {
+	return &prog.MutateOpts{
+		ExpectedIterations: oneOf(rnd, 3, 5, 10),
+		MutateArgCount:     oneOf(rnd, 1, 3, 5, 10),
+		SquashWeight:       oneOf(rnd, 50, 200, 500),
+		SpliceWeight:       oneOf(rnd, 8, 100, 200),
+		InsertWeight:       oneOf(rnd, 100, 300, 510),
+		MutateArgWeight:    oneOf(rnd, 50, 100, 250, 500),
+		RemoveCallWeight:   oneOf(rnd, 10, 27, 100),
 	}
 }
 
