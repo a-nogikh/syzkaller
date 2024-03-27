@@ -5,10 +5,12 @@ package corpus
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 
 	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/hash"
+	"github.com/google/syzkaller/pkg/learning"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/prog"
 )
@@ -23,6 +25,8 @@ type Corpus struct {
 	cover   cover.Cover   // total coverage of all items
 	updates chan<- NewItemEvent
 	ProgramsList
+	exp3 learning.EXP3[*prog.Prog]
+	disc learning.ExpectedMAB[*prog.Prog]
 }
 
 func NewCorpus(ctx context.Context) *Corpus {
@@ -34,6 +38,13 @@ func NewMonitoredCorpus(ctx context.Context, updates chan<- NewItemEvent) *Corpu
 		ctx:     ctx,
 		progs:   make(map[string]*Item),
 		updates: updates,
+		exp3: learning.EXP3[*prog.Prog]{
+			ExplorationRate: 0.1,
+		},
+		disc: learning.ExpectedMAB[*prog.Prog]{
+			LearningRate:    0.25,
+			ExplorationRate: 0.1,
+		},
 	}
 }
 
@@ -133,9 +144,19 @@ func (corpus *Corpus) Save(inp NewInput) {
 			Cover:    inp.Cover,
 			Updates:  []ItemUpdate{update},
 		}
-		corpus.saveProgram(inp.Prog, inp.Signal)
 	}
 	corpus.signal.Merge(inp.Signal)
+	if !exists {
+		corpus.saveProgram(inp.Prog, inp.Signal)
+		corpus.exp3.AddArm(inp.Prog)
+
+		w := 0.0001
+		if total := corpus.signal.Len(); total > 0 {
+			w = float64(inp.Signal.Len()) / float64(total)
+		}
+		corpus.disc.AddWeightedArm(inp.Prog, w)
+	}
+
 	newCover := corpus.cover.MergeDiff(inp.Cover)
 	if corpus.updates != nil {
 		select {
@@ -207,4 +228,28 @@ func (corpus *Corpus) CallCover() map[string]*CallCov {
 		cc.Cover.Merge(inp.Cover)
 	}
 	return calls
+}
+
+func (corpus *Corpus) RandomEXP3(r *rand.Rand) learning.Action[*prog.Prog] {
+	corpus.mu.Lock()
+	defer corpus.mu.Unlock()
+	return corpus.exp3.Action(r)
+}
+
+func (corpus *Corpus) RandomEXP3Done(action learning.Action[*prog.Prog], reward float64) {
+	corpus.mu.Lock()
+	defer corpus.mu.Unlock()
+	corpus.exp3.SaveReward(action, reward)
+}
+
+func (corpus *Corpus) RandomDisc(r *rand.Rand) learning.Action[*prog.Prog] {
+	corpus.mu.Lock()
+	defer corpus.mu.Unlock()
+	return corpus.disc.Action(r)
+}
+
+func (corpus *Corpus) RandomDiscDone(action learning.Action[*prog.Prog], reward float64) {
+	corpus.mu.Lock()
+	defer corpus.mu.Unlock()
+	corpus.disc.SaveReward(action, reward)
 }

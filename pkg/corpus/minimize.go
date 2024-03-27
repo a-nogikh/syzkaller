@@ -38,4 +38,7 @@ func (corpus *Corpus) Minimize(cover bool) {
 		corpus.progs[inp.Sig] = inp
 		corpus.saveProgram(inp.Prog, inp.Signal)
 	}
+
+	corpus.exp3.Rebuild(corpus.ProgramsList.progs)
+	corpus.disc.Rebuild(corpus.ProgramsList.progs)
 }

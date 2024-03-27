@@ -64,12 +64,13 @@ func (proc *Proc) loop() {
 			(req.NeedCover || req.NeedSignal != rpctype.NoSignal || req.NeedHints) {
 			proc.env.ForceRestart()
 		}
-		info := proc.executeRaw(&opts, req.prog)
+		info, elapsed := proc.executeRaw(&opts, req.prog)
 		// Let's perform signal filtering in a separate thread to get the most
 		// exec/sec out of a syz-executor instance.
 		proc.tool.results <- executionResult{
 			ExecutionRequest: req.ExecutionRequest,
 			info:             info,
+			elapsed:          elapsed,
 		}
 	}
 }
@@ -86,11 +87,12 @@ func (proc *Proc) nextRequest() executionRequest {
 	return <-proc.tool.inputs
 }
 
-func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog) *ipc.ProgInfo {
+func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog) (*ipc.ProgInfo, time.Duration) {
 	for try := 0; ; try++ {
 		var output []byte
 		var info *ipc.ProgInfo
 		var hanged bool
+		var elapsed time.Duration
 		// On a heavily loaded VM, syz-executor may take significant time to start.
 		// Let's do it outside of the gate ticket.
 		err := proc.env.RestartIfNeeded(p.Target)
@@ -98,7 +100,7 @@ func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog) *ipc.ProgInfo {
 			// Limit concurrency.
 			ticket := proc.tool.gate.Enter()
 			proc.logProgram(opts, p)
-			output, info, hanged, err = proc.env.Exec(opts, p)
+			output, info, hanged, elapsed, err = proc.env.ExecWithElapsed(opts, p)
 			proc.tool.gate.Leave(ticket)
 		}
 		if err != nil {
@@ -107,7 +109,7 @@ func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog) *ipc.ProgInfo {
 				// but so far we don't have a better handling than counting this.
 				// This error is observed a lot on the seeded syz_mount_image calls.
 				proc.tool.bufferTooSmall.Add(1)
-				return nil
+				return nil, elapsed
 			}
 			if try > 10 {
 				log.SyzFatalf("executor %v failed %v times: %v", proc.pid, try, err)
@@ -118,7 +120,7 @@ func (proc *Proc) executeRaw(opts *ipc.ExecOpts, p *prog.Prog) *ipc.ProgInfo {
 			continue
 		}
 		log.Logf(2, "result hanged=%v: %s", hanged, output)
-		return info
+		return info, elapsed
 	}
 }
 

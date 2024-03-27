@@ -36,8 +36,9 @@ type ExecutionRequest struct {
 
 // ExecutionResult is sent after ExecutionRequest is completed.
 type ExecutionResult struct {
-	ID   int64
-	Info ipc.ProgInfo
+	ID      int64
+	Info    ipc.ProgInfo
+	Elapsed time.Duration
 }
 
 // ExchangeInfoRequest is periodically sent by syz-fuzzer to syz-manager.
