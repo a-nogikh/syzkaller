@@ -253,6 +253,12 @@ var rateLimit = time.NewTicker(1 * time.Second)
 // hanged: program hanged and was killed
 // err0: failed to start the process or bug in executor itself.
 func (env *Env) Exec(opts *ExecOpts, p *prog.Prog) (output []byte, info *ProgInfo, hanged bool, err0 error) {
+	output, info, hanged, _, err0 = env.ExecWithElapsed(opts, p)
+	return
+}
+
+func (env *Env) ExecWithElapsed(opts *ExecOpts, p *prog.Prog) (output []byte,
+	info *ProgInfo, hanged bool, elapsed time.Duration, err0 error) {
 	// Copy-in serialized program.
 	progSize, err := p.SerializeForExec(env.in)
 	if err != nil {
@@ -275,7 +281,9 @@ func (env *Env) Exec(opts *ExecOpts, p *prog.Prog) (output []byte, info *ProgInf
 		return
 	}
 
+	start := time.Now()
 	output, hanged, err0 = env.cmd.exec(opts, progData)
+	elapsed = time.Since(start)
 	if err0 != nil {
 		env.cmd.close()
 		env.cmd = nil

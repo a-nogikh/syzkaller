@@ -57,7 +57,8 @@ type FuzzerTool struct {
 // to the communication thread.
 type executionResult struct {
 	rpctype.ExecutionRequest
-	info *ipc.ProgInfo
+	info    *ipc.ProgInfo
+	elapsed time.Duration
 }
 
 // executionRequest offloads prog deseralization to another thread.
@@ -391,7 +392,10 @@ func (tool *FuzzerTool) exchangeDataWorker() {
 }
 
 func (tool *FuzzerTool) convertExecutionResult(res executionResult) rpctype.ExecutionResult {
-	ret := rpctype.ExecutionResult{ID: res.ID}
+	ret := rpctype.ExecutionResult{
+		ID:      res.ID,
+		Elapsed: res.elapsed,
+	}
 	if res.info != nil {
 		if res.NeedSignal == rpctype.NewSignal {
 			tool.diffMaxSignal(res.info)
