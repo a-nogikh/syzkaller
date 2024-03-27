@@ -84,6 +84,7 @@ func TestFuzz(t *testing.T) {
 		t.Logf("-----")
 		t.Logf("%s", p.Serialize())
 	}
+	t.Logf("named stats: %+v", fuzzer.Stats().Named)
 
 	assert.Equal(t, len(tf.expectedCrashes), len(tf.crashes),
 		"not all expected crashes were found")
