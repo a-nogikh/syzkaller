@@ -10,6 +10,7 @@ import (
 	"github.com/google/syzkaller/pkg/corpus"
 	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/ipc"
+	"github.com/google/syzkaller/pkg/learning"
 	"github.com/google/syzkaller/pkg/rpctype"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/prog"
@@ -76,7 +77,28 @@ func genProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *Request {
 }
 
 func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *Request {
-	p := fuzzer.Config.Corpus.ChooseProgram(rnd)
+	var p *prog.Prog
+	var justRand bool
+	var softMax, disc *learning.Action[*prog.Prog]
+	if progs := fuzzer.Config.Corpus.Programs(); len(progs) > 0 {
+		which := 0 //rnd.Intn(4)
+		if which == 0 {
+			action := fuzzer.Config.Corpus.RandomSoftMax(rnd)
+			softMax = &action
+			p = action.Arm
+		} else if which == 1 {
+			action := fuzzer.Config.Corpus.RandomDisc(rnd)
+			disc = &action
+			p = action.Arm
+		} else if which == 2 {
+			p = progs[rnd.Intn(len(progs))]
+			justRand = true
+		} else {
+			p = fuzzer.Config.Corpus.ChooseProgram(rnd)
+		}
+	} else {
+		p = fuzzer.Config.Corpus.ChooseProgram(rnd)
+	}
 	if p == nil {
 		return nil
 	}
@@ -91,6 +113,9 @@ func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *Request {
 		Prog:       newP,
 		NeedSignal: rpctype.NewSignal,
 		stat:       statFuzz,
+		softMax:    softMax,
+		disc:       disc,
+		justRand:   justRand,
 	}
 }
 

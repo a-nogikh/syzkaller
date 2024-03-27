@@ -14,6 +14,8 @@ import (
 
 	"github.com/google/syzkaller/pkg/corpus"
 	"github.com/google/syzkaller/pkg/ipc"
+	"github.com/google/syzkaller/pkg/learning"
+	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/rpctype"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/prog"
@@ -39,10 +41,27 @@ type Fuzzer struct {
 
 	runningJobs      atomic.Int64
 	queuedCandidates atomic.Int64
+
+	genFuzzMAB learning.MAB[string]
+
+	// MAB seed experiment.
+	avgFuzzSpeed *learning.RunningRatioAverage[float64]
+	avgGenSpeed  *learning.RunningRatioAverage[float64]
+
+	prioSpeed    *learning.RunningRatioAverage[float64]
+	softMaxSpeed *learning.RunningRatioAverage[float64]
+	randSpeed    *learning.RunningRatioAverage[float64]
+	discSpeed    *learning.RunningRatioAverage[float64]
 }
 
 func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
 	target *prog.Target) *Fuzzer {
+	genFuzz := &learning.PlainMAB[string]{
+		ExplorationRate: 0.02,
+		LearningRate:    0.0005,
+	}
+	genFuzz.AddArm(statGenerate)
+	genFuzz.AddArm(statFuzz)
 	f := &Fuzzer{
 		Config: cfg,
 		Cover:  &Cover{},
@@ -56,7 +75,16 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
 		// regenerating the table, we don't want to repeat it right away.
 		ctRegenerate: make(chan struct{}),
 
-		nextExec: makePriorityQueue[*Request](),
+		genFuzzMAB: genFuzz,
+		nextExec:   makePriorityQueue[*Request](),
+
+		avgFuzzSpeed: learning.NewRunningRatioAverage[float64](200000),
+		avgGenSpeed:  learning.NewRunningRatioAverage[float64](10000),
+
+		prioSpeed:    learning.NewRunningRatioAverage[float64](100000),
+		softMaxSpeed: learning.NewRunningRatioAverage[float64](100000),
+		randSpeed:    learning.NewRunningRatioAverage[float64](100000),
+		discSpeed:    learning.NewRunningRatioAverage[float64](100000),
 	}
 	f.updateChoiceTable(nil)
 	go f.choiceTableUpdater()
@@ -92,22 +120,29 @@ type Request struct {
 	stat    string
 	result  *Result
 	resultC chan *Result
+
+	softMax       *learning.Action[*prog.Prog]
+	disc          *learning.Action[*prog.Prog]
+	justRand      bool
+	genFuzzAction *learning.Action[string]
 }
 
 type Result struct {
-	Info *ipc.ProgInfo
-	Stop bool
+	Info    *ipc.ProgInfo
+	Elapsed time.Duration
+	Stop    bool
 }
 
 func (fuzzer *Fuzzer) Done(req *Request, res *Result) {
 	// Triage individual calls.
 	// We do it before unblocking the waiting threads because
 	// it may result it concurrent modification of req.Prog.
+	var newSignal int
 	if req.NeedSignal != rpctype.NoSignal && res.Info != nil {
 		for call, info := range res.Info.Calls {
-			fuzzer.triageProgCall(req.Prog, &info, call, req.flags)
+			newSignal += fuzzer.triageProgCall(req.Prog, &info, call, req.flags)
 		}
-		fuzzer.triageProgCall(req.Prog, &res.Info.Extra, -1, req.flags)
+		newSignal += fuzzer.triageProgCall(req.Prog, &res.Info.Extra, -1, req.flags)
 	}
 	// Unblock threads that wait for the result.
 	req.result = res
@@ -118,20 +153,66 @@ func (fuzzer *Fuzzer) Done(req *Request, res *Result) {
 	fuzzer.mu.Lock()
 	fuzzer.stats[req.stat]++
 	fuzzer.mu.Unlock()
+
+	elapsedSec := res.Elapsed.Seconds()
+	if elapsedSec > 0.001 && elapsedSec < 10 {
+		// There are cases when the time on the VMs is a mess.
+		fuzzer.handleMABs(req, res, elapsedSec, newSignal)
+	}
+}
+
+func (fuzzer *Fuzzer) handleMABs(req *Request, res *Result, elapsedSec float64, newSignal int) {
+	currSpeed := 0.0
+	if elapsedSec == 0 {
+		elapsedSec = 1.0
+	} else {
+		currSpeed = float64(newSignal) / elapsedSec
+	}
+	binaryReward := 0.0
+	if newSignal > 0 {
+		binaryReward = 1.0
+	}
+	reward := currSpeed
+	if req.softMax != nil {
+		fuzzer.Config.Corpus.RandomSoftMaxDone(*req.softMax, binaryReward)
+	}
+	if req.disc != nil {
+		fuzzer.Config.Corpus.RandomDiscDone(*req.disc, reward)
+	}
+	if req.genFuzzAction != nil {
+		fuzzer.mu.Lock()
+		fuzzer.genFuzzMAB.SaveReward(*req.genFuzzAction, binaryReward)
+		fuzzer.mu.Unlock()
+	}
+	if req.stat == statGenerate {
+		fuzzer.avgGenSpeed.Save(float64(newSignal), elapsedSec)
+	}
+	if req.stat == statFuzz {
+		fuzzer.avgFuzzSpeed.Save(float64(newSignal), elapsedSec)
+		if req.softMax != nil {
+			fuzzer.softMaxSpeed.Save(float64(newSignal), elapsedSec)
+		} else if req.disc != nil {
+			fuzzer.discSpeed.Save(float64(newSignal), elapsedSec)
+		} else if req.justRand {
+			fuzzer.randSpeed.Save(float64(newSignal), elapsedSec)
+		} else {
+			fuzzer.prioSpeed.Save(float64(newSignal), elapsedSec)
+		}
+	}
 }
 
 func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *ipc.CallInfo, call int,
-	flags ProgTypes) {
+	flags ProgTypes) int {
 	prio := signalPrio(p, info, call)
 	newMaxSignal := fuzzer.Cover.addRawMaxSignal(info.Signal, prio)
 	if newMaxSignal.Empty() {
-		return
+		return 0
 	}
 	if flags&progInTriage > 0 {
 		// We are already triaging this exact prog.
 		// All newly found coverage is flaky.
 		fuzzer.Logf(2, "found new flaky signal in call %d in %s", call, p)
-		return
+		return newMaxSignal.Len()
 	}
 	fuzzer.Logf(2, "found new signal in call %d in %s", call, p)
 	fuzzer.startJob(&triageJob{
@@ -142,6 +223,7 @@ func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *ipc.CallInfo, call int,
 		flags:       flags,
 		jobPriority: triageJobPrio(flags),
 	})
+	return newMaxSignal.Len()
 }
 
 func signalPrio(p *prog.Prog, info *ipc.CallInfo, call int) (prio uint8) {
@@ -336,4 +418,19 @@ func (fuzzer *Fuzzer) RotateMaxSignal(items int) {
 
 	delta := pureMaxSignal.RandomSubset(fuzzer.rand(), items)
 	fuzzer.Cover.subtract(delta)
+}
+
+func (fuzzer *Fuzzer) LogMAB() {
+	for {
+		select {
+		case <-time.After(time.Minute / 2):
+		case <-fuzzer.ctx.Done():
+			return
+		}
+		log.Logf(0, "avg prio returns: %.2f, softmax: %.2f, disc: %.2f, rand: %.2f",
+			fuzzer.prioSpeed.Load(), fuzzer.softMaxSpeed.Load(), fuzzer.discSpeed.Load(),
+			fuzzer.randSpeed.Load())
+		log.Logf(0, "avg fuzz new signal: %.3f, gen: %.3f",
+			fuzzer.avgFuzzSpeed.Load(), fuzzer.avgGenSpeed.Load())
+	}
 }

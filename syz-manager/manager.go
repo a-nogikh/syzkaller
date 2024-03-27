@@ -1417,6 +1417,7 @@ func (mgr *Manager) machineChecked(a *rpctype.CheckArgs, enabledSyscalls map[*pr
 	mgr.loadCorpus()
 	go mgr.fuzzerLoop(fuzzerObj)
 	go mgr.fuzzerSignalRotation(fuzzerObj)
+	go fuzzerObj.LogMAB()
 }
 
 // We need this method since we're not supposed to access Manager fields from RPCServer.

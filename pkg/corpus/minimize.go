@@ -38,4 +38,6 @@ func (corpus *Corpus) Minimize(cover bool) {
 		corpus.progs[inp.Sig] = inp
 		corpus.saveProgram(inp.Prog, inp.Signal)
 	}
+
+	corpus.softMax.Rebuild(corpus.ProgramsList.progs)
 }
