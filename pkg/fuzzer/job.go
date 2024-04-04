@@ -138,11 +138,29 @@ func (job *triageJob) run(fuzzer *Fuzzer) {
 	if stop || info.newStableSignal.Empty() {
 		return
 	}
+	pBefore := job.p.Clone()
+	pCall := job.call
 	if job.flags&progMinimized == 0 {
 		stop = job.minimize(fuzzer, info.newStableSignal)
 		if stop {
 			return
 		}
+		newSignal, stop := job.reproducedSignal(fuzzer, job.p, job.call, info.newStableSignal)
+		if stop {
+			return
+		}
+
+		oldSignal, stop := job.reproducedSignal(fuzzer, pBefore, pCall, info.newStableSignal)
+		if stop {
+			return
+		}
+		target := info.newStableSignal.Len()
+		key1 := fmt.Sprintf("signal == target: new %v, old %v", newSignal == target, oldSignal == target)
+		key2 := fmt.Sprintf("signal > 0: new %v, old %v", newSignal > 0, oldSignal > 0)
+		fuzzer.mu.Lock()
+		fuzzer.stats[key1]++
+		fuzzer.stats[key2]++
+		fuzzer.mu.Unlock()
 	}
 	if !fuzzer.Config.NewInputFilter(job.p.CallName(job.call)) {
 		return
@@ -213,6 +231,24 @@ func (job *triageJob) deflake(fuzzer *Fuzzer) (info deflakedCover, stop bool) {
 		info.cover.Merge(thisCover)
 	}
 	return
+}
+
+func (job *triageJob) reproducedSignal(fuzzer *Fuzzer, p *prog.Prog, call int,
+	newStableSignal signal.Signal) (signal int, stop bool) {
+	retry := fuzzer.exec(job, &Request{
+		Prog:         p,
+		NeedSignal:   rpctype.AllSignal,
+		SignalFilter: newStableSignal,
+		stat:         statMinimize,
+	})
+	if retry.Stop {
+		return 0, true
+	}
+	if retry.Info != nil {
+		thisSignal, _ := getSignalAndCover(p, retry.Info, call)
+		return newStableSignal.Intersection(thisSignal).Len(), false
+	}
+	return 0, false
 }
 
 func (job *triageJob) minimize(fuzzer *Fuzzer, newSignal signal.Signal) (stop bool) {
