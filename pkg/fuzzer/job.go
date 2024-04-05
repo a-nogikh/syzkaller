@@ -179,7 +179,7 @@ func (job *triageJob) deflake(exec func(job, *Request) *Result, rawCover bool) (
 	// with a 94% probability. If it reproduces 90% of time, it passes in 99% of cases.
 	const (
 		needRuns = 3
-		maxRuns  = 6
+		maxRuns  = 5
 	)
 	signals := make([]signal.Signal, needRuns)
 	for i := 0; i < maxRuns; i++ {
