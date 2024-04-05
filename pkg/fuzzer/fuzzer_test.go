@@ -121,8 +121,6 @@ func BenchmarkFuzzer(b *testing.B) {
 	})
 }
 
-const anyTestProg = `syz_compare(&AUTO="00000000", 0x4, &AUTO=@conditional={0x0, @void, @void}, AUTO)`
-
 func TestRotate(t *testing.T) {
 	target, err := prog.GetTarget(targets.TestOS, targets.TestArch64Fuzz)
 	if err != nil {
@@ -150,7 +148,9 @@ func TestRotate(t *testing.T) {
 		return signal.FromRaw(pc, 0)
 	}
 
-	prog, err := target.Deserialize([]byte(anyTestProg), prog.NonStrict)
+	prog, err := target.Deserialize(
+		[]byte(`syz_compare(&AUTO="00000000", 0x4, &AUTO=@conditional={0x0, @void, @void}, AUTO)`),
+		prog.NonStrict)
 	assert.NoError(t, err)
 	corpusObj.Save(corpus.NewInput{
 		Prog:   prog,
