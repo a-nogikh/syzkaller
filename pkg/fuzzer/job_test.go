@@ -34,7 +34,7 @@ func TestDeflakeFail(t *testing.T) {
 		return fakeResult(0, []uint32{uint32(run), uint32(run + 1)}, []uint32{10, 20})
 	}, false)
 	assert.False(t, stop)
-	assert.Equal(t, 5, run)
+	assert.Equal(t, 6, run)
 	assert.Empty(t, ret.stableSignal.ToRaw())
 	assert.Empty(t, ret.newStableSignal.ToRaw())
 }
