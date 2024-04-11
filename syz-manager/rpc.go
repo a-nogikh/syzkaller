@@ -379,16 +379,9 @@ func (runner *Runner) mayRiskNow() bool {
 	uptime := time.Since(runner.connectTime)
 	// We don't want to risk crashing freshly booted VMs.
 	// So let's limit the time wasted on VM re-creation to 10% of the total uptime.
-	if uptime < 10*runner.bootDuration {
+	if uptime < 5*runner.bootDuration {
 		return false
 	}
 
-	// Don't sent too many risky inputs at once, otherwise we won't know which one was truly bad.
-	const riskyOnceIn = time.Minute / 2
-	if time.Since(runner.lastRisky) < riskyOnceIn {
-		return false
-	}
-
-	runner.lastRisky = time.Now()
 	return true
 }
