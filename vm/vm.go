@@ -197,6 +197,8 @@ const (
 type StopChan <-chan bool
 type OutputSize int
 
+type OnCrash func()
+
 // Run runs cmd inside of the VM (think of ssh cmd) and monitors command execution
 // and the kernel console output. It detects kernel oopses in output, lost connections, hangs, etc.
 // Returns command+kernel output and a non-symbolized crash report (nil if no error happens).
@@ -209,6 +211,7 @@ func (inst *Instance) Run(timeout time.Duration, reporter *report.Reporter, comm
 	exit := ExitNormal
 	var stop <-chan bool
 	outputSize := beforeContextDefault
+	var onCrashCb OnCrash
 	for _, o := range opts {
 		switch opt := o.(type) {
 		case ExitCondition:
@@ -217,6 +220,8 @@ func (inst *Instance) Run(timeout time.Duration, reporter *report.Reporter, comm
 			stop = opt
 		case OutputSize:
 			outputSize = int(opt)
+		case OnCrash:
+			onCrashCb = opt
 		default:
 			panic(fmt.Sprintf("unknown option %#v", opt))
 		}
@@ -232,6 +237,7 @@ func (inst *Instance) Run(timeout time.Duration, reporter *report.Reporter, comm
 		reporter:      reporter,
 		beforeContext: outputSize,
 		exit:          exit,
+		onCrash:       onCrashCb,
 	}
 	rep := mon.monitorExecution()
 	return mon.output, rep, nil
@@ -278,6 +284,7 @@ type monitor struct {
 	output        []byte
 	beforeContext int
 	matchPos      int
+	onCrash       func()
 }
 
 func (mon *monitor) monitorExecution() *report.Report {
@@ -359,6 +366,9 @@ func (mon *monitor) monitorExecution() *report.Report {
 func (mon *monitor) extractError(defaultError string) *report.Report {
 	diagOutput, diagWait := []byte{}, false
 	if defaultError != "" {
+		if mon.onCrash != nil {
+			mon.onCrash()
+		}
 		diagOutput, diagWait = mon.inst.diagnose(mon.createReport(defaultError))
 	}
 	// Give it some time to finish writing the error message.

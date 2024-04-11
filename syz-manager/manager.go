@@ -740,12 +740,7 @@ func (mgr *Manager) runInstance(index int) (*Crash, error) {
 	// Use unique instance names to keep name collisions in case of untimely RPC messages.
 	instanceName := fmt.Sprintf("vm-%d", mgr.nextInstanceID.Add(1))
 
-	rep, vmInfo, err := mgr.runInstanceInner(index, instanceName)
-
-	machineInfo := mgr.serv.shutdownInstance(instanceName, rep != nil)
-	if len(vmInfo) != 0 {
-		machineInfo = append(append(vmInfo, '\n'), machineInfo...)
-	}
+	rep, _, err := mgr.runInstanceInner(index, instanceName)
 
 	// Error that is not a VM crash.
 	if err != nil {
@@ -758,11 +753,9 @@ func (mgr *Manager) runInstance(index int) (*Crash, error) {
 	crash := &Crash{
 		instanceName: instanceName,
 		Report:       rep,
-		machineInfo:  machineInfo,
 	}
 	return crash, nil
 }
-
 func (mgr *Manager) runInstanceInner(index int, instanceName string) (*report.Report, []byte, error) {
 	start := time.Now()
 
@@ -829,7 +822,10 @@ func (mgr *Manager) runInstanceInner(index int, instanceName string) (*report.Re
 		},
 	}
 	cmd := instance.FuzzerCmd(args)
-	_, rep, err := inst.Run(mgr.cfg.Timeouts.VMRunningTime, mgr.reporter, cmd, vm.ExitTimeout, vm.StopChan(mgr.vmStop))
+	_, rep, err := inst.Run(mgr.cfg.Timeouts.VMRunningTime, mgr.reporter, cmd, vm.ExitTimeout, vm.StopChan(mgr.vmStop), vm.OnCrash(func() {
+		mgr.serv.shutdownInstance(instanceName, true)
+	}))
+	mgr.serv.shutdownInstance(instanceName, false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to run fuzzer: %w", err)
 	}

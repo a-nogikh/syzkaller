@@ -47,6 +47,9 @@ type RPCServer struct {
 	statExchangeServerLatency *stats.Val
 	statExchangeClientLatency *stats.Val
 	statCorpusCoverFiltered   *stats.Val
+
+	statCrashedRisky    *stats.Val
+	statCrashedNonRisky *stats.Val
 }
 
 type Runner struct {
@@ -57,13 +60,14 @@ type Runner struct {
 	machineInfo []byte
 	instModules *cover.CanonicalizerInstance
 
-	// The mutex protects newMaxSignal, dropMaxSignal, lastRisky, and requests.
+	// The mutex protects newMaxSignal, dropMaxSignal, and requests.
 	mu            sync.Mutex
-	lastRisky     time.Time
 	newMaxSignal  signal.Signal
 	dropMaxSignal signal.Signal
 	nextRequestID atomic.Int64
 	requests      map[int64]*fuzzer.Request
+
+	calls [][]*prog.Syscall
 }
 
 type BugFrames struct {
@@ -96,6 +100,8 @@ func startRPCServer(mgr *Manager) (*RPCServer, error) {
 		statExchangeClientLatency: stats.Create("exchange fuzzer latency",
 			"End-to-end fuzzer RPC Exchange call latency (us)", stats.Distribution{}),
 		statCorpusCoverFiltered: stats.Create("filtered coverage", "", stats.NoGraph),
+		statCrashedRisky:        stats.Create("crashed risky", "Crashed risky VMs", stats.StackedGraph("VM crash types")),
+		statCrashedNonRisky:     stats.Create("crashed non-risky", "Crashed non-risky VMs", stats.StackedGraph("VM crash types")),
 	}
 	s, err := rpctype.NewRPCServer(mgr.cfg.RPC, "Manager", serv, mgr.netCompression)
 	if err != nil {
@@ -239,7 +245,22 @@ func (serv *RPCServer) ExchangeInfo(a *rpctype.ExchangeInfoRequest, r *rpctype.E
 
 	stats.Import(a.StatsDelta)
 
+	retryer := fuzzOps.(*fuzzer.Retryer)
+
 	runner.mu.Lock()
+
+	const maxCount = 25
+	var drop [][]*prog.Syscall
+	if len(runner.calls) > maxCount {
+		drop = runner.calls[:len(runner.calls)-maxCount]
+		runner.calls = append([][]*prog.Syscall{},
+			runner.calls[len(runner.calls)-maxCount:]...)
+	}
+
+	for _, calls := range drop {
+		retryer.OK(calls)
+	}
+
 	// Let's transfer new max signal in portions.
 
 	const transferMaxSignal = 500000
@@ -297,9 +318,31 @@ func (serv *RPCServer) shutdownInstance(name string, crashed bool) []byte {
 	runner.mu.Unlock()
 
 	if crashed {
+		wasRisky := runner.mayRiskNow()
+		if wasRisky {
+			serv.statCrashedRisky.Add(1)
+		} else {
+			serv.statCrashedNonRisky.Add(1)
+		}
+
 		// The VM crashed, so let's tell pkg/fuzzer to abort the affected jobs.
 		// fuzzerObj may be null, but in that case oldRequests would be empty as well.
 		fuzzerObj := serv.mgr.getFuzzerOps()
+		if fuzzerObj != nil {
+			retryer := fuzzerObj.(*fuzzer.Retryer)
+			dedup := map[*prog.Syscall]bool{}
+			var calls []*prog.Syscall
+			for _, cc := range runner.calls {
+				for _, c := range cc {
+					if dedup[c] {
+						continue
+					}
+					dedup[c] = true
+					calls = append(calls, c)
+				}
+			}
+			retryer.AvoidCalls(calls, wasRisky)
+		}
 		for _, req := range oldRequests {
 			fuzzerObj.Done(req, &fuzzer.Result{Crashed: true})
 		}
@@ -359,6 +402,13 @@ func (runner *Runner) newRequest(req *fuzzer.Request) rpctype.ExecutionRequest {
 	if runner.requests != nil {
 		runner.requests[id] = req
 	}
+
+	var calls []*prog.Syscall
+	for _, call := range req.Prog.Calls {
+		calls = append(calls, call.Meta)
+	}
+	runner.calls = append(runner.calls, calls)
+
 	runner.mu.Unlock()
 	return rpctype.ExecutionRequest{
 		ID:           id,
@@ -371,24 +421,8 @@ func (runner *Runner) newRequest(req *fuzzer.Request) rpctype.ExecutionRequest {
 }
 
 func (runner *Runner) mayRiskNow() bool {
-	if !runner.mu.TryLock() {
-		return false
-	}
-	defer runner.mu.Unlock()
-
 	uptime := time.Since(runner.connectTime)
 	// We don't want to risk crashing freshly booted VMs.
-	// So let's limit the time wasted on VM re-creation to 10% of the total uptime.
-	if uptime < 10*runner.bootDuration {
-		return false
-	}
-
-	// Don't sent too many risky inputs at once, otherwise we won't know which one was truly bad.
-	const riskyOnceIn = time.Minute / 2
-	if time.Since(runner.lastRisky) < riskyOnceIn {
-		return false
-	}
-
-	runner.lastRisky = time.Now()
-	return true
+	// So let's limit the time wasted on VM re-creation to 20% of the total uptime.
+	return uptime >= 5*runner.bootDuration
 }

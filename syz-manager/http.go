@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/pkg/cover"
+	"github.com/google/syzkaller/pkg/fuzzer"
 	"github.com/google/syzkaller/pkg/html/pages"
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/osutil"
@@ -43,6 +44,8 @@ func (mgr *Manager) initHTTP() {
 	handle("/metrics", promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}).ServeHTTP)
 	handle("/syscalls", mgr.httpSyscalls)
 	handle("/corpus", mgr.httpCorpus)
+	handle("/banned", mgr.httpBanned)
+	handle("/estimates", mgr.httpEstimates)
 	handle("/corpus.db", mgr.httpDownloadCorpus)
 	handle("/crash", mgr.httpCrash)
 	handle("/cover", mgr.httpCover)
@@ -156,6 +159,31 @@ func (mgr *Manager) httpCrash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	executeTemplate(w, crashTemplate, crash)
+}
+
+func (mgr *Manager) httpBanned(w http.ResponseWriter, r *http.Request) {
+	ops := mgr.getFuzzerOps()
+	if ops == nil {
+		return
+	}
+	retry := ops.(*fuzzer.Retryer)
+	calls := retry.Banned()
+	sort.Strings(calls)
+	for _, name := range calls {
+		fmt.Fprintf(w, "%s\n", name)
+	}
+}
+
+func (mgr *Manager) httpEstimates(w http.ResponseWriter, r *http.Request) {
+	ops := mgr.getFuzzerOps()
+	if ops == nil {
+		return
+	}
+	retry := ops.(*fuzzer.Retryer)
+	calls := retry.All()
+	for _, name := range calls {
+		fmt.Fprintf(w, "%s\n", name)
+	}
 }
 
 func (mgr *Manager) httpCorpus(w http.ResponseWriter, r *http.Request) {
