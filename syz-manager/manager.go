@@ -35,6 +35,7 @@ import (
 	"github.com/google/syzkaller/pkg/report"
 	crash_pkg "github.com/google/syzkaller/pkg/report/crash"
 	"github.com/google/syzkaller/pkg/repro"
+	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/pkg/stats"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys/targets"
@@ -70,8 +71,10 @@ type Manager struct {
 
 	dash *dashapi.Dashboard
 
-	mu                    sync.Mutex
-	fuzzer                atomic.Pointer[fuzzer.Fuzzer]
+	mu        sync.Mutex
+	fuzzer    atomic.Pointer[fuzzer.Fuzzer]
+	fuzzerOps atomic.Value
+
 	phase                 int
 	targetEnabledSyscalls map[*prog.Syscall]bool
 
@@ -1326,7 +1329,7 @@ func (mgr *Manager) collectSyscallInfo() map[string]*corpus.CallCov {
 }
 
 func (mgr *Manager) fuzzerConnect(modules []host.KernelModule) (
-	BugFrames, map[uint32]uint32, map[uint32]uint32, error) {
+	BugFrames, map[uint32]uint32, map[uint32]uint32, signal.Signal, error) {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 
@@ -1350,7 +1353,14 @@ func (mgr *Manager) fuzzerConnect(modules []host.KernelModule) (
 		}
 		mgr.modulesInitialized = true
 	}
-	return frames, mgr.coverFilter, mgr.execCoverFilter, nil
+
+	var maxSignal signal.Signal
+	if fuzzer := mgr.fuzzer.Load(); fuzzer != nil {
+		// A Fuzzer object is created after the first Check() call.
+		// If there was none, there would be no collected max signal either.
+		maxSignal = fuzzer.Cover.CopyMaxSignal()
+	}
+	return frames, mgr.coverFilter, mgr.execCoverFilter, maxSignal, nil
 }
 
 func (mgr *Manager) machineChecked(features *host.Features, globFiles map[string][]string,
@@ -1391,6 +1401,7 @@ func (mgr *Manager) machineChecked(features *host.Features, globFiles map[string
 		},
 	}, rnd, mgr.target)
 	mgr.fuzzer.Store(fuzzerObj)
+	mgr.fuzzerOps.Store(fuzzer.NewRetryer(fuzzerObj))
 
 	mgr.loadCorpus()
 	mgr.firstConnect.Store(time.Now().Unix())
@@ -1399,8 +1410,11 @@ func (mgr *Manager) machineChecked(features *host.Features, globFiles map[string
 }
 
 // We need this method since we're not supposed to access Manager fields from RPCServer.
-func (mgr *Manager) getFuzzer() *fuzzer.Fuzzer {
-	return mgr.fuzzer.Load()
+func (mgr *Manager) getFuzzerOps() fuzzer.FuzzerOps {
+	if val := mgr.fuzzerOps.Load(); val != nil {
+		return val.(fuzzer.FuzzerOps)
+	}
+	return nil
 }
 
 func (mgr *Manager) fuzzerSignalRotation(fuzzer *fuzzer.Fuzzer) {
@@ -1589,6 +1603,10 @@ func (mgr *Manager) dashboardReproTasks() {
 			}
 		}
 	}
+}
+
+func (mgr *Manager) avgBootTime() time.Duration {
+	return mgr.bootTime.Value()
 }
 
 func publicWebAddr(addr string) string {
