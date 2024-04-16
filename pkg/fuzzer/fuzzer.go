@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/syzkaller/pkg/corpus"
 	"github.com/google/syzkaller/pkg/ipc"
+	"github.com/google/syzkaller/pkg/learning"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/pkg/stats"
 	"github.com/google/syzkaller/prog"
@@ -95,6 +96,8 @@ type Request struct {
 	flags   ProgTypes
 	stat    *stats.Val
 	resultC chan *Result
+
+	softMax *learning.Action[*prog.Prog]
 }
 
 type SignalType int
@@ -110,17 +113,31 @@ type Result struct {
 	Stop bool
 }
 
+func (fuzzer *Fuzzer) recordMAB(action *learning.Action[*prog.Prog], reward float64) {
+	if action != nil {
+		fuzzer.Config.Corpus.RandomSoftMaxDone(*action, reward)
+	}
+}
+
 func (fuzzer *Fuzzer) Done(req *Request, res *Result) {
 	// Triage individual calls.
 	// We do it before unblocking the waiting threads because
 	// it may result it concurrent modification of req.Prog.
 	// If we are already triaging this exact prog, this is flaky coverage.
+
+	var anyScheduled bool
 	if req.NeedSignal != NoSignal && res.Info != nil && req.flags&progInTriage == 0 {
 		for call, info := range res.Info.Calls {
-			fuzzer.triageProgCall(req.Prog, &info, call, req.flags)
+			anyScheduled = fuzzer.triageProgCall(req.Prog, &info, call, req) || anyScheduled
 		}
-		fuzzer.triageProgCall(req.Prog, &res.Info.Extra, -1, req.flags)
+		anyScheduled = fuzzer.triageProgCall(req.Prog, &res.Info.Extra, -1, req) || anyScheduled
 	}
+	var reward float64
+	if anyScheduled {
+		reward = 1.0
+	}
+	fuzzer.recordMAB(req.softMax, reward)
+
 	// Unblock threads that wait for the result.
 	if req.resultC != nil {
 		req.resultC <- res
@@ -131,14 +148,20 @@ func (fuzzer *Fuzzer) Done(req *Request, res *Result) {
 	req.stat.Add(1)
 }
 
-func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *ipc.CallInfo, call int, flags ProgTypes) {
+func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *ipc.CallInfo, call int, req *Request) bool {
 	prio := signalPrio(p, info, call)
 	newMaxSignal := fuzzer.Cover.addRawMaxSignal(info.Signal, prio)
 	if newMaxSignal.Empty() {
-		return
+		return false
+	}
+	if req.flags&progInTriage > 0 {
+		// We are already triaging this exact prog.
+		// All newly found coverage is flaky.
+		fuzzer.Logf(2, "found new flaky signal in call %d in %s", call, p)
+		return false
 	}
 	if !fuzzer.Config.NewInputFilter(p.CallName(call)) {
-		return
+		return false
 	}
 	fuzzer.Logf(2, "found new signal in call %d in %s", call, p)
 	fuzzer.startJob(fuzzer.statJobsTriage, &triageJob{
@@ -146,9 +169,11 @@ func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *ipc.CallInfo, call int,
 		call:        call,
 		info:        *info,
 		newSignal:   newMaxSignal,
-		flags:       flags,
-		jobPriority: triageJobPrio(flags),
+		flags:       req.flags,
+		jobPriority: triageJobPrio(req.flags),
+		mabAction:   req.softMax,
 	})
+	return true
 }
 
 func signalPrio(p *prog.Prog, info *ipc.CallInfo, call int) (prio uint8) {

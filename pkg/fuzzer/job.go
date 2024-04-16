@@ -10,6 +10,7 @@ import (
 	"github.com/google/syzkaller/pkg/corpus"
 	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/ipc"
+	"github.com/google/syzkaller/pkg/learning"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/pkg/stats"
 	"github.com/google/syzkaller/prog"
@@ -76,7 +77,16 @@ func genProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *Request {
 }
 
 func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *Request {
-	p := fuzzer.Config.Corpus.ChooseProgram(rnd)
+	var softMax *learning.Action[*prog.Prog]
+	var p *prog.Prog
+	if progs := fuzzer.Config.Corpus.Programs(); len(progs) > 0 {
+		action := fuzzer.Config.Corpus.RandomSoftMax(rnd)
+		softMax = &action
+		p = action.Arm
+	}
+	if p == nil {
+		p = fuzzer.Config.Corpus.ChooseProgram(rnd)
+	}
 	if p == nil {
 		return nil
 	}
@@ -91,6 +101,7 @@ func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *Request {
 		Prog:       newP,
 		NeedSignal: NewSignal,
 		stat:       fuzzer.statExecFuzz,
+		softMax:    softMax,
 	}
 }
 
@@ -120,6 +131,8 @@ type triageJob struct {
 	info      ipc.CallInfo
 	newSignal signal.Signal
 	flags     ProgTypes
+	mabAction *learning.Action[*prog.Prog]
+
 	jobPriority
 }
 
