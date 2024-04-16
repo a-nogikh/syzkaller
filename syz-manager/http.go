@@ -166,20 +166,23 @@ func (mgr *Manager) httpCorpus(w http.ResponseWriter, r *http.Request) {
 		Call:     r.FormValue("call"),
 		RawCover: mgr.cfg.RawCover,
 	}
-	for _, inp := range mgr.corpus.Items() {
+	corpus := mgr.corpus
+	weights := corpus.SoftMaxWeights()
+	for _, inp := range corpus.Items() {
 		if data.Call != "" && data.Call != inp.StringCall() {
 			continue
 		}
 		data.Inputs = append(data.Inputs, &UIInput{
-			Sig:   inp.Sig,
-			Short: inp.Prog.String(),
-			Cover: len(inp.Cover),
+			Sig:    inp.Sig,
+			Short:  inp.Prog.String(),
+			Cover:  len(inp.Cover),
+			Weight: weights[inp.Prog],
 		})
 	}
 	sort.Slice(data.Inputs, func(i, j int) bool {
 		a, b := data.Inputs[i], data.Inputs[j]
-		if a.Cover != b.Cover {
-			return a.Cover > b.Cover
+		if a.Weight != b.Weight {
+			return a.Weight > b.Weight
 		}
 		return a.Short < b.Short
 	})
@@ -759,9 +762,10 @@ type UICorpus struct {
 }
 
 type UIInput struct {
-	Sig   string
-	Short string
-	Cover int
+	Sig    string
+	Short  string
+	Cover  int
+	Weight int64
 }
 
 var summaryTemplate = pages.Create(`
@@ -913,6 +917,7 @@ var corpusTemplate = pages.Create(`
 	<tr>
 		<th>Coverage</th>
 		<th>Program</th>
+		<th>Weight</th>
 	</tr>
 	{{range $inp := $.Inputs}}
 	<tr>
@@ -923,6 +928,7 @@ var corpusTemplate = pages.Create(`
 	{{end}}
 		</td>
 		<td><a href="/input?sig={{$inp.Sig}}">{{$inp.Short}}</a></td>
+		<td>{{$inp.Weight}}</td>
 	</tr>
 	{{end}}
 </table>
