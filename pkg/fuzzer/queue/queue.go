@@ -72,7 +72,7 @@ func Execute(ctx context.Context, executor Executor, req *Request) *Result {
 	executor.Submit(req)
 	select {
 	case <-ctx.Done():
-		return &Result{Stop: true}
+		return &Result{Status: ExecFailure}
 	case res := <-req.resultC:
 		close(req.resultC)
 		return res
@@ -88,9 +88,22 @@ const (
 )
 
 type Result struct {
-	Info *ipc.ProgInfo
-	Stop bool
+	Info   *ipc.ProgInfo
+	Status Status
 }
+
+func (r *Result) Stop() bool {
+	return r.Status == ExecFailure || r.Status == Crashed
+}
+
+type Status int
+
+const (
+	Success     Status = 0
+	ExecFailure Status = 1 // For e.g. serialization errors.
+	Crashed     Status = 2 // The VM crashed holding the request.
+	Restarted   Status = 3 // The VM was restarted holding the request.
+)
 
 // Executor describes the interface wanted by the producers of requests.
 type Executor interface {
@@ -148,6 +161,18 @@ func (pq *PlainQueue) Submit(req *Request) {
 func (pq *PlainQueue) Next() *Request {
 	pq.mu.Lock()
 	defer pq.mu.Unlock()
+	return pq.nextLocked()
+}
+
+func (pq *PlainQueue) tryNext() *Request {
+	if !pq.mu.TryLock() {
+		return nil
+	}
+	defer pq.mu.Unlock()
+	return pq.nextLocked()
+}
+
+func (pq *PlainQueue) nextLocked() *Request {
 	if pq.pos < len(pq.queue) {
 		ret := pq.queue[pq.pos]
 		pq.queue[pq.pos] = nil

@@ -167,7 +167,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ...execOpt) *queue.Resul
 			NeedCover:  true,
 			Stat:       stat,
 		}, &dontTriage{})
-		if result.Stop {
+		if result.Stop() {
 			stop = true
 			return
 		}
@@ -207,7 +207,7 @@ func (job *triageJob) minimize(newSignal signal.Signal) (stop bool) {
 					SignalFilterCall: call1,
 					Stat:             job.fuzzer.statExecMinimize,
 				})
-				if result.Stop {
+				if result.Stop() {
 					stop = true
 					return false
 				}
@@ -276,7 +276,7 @@ func (job *smashJob) run(fuzzer *Fuzzer) {
 			NeedSignal: queue.NewSignal,
 			Stat:       fuzzer.statExecSmash,
 		})
-		if result.Stop {
+		if result.Stop() {
 			return
 		}
 		if fuzzer.Config.Collide {
@@ -284,7 +284,7 @@ func (job *smashJob) run(fuzzer *Fuzzer) {
 				Prog: randomCollide(p, rnd),
 				Stat: fuzzer.statExecCollide,
 			})
-			if result.Stop {
+			if result.Stop() {
 				return
 			}
 		}
@@ -326,7 +326,7 @@ func (job *smashJob) faultInjection(fuzzer *Fuzzer) {
 			Prog: newProg,
 			Stat: fuzzer.statExecSmash,
 		})
-		if result.Stop {
+		if result.Stop() {
 			return
 		}
 		info := result.Info
@@ -350,7 +350,7 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
 		NeedHints: true,
 		Stat:      fuzzer.statExecSeed,
 	})
-	if result.Stop || result.Info == nil {
+	if result.Stop() || result.Info == nil {
 		return
 	}
 	// Then mutate the initial program for every match between
@@ -363,6 +363,6 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
 				NeedSignal: queue.NewSignal,
 				Stat:       fuzzer.statExecHint,
 			})
-			return !result.Stop
+			return !result.Stop()
 		})
 }

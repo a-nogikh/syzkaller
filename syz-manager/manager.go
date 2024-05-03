@@ -25,6 +25,7 @@ import (
 	"github.com/google/syzkaller/pkg/csource"
 	"github.com/google/syzkaller/pkg/db"
 	"github.com/google/syzkaller/pkg/fuzzer"
+	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/gce"
 	"github.com/google/syzkaller/pkg/hash"
 	"github.com/google/syzkaller/pkg/host"
@@ -72,6 +73,7 @@ type Manager struct {
 
 	mu                    sync.Mutex
 	fuzzer                atomic.Pointer[fuzzer.Fuzzer]
+	execSource            atomic.Value // queue.Source
 	phase                 int
 	targetEnabledSyscalls map[*prog.Syscall]bool
 
@@ -1373,6 +1375,7 @@ func (mgr *Manager) machineChecked(features *host.Features, enabledSyscalls map[
 		},
 	}, rnd, mgr.target)
 	mgr.fuzzer.Store(fuzzerObj)
+	mgr.execSource.Store(queue.NewRetryer(fuzzerObj))
 
 	mgr.loadCorpus()
 	mgr.firstConnect.Store(time.Now().Unix())
@@ -1395,8 +1398,8 @@ func (mgr *Manager) corpusMinimization() {
 }
 
 // We need this method since we're not supposed to access Manager fields from RPCServer.
-func (mgr *Manager) getFuzzer() *fuzzer.Fuzzer {
-	return mgr.fuzzer.Load()
+func (mgr *Manager) getExecSource() queue.Source {
+	return mgr.execSource.Load().(queue.Source)
 }
 
 func (mgr *Manager) fuzzerSignalRotation() {
