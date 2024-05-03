@@ -16,6 +16,7 @@ import (
 	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/fuzzer"
+	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/host"
 	"github.com/google/syzkaller/pkg/ipc"
 	"github.com/google/syzkaller/pkg/log"
@@ -53,7 +54,7 @@ type RPCServer struct {
 
 	// We did not finish these requests because of VM restarts.
 	// They will be eventually given to other VMs.
-	rescuedInputs []*fuzzer.Request
+	rescuedInputs []*queue.Request
 
 	statExecs                 *stats.Val
 	statExecRetries           *stats.Val
@@ -85,7 +86,7 @@ type Runner struct {
 }
 
 type Request struct {
-	req    *fuzzer.Request
+	req    *queue.Request
 	try    int
 	procID int
 }
@@ -354,7 +355,7 @@ func (serv *RPCServer) ExchangeInfo(a *rpctype.ExchangeInfoRequest, r *rpctype.E
 		panic("exchange info call with nil fuzzer")
 	}
 
-	appendRequest := func(inp *fuzzer.Request) {
+	appendRequest := func(inp *queue.Request) {
 		if req, ok := serv.newRequest(runner, inp); ok {
 			r.Requests = append(r.Requests, req)
 		} else {
@@ -362,7 +363,7 @@ func (serv *RPCServer) ExchangeInfo(a *rpctype.ExchangeInfoRequest, r *rpctype.E
 			// but so far we don't have a better handling than counting this.
 			// This error is observed a lot on the seeded syz_mount_image calls.
 			serv.statExecBufferTooSmall.Add(1)
-			fuzzerObj.Done(inp, &fuzzer.Result{Stop: true})
+			inp.Done(&queue.Result{Stop: true})
 		}
 	}
 
@@ -382,11 +383,11 @@ func (serv *RPCServer) ExchangeInfo(a *rpctype.ExchangeInfoRequest, r *rpctype.E
 	// It should foster a more even distribution of executions
 	// across all VMs.
 	for len(r.Requests) < a.NeedProgs {
-		appendRequest(fuzzerObj.NextInput())
+		appendRequest(fuzzerObj.Next())
 	}
 
 	for _, result := range a.Results {
-		serv.doneRequest(runner, result, fuzzerObj)
+		serv.doneRequest(runner, result)
 	}
 
 	stats.Import(a.StatsDelta)
@@ -462,17 +463,14 @@ func (serv *RPCServer) shutdownInstance(name string, crashed bool) []byte {
 
 	close(runner.injectStop)
 
-	// The VM likely crashed, so let's tell pkg/fuzzer to abort the affected jobs.
-	// fuzzerObj may be null, but in that case oldRequests would be empty as well.
 	serv.mu.Lock()
 	defer serv.mu.Unlock()
 	if !serv.checkDone.Load() {
 		log.Fatalf("VM is exited while checking is not done")
 	}
-	fuzzerObj := serv.mgr.getFuzzer()
 	for _, req := range oldRequests {
 		if crashed && req.try >= 0 {
-			fuzzerObj.Done(req.req, &fuzzer.Result{Stop: true})
+			req.req.Done(&queue.Result{Stop: true})
 		} else {
 			// We will resend these inputs to another VM.
 			serv.rescuedInputs = append(serv.rescuedInputs, req.req)
@@ -509,7 +507,7 @@ func (serv *RPCServer) updateCoverFilter(newCover []uint32) {
 	serv.statCoverFiltered.Add(filtered)
 }
 
-func (serv *RPCServer) doneRequest(runner *Runner, resp rpctype.ExecutionResult, fuzzerObj *fuzzer.Fuzzer) {
+func (serv *RPCServer) doneRequest(runner *Runner, resp rpctype.ExecutionResult) {
 	info := &resp.Info
 	if info.Freshness == 0 {
 		serv.statExecutorRestarts.Add(1)
@@ -539,10 +537,10 @@ func (serv *RPCServer) doneRequest(runner *Runner, resp rpctype.ExecutionResult,
 	}
 	info.Extra.Cover = runner.instModules.Canonicalize(info.Extra.Cover)
 	info.Extra.Signal = runner.instModules.Canonicalize(info.Extra.Signal)
-	fuzzerObj.Done(req.req, &fuzzer.Result{Info: info})
+	req.req.Done(&queue.Result{Info: info})
 }
 
-func (serv *RPCServer) newRequest(runner *Runner, req *fuzzer.Request) (rpctype.ExecutionRequest, bool) {
+func (serv *RPCServer) newRequest(runner *Runner, req *queue.Request) (rpctype.ExecutionRequest, bool) {
 	progData, err := req.Prog.SerializeForExec()
 	if err != nil {
 		return rpctype.ExecutionRequest{}, false
@@ -568,14 +566,14 @@ func (serv *RPCServer) newRequest(runner *Runner, req *fuzzer.Request) (rpctype.
 		ID:               id,
 		ProgData:         progData,
 		ExecOpts:         serv.createExecOpts(req),
-		NewSignal:        req.NeedSignal == fuzzer.NewSignal,
+		NewSignal:        req.NeedSignal == queue.NewSignal,
 		SignalFilter:     signalFilter,
 		SignalFilterCall: req.SignalFilterCall,
 		ResetState:       serv.cfg.Experimental.ResetAccState,
 	}, true
 }
 
-func (serv *RPCServer) createExecOpts(req *fuzzer.Request) ipc.ExecOpts {
+func (serv *RPCServer) createExecOpts(req *queue.Request) ipc.ExecOpts {
 	env := ipc.FeaturesToFlags(serv.checkFeatures, nil)
 	if *flagDebug {
 		env |= ipc.FlagDebug
@@ -597,7 +595,7 @@ func (serv *RPCServer) createExecOpts(req *fuzzer.Request) ipc.ExecOpts {
 		exec |= ipc.FlagEnableCoverageFilter
 	}
 	if serv.cfg.Cover {
-		if req.NeedSignal != fuzzer.NoSignal {
+		if req.NeedSignal != queue.NoSignal {
 			exec |= ipc.FlagCollectSignal
 		}
 		if req.NeedCover {
