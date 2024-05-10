@@ -6,7 +6,9 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -513,7 +515,7 @@ func (serv *RPCServer) updateCoverFilter(newCover []uint32) {
 }
 
 func (serv *RPCServer) doneRequest(runner *Runner, resp rpctype.ExecutionResult, fuzzerObj *fuzzer.Fuzzer) {
-	info := &resp.Info
+	info := resp.Info
 	if info.Freshness == 0 {
 		serv.statExecutorRestarts.Add(1)
 	}
@@ -533,16 +535,18 @@ func (serv *RPCServer) doneRequest(runner *Runner, resp rpctype.ExecutionResult,
 		runner.logProgram(resp.ProcID, req.serialized)
 	}
 	if !serv.cfg.Cover {
-		addFallbackSignal(req.req.Prog, info)
+		addFallbackSignal(req.req.Prog, &info)
 	}
 	for i := 0; i < len(info.Calls); i++ {
 		call := &info.Calls[i]
-		call.Cover = runner.instModules.Canonicalize(call.Cover)
-		call.Signal = runner.instModules.Canonicalize(call.Signal)
+		call.Cover = runner.instModules.Canonicalize(slices.Clone(call.Cover))
+		call.Signal = runner.instModules.Canonicalize(slices.Clone(call.Signal))
+		call.Comps = maps.Clone(call.Comps)
 	}
 	info.Extra.Cover = runner.instModules.Canonicalize(info.Extra.Cover)
 	info.Extra.Signal = runner.instModules.Canonicalize(info.Extra.Signal)
-	fuzzerObj.Done(req.req, &fuzzer.Result{Info: info})
+	info.Extra.Comps = maps.Clone(info.Extra.Comps)
+	fuzzerObj.Done(req.req, &fuzzer.Result{Info: &info})
 }
 
 func (serv *RPCServer) newRequest(runner *Runner, req *fuzzer.Request) (rpctype.ExecutionRequest, bool) {

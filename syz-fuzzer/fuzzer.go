@@ -6,12 +6,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"maps"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -294,7 +296,10 @@ func (tool *FuzzerTool) exchangeDataCall(results []rpctype.ExecutionResult, late
 		time.Sleep(100 * time.Millisecond)
 	}
 	for _, req := range r.Requests {
-		tool.requests <- req
+		req2 := req
+		req2.ProgData = slices.Clone(req2.ProgData)
+		req2.SignalFilter = maps.Clone(req2.SignalFilter)
+		tool.requests <- req2
 	}
 	return latency
 }
