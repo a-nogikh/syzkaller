@@ -31,12 +31,11 @@ func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[
 var DefaultMutateOpts = MutateOpts{
 	ExpectedIterations: 5,
 	MutateArgCount:     3,
-
-	SquashWeight:     50,
-	SpliceWeight:     200,
-	InsertWeight:     100,
-	MutateArgWeight:  100,
-	RemoveCallWeight: 10,
+	SquashWeight:       50,
+	SpliceWeight:       200,
+	InsertWeight:       100,
+	MutateArgWeight:    100,
+	RemoveCallWeight:   10,
 }
 
 type MutateOpts struct {
@@ -117,19 +116,30 @@ type mutator struct {
 	opts     MutateOpts
 }
 
-// This function selects a random other program p0 out of the corpus, and
-// mutates ctx.p as follows: preserve ctx.p's Calls up to a random index i
-// (exclusive) concatenated with p0's calls from index i (inclusive).
 func (ctx *mutator) splice() bool {
 	p, r := ctx.p, ctx.r
 	if len(ctx.corpus) == 0 || len(p.Calls) == 0 || len(p.Calls) >= ctx.ncalls {
 		return false
 	}
-	p0 := ctx.corpus[r.Intn(len(ctx.corpus))]
-	p0c := p0.Clone()
-	idx := r.Intn(len(p.Calls))
-	p.Calls = append(p.Calls[:idx], append(p0c.Calls, p.Calls[idx:]...)...)
-	for i := len(p.Calls) - 1; i >= ctx.ncalls; i-- {
+	p0 := ctx.corpus[r.Intn(len(ctx.corpus))].Clone()
+	var newCalls []*Call
+	for {
+		first := r.bin()
+		if len(p.Calls) > 0 && (first || len(p0.Calls) == 0) {
+			newCalls = append(newCalls, p.Calls[0])
+			p.Calls = p.Calls[1:]
+			continue
+		}
+		if len(p0.Calls) > 0 {
+			newCalls = append(newCalls, p0.Calls[0])
+			p0.Calls = p0.Calls[1:]
+			continue
+		}
+		break
+	}
+	p.Calls = newCalls
+	for len(p.Calls) > ctx.ncalls {
+		i := r.Intn(len(p.Calls))
 		p.RemoveCall(i)
 	}
 	return true
