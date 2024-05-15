@@ -418,9 +418,9 @@ func (env *Env) parseOutput(opts *ExecOpts, ncalls int) (*ProgInfo, error) {
 			return nil, fmt.Errorf("call %v/%v/%v: signal overflow: %v/%v",
 				i, reply.index, reply.num, reply.signalSize, len(out))
 		}
-		if inf.Cover, ok = readUint32Array(&out, reply.coverSize); !ok {
-			return nil, fmt.Errorf("call %v/%v/%v: cover overflow: %v/%v",
-				i, reply.index, reply.num, reply.coverSize, len(out))
+		inf.Cover = slices.Clone(inf.Signal)
+		for i := range inf.Cover {
+			inf.Cover[i] = inf.Cover[i] & 0xFFFFFFF8
 		}
 		comps, err := readComps(&out, reply.compsSize)
 		if err != nil {

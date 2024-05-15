@@ -174,27 +174,6 @@ static void cover_collect(cover_t* cov)
 		cov->size = *(uint32*)cov->data;
 }
 
-#if SYZ_EXECUTOR_USES_SHMEM
-static bool use_cover_edges(uint32 pc)
-{
-	return true;
-}
-
-static bool use_cover_edges(uint64 pc)
-{
-#if defined(__i386__) || defined(__x86_64__)
-	if (is_gvisor)
-		return false; // gvisor coverage is not a trace, so producing edges won't work
-	// Text/modules range for x86_64.
-	if (pc < 0xffffffff80000000ull || pc >= 0xffffffffff000000ull) {
-		debug("got bad pc: 0x%llx\n", pc);
-		doexit(0);
-	}
-#endif
-	return true;
-}
-#endif
-
 static bool detect_kernel_bitness()
 {
 	if (sizeof(void*) == 8)

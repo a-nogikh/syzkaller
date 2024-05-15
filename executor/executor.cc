@@ -149,7 +149,6 @@ static void mmap_output(int size);
 static uint32* write_output(uint32 v);
 static uint32* write_output_64(uint64 v);
 static void write_completed(uint32 completed);
-static uint32 hash(uint32 a);
 static bool dedup(uint32 sig);
 #endif // if SYZ_EXECUTOR_USES_SHMEM
 
@@ -362,6 +361,7 @@ struct kcov_comparison_t {
 
 	bool ignore() const;
 	void write();
+	uint32 signal(uint32);
 	bool operator==(const struct kcov_comparison_t& other) const;
 	bool operator<(const struct kcov_comparison_t& other) const;
 };
@@ -751,7 +751,7 @@ void execute_one()
 
 	if (cover_collection_required()) {
 		if (!flag_threaded)
-			cover_enable(&threads[0].cov, flag_comparisons, false);
+			cover_enable(&threads[0].cov, true, false);
 		if (flag_extra_coverage)
 			cover_reset(&extra_cov);
 	}
@@ -1004,29 +1004,20 @@ thread_t* schedule_call(int call_index, int call_num, uint64 copyout_index, uint
 template <typename cover_data_t>
 void write_coverage_signal(cover_t* cov, uint32* signal_count_pos, uint32* cover_count_pos)
 {
-	// Write out feedback signals.
-	// Currently it is code edges computed as xor of two subsequent basic block PCs.
-	cover_data_t* cover_data = (cover_data_t*)(cov->data + cov->data_offset);
 	if (flag_collect_signal) {
 		uint32 nsig = 0;
-		cover_data_t prev_pc = 0;
-		bool prev_filter = true;
-		for (uint32 i = 0; i < cov->size; i++) {
-			cover_data_t pc = cover_data[i] + cov->pc_offset;
-			uint32 sig = pc & 0xFFFFF000;
-			if (use_cover_edges(pc)) {
-				// Only hash the lower 12 bits so the hash is
-				// independent of any module offsets.
-				sig |= (pc & 0xFFF) ^ (hash(prev_pc & 0xFFF) & 0xFFF);
-			}
+		uint32 ncomps = cov->size;
+		kcov_comparison_t* start = (kcov_comparison_t*)(cov->data + sizeof(uint64));
+		kcov_comparison_t* end = start + ncomps;
+		if ((char*)end > cov->data_end)
+			failmsg("too many comparisons", "ncomps=%u", ncomps);
+		for (; start != end; start++) {
+			cover_data_t pc = start->pc + cov->pc_offset;
 			bool filter = coverage_filter(pc);
-			// Ignore the edge only if both current and previous PCs are filtered out
-			// to capture all incoming and outcoming edges into the interesting code.
-			bool ignore = !filter && !prev_filter;
-			prev_pc = pc;
-			prev_filter = filter;
-			if (ignore || dedup(sig))
+			uint32 sig = start->signal((uint32)pc);
+			if (!filter || dedup(sig)) {
 				continue;
+			}
 			write_output(sig);
 			nsig++;
 		}
@@ -1034,22 +1025,8 @@ void write_coverage_signal(cover_t* cov, uint32* signal_count_pos, uint32* cover
 		*signal_count_pos = nsig;
 	}
 
-	if (flag_collect_cover) {
-		// Write out real coverage (basic block PCs).
-		uint32 cover_size = cov->size;
-		if (flag_dedup_cover) {
-			cover_data_t* end = cover_data + cover_size;
-			cover_unprotect(cov);
-			std::sort(cover_data, end);
-			cover_size = std::unique(cover_data, end) - cover_data;
-			cover_protect(cov);
-		}
-		// Truncate PCs to uint32 assuming that they fit into 32-bits.
-		// True for x86_64 and arm64 without KASLR.
-		for (uint32 i = 0; i < cover_size; i++)
-			write_output(cover_data[i] + cov->pc_offset);
-		*cover_count_pos = cover_size;
-	}
+	// We will patch it in pkg/ipc.
+	*cover_count_pos = 0;
 }
 #endif // if SYZ_EXECUTOR_USES_SHMEM
 
@@ -1187,7 +1164,7 @@ void write_call_output(thread_t* th, bool finished)
 void write_extra_output()
 {
 #if SYZ_EXECUTOR_USES_SHMEM
-	if (!cover_collection_required() || !flag_extra_coverage || flag_comparisons)
+	if (!cover_collection_required() || !flag_extra_coverage || flag_comparisons || true)
 		return;
 	cover_collect(&extra_cov);
 	if (!extra_cov.size)
@@ -1243,7 +1220,7 @@ void* worker_thread(void* arg)
 	thread_t* th = (thread_t*)arg;
 	current_thread = th;
 	if (cover_collection_required())
-		cover_enable(&th->cov, flag_comparisons, false);
+		cover_enable(&th->cov, true, false);
 	for (;;) {
 		event_wait(&th->ready);
 		event_reset(&th->ready);
@@ -1317,15 +1294,6 @@ void execute_call(thread_t* th)
 }
 
 #if SYZ_EXECUTOR_USES_SHMEM
-static uint32 hash(uint32 a)
-{
-	a = (a ^ 61) ^ (a >> 16);
-	a = a + (a << 3);
-	a = a ^ (a >> 4);
-	a = a * 0x27d4eb2d;
-	a = a ^ (a >> 15);
-	return a;
-}
 
 const uint32 dedup_table_size = 8 << 10;
 uint32 dedup_table[dedup_table_size];
@@ -1569,6 +1537,17 @@ void write_completed(uint32 completed)
 #endif // if SYZ_EXECUTOR_USES_SHMEM
 
 #if SYZ_EXECUTOR_USES_SHMEM
+
+uint32 kcov_comparison_t::signal(uint32 pc)
+{
+	uint32 ret = pc & 0xFFFFFFF8;
+	if (arg1 < arg2)
+		ret |= 1;
+	if (arg1 > arg2)
+		ret |= 2;
+	return ret;
+}
+
 void kcov_comparison_t::write()
 {
 	if (type > (KCOV_CMP_CONST | KCOV_CMP_SIZE_MASK))
