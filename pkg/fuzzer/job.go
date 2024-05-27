@@ -259,11 +259,16 @@ type smashJob struct {
 
 func (job *smashJob) run(fuzzer *Fuzzer) {
 	fuzzer.Logf(2, "smashing the program %s (call=%d):", job.p, job.call)
-	if fuzzer.Config.Comparisons && job.call >= 0 {
-		fuzzer.startJob(fuzzer.statJobsHints, &hintsJob{
-			p:    job.p.Clone(),
-			call: job.call,
-		})
+	if fuzzer.Config.Comparisons {
+		for i := 0; i < len(job.p.Calls); i++ {
+			// For .extra coverage, substitute arguments to all calls with remote_cover.
+			if i == job.call || job.call < 0 && job.p.Calls[i].Meta.Attrs.RemoteCover {
+				fuzzer.startJob(fuzzer.statJobsHints, &hintsJob{
+					p:    job.p.Clone(),
+					call: i,
+				})
+			}
+		}
 	}
 
 	const iters = 75
