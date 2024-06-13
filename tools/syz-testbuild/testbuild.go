@@ -101,7 +101,7 @@ func main() {
 		tool.Fail(err)
 	}
 	log.Printf("HEAD is on %v %v", head.Hash, head.Title)
-	tags, err := bisecter.PreviousReleaseTags(head.Hash, "gcc")
+	tags, err := bisecter.PreviousReleaseTags(head.Hash, "gcc", false)
 	if err != nil {
 		tool.Fail(err)
 	}

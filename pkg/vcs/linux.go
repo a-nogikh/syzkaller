@@ -43,8 +43,8 @@ func newLinux(dir string, opts []RepoOpt, vmType string) *linux {
 	}
 }
 
-func (ctx *linux) PreviousReleaseTags(commit, compilerType string) ([]string, error) {
-	tags, err := ctx.git.previousReleaseTags(commit, false, false, false)
+func (ctx *linux) PreviousReleaseTags(commit, compilerType string, includeRC bool) ([]string, error) {
+	tags, err := ctx.git.previousReleaseTags(commit, false, false, includeRC)
 	if err != nil {
 		return nil, err
 	}

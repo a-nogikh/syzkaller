@@ -23,8 +23,8 @@ func newTestos(dir string, opts []RepoOpt) *testos {
 	}
 }
 
-func (ctx *testos) PreviousReleaseTags(commit, compilerType string) ([]string, error) {
-	return ctx.git.previousReleaseTags(commit, false, false, false)
+func (ctx *testos) PreviousReleaseTags(commit, compilerType string, includeRC bool) ([]string, error) {
+	return ctx.git.previousReleaseTags(commit, false, false, includeRC)
 }
 
 func (ctx *testos) EnvForCommit(

@@ -515,7 +515,7 @@ func (env *env) commitRangeForFix() (*vcs.Commit, *vcs.Commit, []*testResult, er
 
 func (env *env) commitRangeForCause() (*vcs.Commit, *vcs.Commit, []*testResult, error) {
 	cfg := env.cfg
-	tags, err := env.bisecter.PreviousReleaseTags(cfg.Kernel.Commit, cfg.CompilerType)
+	tags, err := env.bisecter.PreviousReleaseTags(cfg.Kernel.Commit, cfg.CompilerType, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}

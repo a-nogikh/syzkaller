@@ -87,7 +87,7 @@ type Bisecter interface {
 
 	// PreviousReleaseTags returns list of preceding release tags that are reachable from the given commit.
 	// If the commit itself has a release tag, this tag is not included.
-	PreviousReleaseTags(commit, compilerType string) ([]string, error)
+	PreviousReleaseTags(commit, compilerType string, includeRC bool) ([]string, error)
 
 	IsRelease(commit string) (bool, error)
 
