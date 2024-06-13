@@ -76,6 +76,10 @@ func (ctx *fuchsia) GetCommitByTitle(title string) (*Commit, error) {
 	return ctx.repo.GetCommitByTitle(title)
 }
 
+func (ctx *fuchsia) GetCommit(commit string) (*Commit, error) {
+	return ctx.repo.GetCommit(commit)
+}
+
 func (ctx *fuchsia) GetCommitsByTitles(titles []string) ([]*Commit, []string, error) {
 	return ctx.repo.GetCommitsByTitles(titles)
 }

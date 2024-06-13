@@ -242,10 +242,10 @@ func (git *git) Contains(commit string) (bool, error) {
 }
 
 func (git *git) HeadCommit() (*Commit, error) {
-	return git.getCommit("HEAD")
+	return git.GetCommit("HEAD")
 }
 
-func (git *git) getCommit(commit string) (*Commit, error) {
+func (git *git) GetCommit(commit string) (*Commit, error) {
 	output, err := git.git("log", "--format=%H%n%s%n%ae%n%an%n%ad%n%P%n%cd%n%b", "-n", "1", commit)
 	if err != nil {
 		return nil, err
@@ -479,7 +479,7 @@ func splitEmail(email string) (user, domain string, err error) {
 func (git *git) Bisect(bad, good string, dt debugtracer.DebugTracer, pred func() (BisectResult,
 	error)) ([]*Commit, error) {
 	git.reset()
-	firstBad, err := git.getCommit(bad)
+	firstBad, err := git.GetCommit(bad)
 	if err != nil {
 		return nil, err
 	}
@@ -544,7 +544,7 @@ func (git *git) bisectInconclusive(output []byte) ([]*Commit, error) {
 	//	7c3850adbcccc2c6c9e7ab23a7dcbc4926ee5b96 is the first bad commit
 	var commits []*Commit
 	for _, hash := range gitFullHashRe.FindAll(output, -1) {
-		com, err := git.getCommit(string(hash))
+		com, err := git.GetCommit(string(hash))
 		if err != nil {
 			return nil, err
 		}
@@ -611,7 +611,7 @@ func (git *git) MergeBases(firstCommit, secondCommit string) ([]*Commit, error) 
 	}
 	ret := []*Commit{}
 	for _, hash := range strings.Fields(string(output)) {
-		commit, err := git.getCommit(hash)
+		commit, err := git.GetCommit(hash)
 		if err != nil {
 			return nil, err
 		}

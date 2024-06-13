@@ -44,6 +44,10 @@ type Repo interface {
 	// (e.g. do CheckoutBranch before).
 	GetCommitByTitle(title string) (*Commit, error)
 
+	// GetCommit is similar to GetCommitByTitle(), but performs a lookup base on a
+	// (part of a) commit hash or a tag.
+	GetCommit(commit string) (*Commit, error)
+
 	// GetCommitsByTitles is a batch version of GetCommitByTitle.
 	// Returns list of commits and titles of commits that are not found.
 	GetCommitsByTitles(titles []string) ([]*Commit, []string, error)
