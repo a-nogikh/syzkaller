@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/google/syzkaller/pkg/vcs"
 )
 
 type Email struct {
@@ -32,6 +34,7 @@ type Email struct {
 	Body        string // text/plain part
 	Patch       string // attached patch, if any
 	Commands    []*SingleCommand
+	Fixes       []vcs.Commit
 }
 
 type SingleCommand struct {
@@ -185,6 +188,7 @@ func Parse(r io.Reader, ownEmails, goodLists, domains []string) (*Email, error) 
 		Body:        bodyStr,
 		Patch:       patch,
 		Commands:    cmds,
+		Fixes:       extractFixes(bodyStr),
 	}
 	return email, nil
 }
@@ -302,7 +306,6 @@ func extractCommand(body string) (*SingleCommand, int) {
 		} else {
 			// For "#syz test", it's likely there won't be anything else, so let's only parse
 			// the first line.
-			fmt.Printf("line: %s", body[cmdPos+cmdEnd:])
 			args = extractArgsLine(body[cmdPos+cmdEnd:], false)
 		}
 	case CmdSet, CmdUnset:
@@ -456,6 +459,19 @@ func extractInReplyTo(header mail.Header) string {
 		return ret[0]
 	}
 	return ""
+}
+
+var commitFixesRe = regexp.MustCompile(`Fixes:\s*(\w+)\s+\("([^"]+)"\)`)
+
+func extractFixes(body string) []vcs.Commit {
+	var ret []vcs.Commit
+	for _, match := range commitFixesRe.FindAllStringSubmatch(body, -1) {
+		ret = append(ret, vcs.Commit{
+			Hash:  match[1],
+			Title: match[2],
+		})
+	}
+	return ret
 }
 
 func extractBodyBugIDs(body string, ownEmailMap map[string]bool, domains []string) []string {

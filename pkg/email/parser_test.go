@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/syzkaller/pkg/vcs"
 )
 
 func TestExtractCommand(t *testing.T) {
@@ -1064,6 +1065,60 @@ Content-Transfer-Encoding: quoted-printable
 				Command: CmdTest,
 				Str:     "test:",
 				Args:    "ccc ddd",
+			},
+		},
+	}},
+	{`Sender: syzkaller-bugs@googlegroups.com
+Subject: subject
+To: syzbot <syzbot+344bb0f46d7719cd9483@syzkaller.appspotmail.com>
+From: bar <bar@foo.com>
+Message-ID: <1250334f-7220-2bff-5d87-b87573758d81@bar.com>
+Date: Sun, 7 May 2017 19:54:00 -0700
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+Content-Language: en-US
+Content-Transfer-Encoding: quoted-printable
+
+some: patch
+
+Fixes: e21d2170f366 ("video: remove unnecessary platform_set_drvdata()")
+Fixes: aabbccdd ("second title")
+
+--- a/mm/kasan/kasan.c
++++ b/mm/kasan/kasan.c
+-       current->kasan_depth++;
++       current->kasan_depth--;
+
+`, Email{
+		MessageID: "<1250334f-7220-2bff-5d87-b87573758d81@bar.com>",
+		Date:      time.Date(2017, time.May, 7, 19, 54, 0, 0, parseTestZone),
+		Subject:   "subject",
+		Author:    "bar@foo.com",
+		Cc:        []string{"bar@foo.com", "syzbot@syzkaller.appspotmail.com"},
+		Body: `some: patch
+
+Fixes: e21d2170f366 ("video: remove unnecessary platform_set_drvdata()")
+Fixes: aabbccdd ("second title")
+
+--- a/mm/kasan/kasan.c
++++ b/mm/kasan/kasan.c
+-       current->kasan_depth++;
++       current->kasan_depth--;
+
+`,
+		Patch: `--- a/mm/kasan/kasan.c
++++ b/mm/kasan/kasan.c
+-       current->kasan_depth++;
++       current->kasan_depth--;
+`,
+		Fixes: []vcs.Commit{
+			{
+				Title: "video: remove unnecessary platform_set_drvdata()",
+				Hash:  "e21d2170f366",
+			},
+			{
+				Title: "second title",
+				Hash:  "aabbccdd",
 			},
 		},
 	}},
