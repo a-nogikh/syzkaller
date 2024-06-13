@@ -19,6 +19,11 @@ type BackportCommit struct {
 	Comment string `json:"comment"`
 }
 
+func LinuxFixBackportsPublic(repo Repo) error {
+	return applyFixBackports(repo.(*linux).git,
+		append([]BackportCommit{}, pickLinuxCommits...))
+}
+
 // linuxFixBackports() cherry-picks the commits necessary to compile/run older Linux kernel releases.
 func linuxFixBackports(repo *git, extraCommits ...BackportCommit) error {
 	return applyFixBackports(repo,

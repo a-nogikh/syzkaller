@@ -1,0 +1,38 @@
+<html>
+  <head>
+    <style>
+      table, th, td {
+          border: 1px solid black;
+      }
+    </style>
+  </head>
+  <body>
+    Total: {{.Total}}, apply errors: {{.ApplyErrors}}.<br />
+    <table>
+      <tr>
+        <th>Series</th>
+        <th>Status</th>
+        <th>Only in series</th>
+        <th>Base</th>
+        <th>Base Status</th>
+        <th>Only in base</th>
+      </tr>
+      {{range .Records}}
+      <tr>
+        <td>
+          <a href="{{.Series.Link}}">{{.Series.Name}}</a>
+          {{range .FixedBy}}
+          <br />
+          FIX: <a href="{{.Link}}">{{.Name}}</a>
+          {{end}}
+        </td>
+        <td>{{.SeriesStatus}}</td>
+        <td>{{range .OnlyInSeries}}<a href="{{.Link}}">{{.Name}}</a><br/>{{end}}</td>
+        <td>{{.Base}}</td>
+        <td>{{.BaseStatus}}</td>
+        <td>{{range .OnlyInBase}}<a href="{{.Link}}">{{.Name}}</a><br/>{{end}}</td>
+      </tr>
+      {{end}}
+    </table>
+  </body>
+</html>
