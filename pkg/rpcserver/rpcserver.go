@@ -389,7 +389,7 @@ func (serv *Server) connectionLoop(runner *Runner) error {
 			}
 		}
 		for len(runner.requests)-len(runner.executing) < 2*serv.cfg.Procs {
-			req := serv.execSource.Next()
+			req, _ := serv.execSource.Next()
 			if req == nil {
 				break
 			}
