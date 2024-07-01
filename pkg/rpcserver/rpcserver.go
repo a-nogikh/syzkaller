@@ -77,9 +77,12 @@ type Server struct {
 	canonicalModules *cover.Canonicalizer
 	coverFilter      []uint64
 
-	mu             sync.Mutex
-	runners        map[string]*Runner
-	execSource     queue.Source
+	mu         sync.Mutex
+	runners    map[string]*Runner
+	execSource *queue.Avoider
+	// TODO: replace names with indices.
+	ids            map[string]int
+	idSeq          int
 	triagedCorpus  atomic.Bool
 	statVMRestarts *stats.Val
 	*runnerStats
@@ -145,9 +148,10 @@ func newImpl(ctx context.Context, cfg *Config, mgr Manager) (*Server, error) {
 		sysTarget:  sysTarget,
 		timeouts:   sysTarget.Timeouts(cfg.Slowdown),
 		runners:    make(map[string]*Runner),
+		ids:        make(map[string]int),
 		checker:    checker,
 		baseSource: baseSource,
-		execSource: queue.Retry(baseSource),
+		execSource: queue.Avoid(queue.Retry(baseSource)),
 
 		StatExecs: stats.Create("exec total", "Total test program executions",
 			stats.Console, stats.Rate{}, stats.Prometheus("syz_exec_total")),
@@ -418,6 +422,13 @@ func (serv *Server) CreateInstance(name string, injectExec chan<- bool, updInfo 
 		panic(fmt.Sprintf("duplicate instance %s", name))
 	}
 	serv.runners[name] = runner
+	id, ok := serv.ids[name]
+	if !ok {
+		id = serv.idSeq
+		serv.idSeq++
+		serv.ids[name] = id
+	}
+	runner.id = id
 }
 
 // stopInstance prevents further request exchange requests.
