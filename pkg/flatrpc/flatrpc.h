@@ -1683,6 +1683,7 @@ flatbuffers::Offset<ExecutorMessageRaw> CreateExecutorMessageRaw(flatbuffers::Fl
 struct ExecRequestRawT : public flatbuffers::NativeTable {
   typedef ExecRequestRaw TableType;
   int64_t id = 0;
+  uint64_t avoid = 0;
   std::vector<uint8_t> prog_data{};
   std::unique_ptr<rpc::ExecOptsRaw> exec_opts{};
   rpc::RequestFlag flags = static_cast<rpc::RequestFlag>(0);
@@ -1698,13 +1699,17 @@ struct ExecRequestRaw FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   typedef ExecRequestRawBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ID = 4,
-    VT_PROG_DATA = 6,
-    VT_EXEC_OPTS = 8,
-    VT_FLAGS = 10,
-    VT_ALL_SIGNAL = 12
+    VT_AVOID = 6,
+    VT_PROG_DATA = 8,
+    VT_EXEC_OPTS = 10,
+    VT_FLAGS = 12,
+    VT_ALL_SIGNAL = 14
   };
   int64_t id() const {
     return GetField<int64_t>(VT_ID, 0);
+  }
+  uint64_t avoid() const {
+    return GetField<uint64_t>(VT_AVOID, 0);
   }
   const flatbuffers::Vector<uint8_t> *prog_data() const {
     return GetPointer<const flatbuffers::Vector<uint8_t> *>(VT_PROG_DATA);
@@ -1721,6 +1726,7 @@ struct ExecRequestRaw FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   bool Verify(flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<int64_t>(verifier, VT_ID, 8) &&
+           VerifyField<uint64_t>(verifier, VT_AVOID, 8) &&
            VerifyOffset(verifier, VT_PROG_DATA) &&
            verifier.VerifyVector(prog_data()) &&
            VerifyField<rpc::ExecOptsRaw>(verifier, VT_EXEC_OPTS, 8) &&
@@ -1740,6 +1746,9 @@ struct ExecRequestRawBuilder {
   flatbuffers::uoffset_t start_;
   void add_id(int64_t id) {
     fbb_.AddElement<int64_t>(ExecRequestRaw::VT_ID, id, 0);
+  }
+  void add_avoid(uint64_t avoid) {
+    fbb_.AddElement<uint64_t>(ExecRequestRaw::VT_AVOID, avoid, 0);
   }
   void add_prog_data(flatbuffers::Offset<flatbuffers::Vector<uint8_t>> prog_data) {
     fbb_.AddOffset(ExecRequestRaw::VT_PROG_DATA, prog_data);
@@ -1767,12 +1776,14 @@ struct ExecRequestRawBuilder {
 inline flatbuffers::Offset<ExecRequestRaw> CreateExecRequestRaw(
     flatbuffers::FlatBufferBuilder &_fbb,
     int64_t id = 0,
+    uint64_t avoid = 0,
     flatbuffers::Offset<flatbuffers::Vector<uint8_t>> prog_data = 0,
     const rpc::ExecOptsRaw *exec_opts = nullptr,
     rpc::RequestFlag flags = static_cast<rpc::RequestFlag>(0),
     flatbuffers::Offset<flatbuffers::Vector<int32_t>> all_signal = 0) {
   ExecRequestRawBuilder builder_(_fbb);
   builder_.add_flags(flags);
+  builder_.add_avoid(avoid);
   builder_.add_id(id);
   builder_.add_all_signal(all_signal);
   builder_.add_exec_opts(exec_opts);
@@ -1783,6 +1794,7 @@ inline flatbuffers::Offset<ExecRequestRaw> CreateExecRequestRaw(
 inline flatbuffers::Offset<ExecRequestRaw> CreateExecRequestRawDirect(
     flatbuffers::FlatBufferBuilder &_fbb,
     int64_t id = 0,
+    uint64_t avoid = 0,
     const std::vector<uint8_t> *prog_data = nullptr,
     const rpc::ExecOptsRaw *exec_opts = nullptr,
     rpc::RequestFlag flags = static_cast<rpc::RequestFlag>(0),
@@ -1792,6 +1804,7 @@ inline flatbuffers::Offset<ExecRequestRaw> CreateExecRequestRawDirect(
   return rpc::CreateExecRequestRaw(
       _fbb,
       id,
+      avoid,
       prog_data__,
       exec_opts,
       flags,
@@ -2269,6 +2282,7 @@ flatbuffers::Offset<ProgInfoRaw> CreateProgInfoRaw(flatbuffers::FlatBufferBuilde
 struct ExecResultRawT : public flatbuffers::NativeTable {
   typedef ExecResultRaw TableType;
   int64_t id = 0;
+  int32_t proc = 0;
   std::vector<uint8_t> output{};
   std::string error{};
   std::unique_ptr<rpc::ProgInfoRawT> info{};
@@ -2283,12 +2297,16 @@ struct ExecResultRaw FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   typedef ExecResultRawBuilder Builder;
   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
     VT_ID = 4,
-    VT_OUTPUT = 6,
-    VT_ERROR = 8,
-    VT_INFO = 10
+    VT_PROC = 6,
+    VT_OUTPUT = 8,
+    VT_ERROR = 10,
+    VT_INFO = 12
   };
   int64_t id() const {
     return GetField<int64_t>(VT_ID, 0);
+  }
+  int32_t proc() const {
+    return GetField<int32_t>(VT_PROC, 0);
   }
   const flatbuffers::Vector<uint8_t> *output() const {
     return GetPointer<const flatbuffers::Vector<uint8_t> *>(VT_OUTPUT);
@@ -2302,6 +2320,7 @@ struct ExecResultRaw FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   bool Verify(flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<int64_t>(verifier, VT_ID, 8) &&
+           VerifyField<int32_t>(verifier, VT_PROC, 4) &&
            VerifyOffset(verifier, VT_OUTPUT) &&
            verifier.VerifyVector(output()) &&
            VerifyOffset(verifier, VT_ERROR) &&
@@ -2321,6 +2340,9 @@ struct ExecResultRawBuilder {
   flatbuffers::uoffset_t start_;
   void add_id(int64_t id) {
     fbb_.AddElement<int64_t>(ExecResultRaw::VT_ID, id, 0);
+  }
+  void add_proc(int32_t proc) {
+    fbb_.AddElement<int32_t>(ExecResultRaw::VT_PROC, proc, 0);
   }
   void add_output(flatbuffers::Offset<flatbuffers::Vector<uint8_t>> output) {
     fbb_.AddOffset(ExecResultRaw::VT_OUTPUT, output);
@@ -2345,6 +2367,7 @@ struct ExecResultRawBuilder {
 inline flatbuffers::Offset<ExecResultRaw> CreateExecResultRaw(
     flatbuffers::FlatBufferBuilder &_fbb,
     int64_t id = 0,
+    int32_t proc = 0,
     flatbuffers::Offset<flatbuffers::Vector<uint8_t>> output = 0,
     flatbuffers::Offset<flatbuffers::String> error = 0,
     flatbuffers::Offset<rpc::ProgInfoRaw> info = 0) {
@@ -2353,12 +2376,14 @@ inline flatbuffers::Offset<ExecResultRaw> CreateExecResultRaw(
   builder_.add_info(info);
   builder_.add_error(error);
   builder_.add_output(output);
+  builder_.add_proc(proc);
   return builder_.Finish();
 }
 
 inline flatbuffers::Offset<ExecResultRaw> CreateExecResultRawDirect(
     flatbuffers::FlatBufferBuilder &_fbb,
     int64_t id = 0,
+    int32_t proc = 0,
     const std::vector<uint8_t> *output = nullptr,
     const char *error = nullptr,
     flatbuffers::Offset<rpc::ProgInfoRaw> info = 0) {
@@ -2367,6 +2392,7 @@ inline flatbuffers::Offset<ExecResultRaw> CreateExecResultRawDirect(
   return rpc::CreateExecResultRaw(
       _fbb,
       id,
+      proc,
       output__,
       error__,
       info);
@@ -2768,6 +2794,7 @@ inline flatbuffers::Offset<ExecutorMessageRaw> CreateExecutorMessageRaw(flatbuff
 
 inline ExecRequestRawT::ExecRequestRawT(const ExecRequestRawT &o)
       : id(o.id),
+        avoid(o.avoid),
         prog_data(o.prog_data),
         exec_opts((o.exec_opts) ? new rpc::ExecOptsRaw(*o.exec_opts) : nullptr),
         flags(o.flags),
@@ -2776,6 +2803,7 @@ inline ExecRequestRawT::ExecRequestRawT(const ExecRequestRawT &o)
 
 inline ExecRequestRawT &ExecRequestRawT::operator=(ExecRequestRawT o) FLATBUFFERS_NOEXCEPT {
   std::swap(id, o.id);
+  std::swap(avoid, o.avoid);
   std::swap(prog_data, o.prog_data);
   std::swap(exec_opts, o.exec_opts);
   std::swap(flags, o.flags);
@@ -2793,6 +2821,7 @@ inline void ExecRequestRaw::UnPackTo(ExecRequestRawT *_o, const flatbuffers::res
   (void)_o;
   (void)_resolver;
   { auto _e = id(); _o->id = _e; }
+  { auto _e = avoid(); _o->avoid = _e; }
   { auto _e = prog_data(); if (_e) { _o->prog_data.resize(_e->size()); std::copy(_e->begin(), _e->end(), _o->prog_data.begin()); } }
   { auto _e = exec_opts(); if (_e) _o->exec_opts = std::unique_ptr<rpc::ExecOptsRaw>(new rpc::ExecOptsRaw(*_e)); }
   { auto _e = flags(); _o->flags = _e; }
@@ -2808,6 +2837,7 @@ inline flatbuffers::Offset<ExecRequestRaw> CreateExecRequestRaw(flatbuffers::Fla
   (void)_o;
   struct _VectorArgs { flatbuffers::FlatBufferBuilder *__fbb; const ExecRequestRawT* __o; const flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
   auto _id = _o->id;
+  auto _avoid = _o->avoid;
   auto _prog_data = _o->prog_data.size() ? _fbb.CreateVector(_o->prog_data) : 0;
   auto _exec_opts = _o->exec_opts ? _o->exec_opts.get() : nullptr;
   auto _flags = _o->flags;
@@ -2815,6 +2845,7 @@ inline flatbuffers::Offset<ExecRequestRaw> CreateExecRequestRaw(flatbuffers::Fla
   return rpc::CreateExecRequestRaw(
       _fbb,
       _id,
+      _avoid,
       _prog_data,
       _exec_opts,
       _flags,
@@ -3025,6 +3056,7 @@ inline flatbuffers::Offset<ProgInfoRaw> CreateProgInfoRaw(flatbuffers::FlatBuffe
 
 inline ExecResultRawT::ExecResultRawT(const ExecResultRawT &o)
       : id(o.id),
+        proc(o.proc),
         output(o.output),
         error(o.error),
         info((o.info) ? new rpc::ProgInfoRawT(*o.info) : nullptr) {
@@ -3032,6 +3064,7 @@ inline ExecResultRawT::ExecResultRawT(const ExecResultRawT &o)
 
 inline ExecResultRawT &ExecResultRawT::operator=(ExecResultRawT o) FLATBUFFERS_NOEXCEPT {
   std::swap(id, o.id);
+  std::swap(proc, o.proc);
   std::swap(output, o.output);
   std::swap(error, o.error);
   std::swap(info, o.info);
@@ -3048,6 +3081,7 @@ inline void ExecResultRaw::UnPackTo(ExecResultRawT *_o, const flatbuffers::resol
   (void)_o;
   (void)_resolver;
   { auto _e = id(); _o->id = _e; }
+  { auto _e = proc(); _o->proc = _e; }
   { auto _e = output(); if (_e) { _o->output.resize(_e->size()); std::copy(_e->begin(), _e->end(), _o->output.begin()); } }
   { auto _e = error(); if (_e) _o->error = _e->str(); }
   { auto _e = info(); if (_e) _o->info = std::unique_ptr<rpc::ProgInfoRawT>(_e->UnPack(_resolver)); }
@@ -3062,12 +3096,14 @@ inline flatbuffers::Offset<ExecResultRaw> CreateExecResultRaw(flatbuffers::FlatB
   (void)_o;
   struct _VectorArgs { flatbuffers::FlatBufferBuilder *__fbb; const ExecResultRawT* __o; const flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
   auto _id = _o->id;
+  auto _proc = _o->proc;
   auto _output = _o->output.size() ? _fbb.CreateVector(_o->output) : 0;
   auto _error = _o->error.empty() ? 0 : _fbb.CreateString(_o->error);
   auto _info = _o->info ? CreateProgInfoRaw(_fbb, _o->info.get(), _rehasher) : 0;
   return rpc::CreateExecResultRaw(
       _fbb,
       _id,
+      _proc,
       _output,
       _error,
       _info);
