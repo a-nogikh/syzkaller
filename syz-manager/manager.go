@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,9 +52,10 @@ import (
 )
 
 var (
-	flagConfig = flag.String("config", "", "configuration file")
-	flagDebug  = flag.Bool("debug", false, "dump all VM output to console")
-	flagBench  = flag.String("bench", "", "write execution statistics into this file periodically")
+	flagConfig      = flag.String("config", "", "configuration file")
+	flagDebug       = flag.Bool("debug", false, "dump all VM output to console")
+	flagBench       = flag.String("bench", "", "write execution statistics into this file periodically")
+	flagHeapProfile = flag.String("heap_profile", "", "periodically write pprof heap profile into this file")
 
 	flagMode = flag.String("mode", "fuzzing", "mode of operation, one of:\n"+
 		" - fuzzing: the default continuous fuzzing mode\n"+
@@ -290,6 +292,10 @@ func RunManager(cfg *mgrconfig.Config) {
 		mgr.initBench()
 	}
 
+	if *flagHeapProfile != "" {
+		go mgr.heapProfileLoop()
+	}
+
 	go mgr.heartbeatLoop()
 	if mgr.mode != ModeSmokeTest {
 		osutil.HandleInterrupts(vm.Shutdown)
@@ -333,6 +339,28 @@ func (mgr *Manager) heartbeatLoop() {
 			fmt.Fprintf(buf, "%v=%v ", stat.Name, stat.Value)
 		}
 		log.Logf(0, "%s", buf.String())
+	}
+}
+
+func (mgr *Manager) heapProfileLoop() {
+	for range time.NewTicker(time.Minute).C {
+		tmpFile := *flagHeapProfile + ".tmp"
+		f, err := os.Create(tmpFile)
+		if err != nil {
+			log.Errorf("failed to craete to %s: %v", tmpFile, err)
+			continue
+		}
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			f.Close()
+			log.Errorf("failed to write heap profile to %s: %v", tmpFile, err)
+			continue
+		}
+		f.Close()
+		err = os.Rename(tmpFile, *flagHeapProfile)
+		if err != nil {
+			log.Errorf("failed to rename the heap profile file  %v", err)
+			continue
+		}
 	}
 }
 
