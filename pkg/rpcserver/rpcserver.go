@@ -47,14 +47,22 @@ type Config struct {
 	Slowdown      int
 	pcBase        uint64
 	localModules  []*vminfo.KernelModule
+
+	MachineChecked MachineCheckedCallback
+	CoverFilter    CoverFilterCallback
 }
 
-type Manager interface {
-	MaxSignal() signal.Signal
-	BugFrames() (leaks []string, races []string)
-	MachineChecked(features flatrpc.Feature, syscalls map[*prog.Syscall]bool) queue.Source
-	CoverageFilter(modules []*vminfo.KernelModule) []uint64
+type MachineCheckedCallback func(features flatrpc.Feature, syscalls map[*prog.Syscall]bool) Source
+type CoverFilterCallback func(modules []*vminfo.KernelModule) []uint64
+
+type Source struct {
+	Source    queue.Source
+	MaxSignal MaxSignalCallback
+	BugFrames BugFramesCallback
 }
+
+type MaxSignalCallback func() signal.Signal
+type BugFramesCallback func() (leaks []string, races []string)
 
 type Server struct {
 	Port           int
@@ -62,7 +70,6 @@ type Server struct {
 	StatNumFuzzing *stats.Val
 
 	cfg       *Config
-	mgr       Manager
 	serv      *flatrpc.Serv
 	target    *prog.Target
 	sysTarget *targets.Target
@@ -82,10 +89,13 @@ type Server struct {
 	execSource     queue.Source
 	triagedCorpus  atomic.Bool
 	statVMRestarts *stats.Val
+	maxSignal      MaxSignalCallback
+	bugFrames      BugFramesCallback
 	*runnerStats
 }
 
-func New(cfg *mgrconfig.Config, mgr Manager, debug bool) (*Server, error) {
+func New(cfg *mgrconfig.Config, machineChecked MachineCheckedCallback,
+	coverFilter CoverFilterCallback, debug bool) (*Server, error) {
 	var modules []*vminfo.KernelModule
 	var pcBase uint64
 	if cfg.KernelObj != "" {
@@ -127,12 +137,14 @@ func New(cfg *mgrconfig.Config, mgr Manager, debug bool) (*Server, error) {
 		PrintMachineCheck: true,
 		Procs:             cfg.Procs,
 		Slowdown:          cfg.Timeouts.Slowdown,
+		CoverFilter:       coverFilter,
+		MachineChecked:    machineChecked,
 		pcBase:            pcBase,
 		localModules:      modules,
-	}, mgr)
+	})
 }
 
-func newImpl(ctx context.Context, cfg *Config, mgr Manager) (*Server, error) {
+func newImpl(ctx context.Context, cfg *Config) (*Server, error) {
 	cfg.Procs = min(cfg.Procs, prog.MaxPids)
 	checker := vminfo.New(ctx, &cfg.Config)
 	baseSource := queue.DynamicSource(checker)
@@ -140,7 +152,6 @@ func newImpl(ctx context.Context, cfg *Config, mgr Manager) (*Server, error) {
 	sysTarget := targets.Get(cfg.Target.OS, cfg.VMArch)
 	serv := &Server{
 		cfg:        cfg,
-		mgr:        mgr,
 		target:     cfg.Target,
 		sysTarget:  sysTarget,
 		timeouts:   sysTarget.Timeouts(cfg.Slowdown),
@@ -224,7 +235,12 @@ func (serv *Server) handleRunnerConn(runner *Runner, conn *flatrpc.Conn) error {
 		Timeouts: serv.timeouts,
 		Callback: serv.handleMachineInfo,
 	}
-	opts.LeakFrames, opts.RaceFrames = serv.mgr.BugFrames()
+	serv.mu.Lock()
+	bugFrames := serv.bugFrames
+	serv.mu.Unlock()
+	if bugFrames != nil {
+		opts.LeakFrames, opts.RaceFrames = bugFrames()
+	}
 	if serv.checkDone.Load() {
 		opts.Features = serv.setupFeatures
 	} else {
@@ -268,7 +284,9 @@ func (serv *Server) handleMachineInfo(infoReq *flatrpc.InfoRequestRawT) (handsha
 	}
 	serv.infoOnce.Do(func() {
 		serv.canonicalModules = cover.NewCanonicalizer(modules, serv.cfg.Cover)
-		serv.coverFilter = serv.mgr.CoverageFilter(modules)
+		if serv.cfg.CoverFilter != nil {
+			serv.coverFilter = serv.cfg.CoverFilter(modules)
+		}
 		globs := make(map[string][]string)
 		for _, glob := range infoReq.Globs {
 			globs[glob.Name] = glob.Files
@@ -295,8 +313,11 @@ func (serv *Server) handleMachineInfo(infoReq *flatrpc.InfoRequestRawT) (handsha
 }
 
 func (serv *Server) connectionLoop(runner *Runner) error {
-	if serv.cfg.Cover {
-		maxSignal := serv.mgr.MaxSignal().ToRaw()
+	serv.mu.Lock()
+	maxSignalCb := serv.maxSignal
+	serv.mu.Unlock()
+	if serv.cfg.Cover && maxSignalCb != nil {
+		maxSignal := maxSignalCb().ToRaw()
 		for len(maxSignal) != 0 {
 			// Split coverage into batches to not grow the connection serialization
 			// buffer too much (we don't want to grow it larger than what will be needed
@@ -342,9 +363,13 @@ func (serv *Server) runCheck(checkFilesInfo []*flatrpc.FileInfo, checkFeatureInf
 	}
 	enabledFeatures := features.Enabled()
 	serv.setupFeatures = features.NeedSetup()
-	newSource := serv.mgr.MachineChecked(enabledFeatures, enabledCalls)
-	serv.baseSource.Store(newSource)
+	ret := serv.cfg.MachineChecked(enabledFeatures, enabledCalls)
+	serv.baseSource.Store(ret.Source)
 	serv.checkDone.Store(true)
+	serv.mu.Lock()
+	serv.maxSignal = ret.MaxSignal
+	serv.bugFrames = ret.BugFrames
+	serv.mu.Unlock()
 	return nil
 }
 

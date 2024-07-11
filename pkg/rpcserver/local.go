@@ -43,19 +43,26 @@ func RunLocal(cfg *LocalConfig) error {
 	cfg.FilterSignal = true
 	cfg.RPC = ":0"
 	cfg.PrintMachineCheck = log.V(1)
-	ctx := &local{
-		cfg:       cfg,
-		setupDone: make(chan bool),
+
+	setupDone := make(chan bool)
+	cfg.Config.MachineChecked = func(features flatrpc.Feature, syscalls map[*prog.Syscall]bool) Source {
+		close(setupDone)
+		return Source{
+			Source: cfg.MachineChecked(features, syscalls),
+			MaxSignal: func() signal.Signal {
+				return signal.FromRaw(cfg.MaxSignal, 0)
+			},
+		}
 	}
-	serv, err := newImpl(cfg.Context, &cfg.Config, ctx)
+	cfg.Config.CoverFilter = func(modules []*vminfo.KernelModule) []uint64 {
+		return cfg.CoverFilter
+	}
+
+	serv, err := newImpl(cfg.Context, &cfg.Config)
 	if err != nil {
 		return err
 	}
 	defer serv.Close()
-	ctx.serv = serv
-	// setupDone synchronizes assignment to ctx.serv and read of ctx.serv in MachineChecked
-	// for the race detector b/c it does not understand the synchronization via TCP socket connect/accept.
-	close(ctx.setupDone)
 
 	name := "local"
 	connErr := serv.CreateInstance(name, nil, nil)
@@ -91,7 +98,11 @@ func RunLocal(cfg *LocalConfig) error {
 		osutil.HandleInterrupts(shutdown)
 	}
 	var cmdErr error
+repeat:
 	select {
+	case <-setupDone:
+		serv.TriagedCorpus()
+		goto repeat
 	case <-shutdown:
 	case <-cfg.Context.Done():
 	case <-connErr:
@@ -103,28 +114,4 @@ func RunLocal(cfg *LocalConfig) error {
 		<-res
 	}
 	return cmdErr
-}
-
-type local struct {
-	cfg       *LocalConfig
-	serv      *Server
-	setupDone chan bool
-}
-
-func (ctx *local) MachineChecked(features flatrpc.Feature, syscalls map[*prog.Syscall]bool) queue.Source {
-	<-ctx.setupDone
-	ctx.serv.TriagedCorpus()
-	return ctx.cfg.MachineChecked(features, syscalls)
-}
-
-func (ctx *local) BugFrames() ([]string, []string) {
-	return nil, nil
-}
-
-func (ctx *local) MaxSignal() signal.Signal {
-	return signal.FromRaw(ctx.cfg.MaxSignal, 0)
-}
-
-func (ctx *local) CoverageFilter(modules []*vminfo.KernelModule) []uint64 {
-	return ctx.cfg.CoverFilter
 }

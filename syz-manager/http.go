@@ -331,7 +331,7 @@ func (mgr *Manager) httpCoverCover(w http.ResponseWriter, r *http.Request, funcF
 
 	// Don't hold the mutex while creating report generator and generating the report,
 	// these operations take lots of time.
-	if !mgr.checkDone.Load() {
+	if mgr.machineInfo.Load() == nil {
 		http.Error(w, "coverage is not ready, please try again later after fuzzer started", http.StatusInternalServerError)
 		return
 	}
@@ -441,7 +441,11 @@ func (mgr *Manager) httpCoverFallback(w http.ResponseWriter, r *http.Request) {
 		calls[id] = append(calls[id], errno)
 	}
 	data := &UIFallbackCoverData{}
-	for call := range mgr.targetEnabledSyscalls {
+	var syscalls map[*prog.Syscall]bool
+	if info := mgr.machineInfo.Load(); info != nil {
+		syscalls = info.Syscalls
+	}
+	for call := range syscalls {
 		errnos := calls[call.ID]
 		sort.Ints(errnos)
 		successful := 0

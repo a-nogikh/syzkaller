@@ -5,11 +5,13 @@ package dispatcher
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/google/syzkaller/pkg/log"
+	"github.com/google/syzkaller/pkg/stats"
 )
 
 type Instance interface {
@@ -26,6 +28,9 @@ type CreateInstance[T Instance] func(int) (T, error)
 // dynamically controlled sub-pool might be reserved for the arbitrary Runners.
 type Pool[T Instance] struct {
 	BootErrors chan error
+
+	bootTime        stats.AverageValue[time.Duration]
+	statAvgBootTime *stats.Val
 
 	creator    CreateInstance[T]
 	defaultJob Runner[T]
@@ -46,13 +51,24 @@ func NewPool[T Instance](count int, creator CreateInstance[T], def Runner[T]) *P
 		inst.reset(func() {})
 		instances[i] = inst
 	}
-	return &Pool[T]{
+	pool := &Pool[T]{
 		BootErrors: make(chan error, 16),
 		creator:    creator,
 		defaultJob: def,
 		instances:  instances,
 		jobs:       make(chan Runner[T]),
 	}
+
+	pool.statAvgBootTime = stats.Create("instance restart", "Average VM restart time (sec)",
+		stats.NoGraph,
+		func() int {
+			return int(pool.bootTime.Value().Seconds())
+		},
+		func(v int, _ time.Duration) string {
+			return fmt.Sprintf("%v sec", v)
+		})
+
+	return pool
 }
 
 func (p *Pool[T]) Loop(ctx context.Context) {
@@ -83,12 +99,16 @@ func (p *Pool[T]) runInstance(ctx context.Context, inst *poolInstance[T]) {
 	inst.status(StateBooting)
 	defer inst.status(StateOffline)
 
+	start := time.Now()
+
 	obj, err := p.creator(inst.idx)
 	if err != nil {
 		p.BootErrors <- err
 		return
 	}
 	defer obj.Close()
+
+	p.bootTime.Save(time.Since(start))
 
 	inst.status(StateWaiting)
 	// The job and jobChan fields are subject to concurrent updates.

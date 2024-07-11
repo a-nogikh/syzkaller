@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +32,7 @@ import (
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/gce"
 	"github.com/google/syzkaller/pkg/hash"
+	"github.com/google/syzkaller/pkg/instance"
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/mgrconfig"
 	"github.com/google/syzkaller/pkg/osutil"
@@ -41,7 +41,6 @@ import (
 	"github.com/google/syzkaller/pkg/repro"
 	"github.com/google/syzkaller/pkg/rpcserver"
 	"github.com/google/syzkaller/pkg/runtest"
-	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/pkg/stats"
 	"github.com/google/syzkaller/pkg/vminfo"
 	"github.com/google/syzkaller/prog"
@@ -70,37 +69,34 @@ var (
 )
 
 type Manager struct {
-	cfg             *mgrconfig.Config
-	mode            Mode
-	vmPool          *vm.Pool
-	pool            *dispatcher.Pool[*vm.Instance]
-	target          *prog.Target
-	sysTarget       *targets.Target
-	reporter        *report.Reporter
-	crashdir        string
-	serv            *rpcserver.Server
-	corpus          *corpus.Corpus
-	corpusDB        *db.DB
-	corpusDBMu      sync.Mutex // for concurrent operations on corpusDB
-	corpusPreload   chan []fuzzer.Candidate
-	firstConnect    atomic.Int64 // unix time, or 0 if not connected
-	crashTypes      map[string]bool
-	enabledFeatures flatrpc.Feature
-	checkDone       atomic.Bool
-	fresh           bool
-	expertMode      bool
-	modules         []*vminfo.KernelModule
-	coverFilter     map[uint64]struct{} // includes only coverage PCs
+	cfg           *mgrconfig.Config
+	mode          Mode
+	rpcPool       *instance.RPCPool
+	pool          *dispatcher.Pool[*vm.Instance]
+	target        *prog.Target
+	sysTarget     *targets.Target
+	reporter      *report.Reporter
+	crashdir      string
+	corpus        *corpus.Corpus
+	corpusDB      *db.DB
+	corpusDBMu    sync.Mutex // for concurrent operations on corpusDB
+	corpusPreload chan []fuzzer.Candidate
+	firstConnect  atomic.Int64 // unix time, or 0 if not connected
+	crashTypes    map[string]bool
+	machineInfo   atomic.Pointer[instance.MachineInfo]
+	fresh         bool
+	expertMode    bool
+	modules       []*vminfo.KernelModule
+	coverFilter   map[uint64]struct{} // includes only coverage PCs
 
 	dash *dashapi.Dashboard
 	// This is specifically separated from dash, so that we can keep dash = nil when
 	// cfg.DashboardOnlyRepro is set, so that we don't accidentially use dash for anything.
 	dashRepro *dashapi.Dashboard
 
-	mu                    sync.Mutex
-	fuzzer                atomic.Pointer[fuzzer.Fuzzer]
-	phase                 int
-	targetEnabledSyscalls map[*prog.Syscall]bool
+	mu     sync.Mutex
+	fuzzer atomic.Pointer[fuzzer.Fuzzer]
+	phase  int
 
 	disabledHashes   map[string]struct{}
 	newRepros        [][]byte
@@ -110,7 +106,6 @@ type Manager struct {
 	saturatedCalls   map[string]bool
 
 	externalReproQueue chan *Crash
-	crashes            chan *Crash
 
 	// For checking that files that we are using are not changing under us.
 	// Maps file name to modification time.
@@ -120,8 +115,6 @@ type Manager struct {
 	benchFile *os.File
 
 	assetStorage *asset.Storage
-
-	bootTime stats.AverageValue[time.Duration]
 
 	reproMgr *reproManager
 
@@ -157,7 +150,6 @@ const (
 const currentDBVersion = 5
 
 type Crash struct {
-	instanceName  string
 	fromHub       bool // this crash was created based on a repro from syz-hub
 	fromDashboard bool // .. or from dashboard
 	*report.Report
@@ -240,7 +232,6 @@ func RunManager(cfg *mgrconfig.Config) {
 	mgr := &Manager{
 		cfg:                cfg,
 		mode:               mode,
-		vmPool:             vmPool,
 		corpus:             corpus.NewMonitoredCorpus(context.Background(), corpusUpdates),
 		corpusPreload:      make(chan []fuzzer.Candidate),
 		target:             cfg.Target,
@@ -253,7 +244,6 @@ func RunManager(cfg *mgrconfig.Config) {
 		dataRaceFrames:     make(map[string]bool),
 		fresh:              true,
 		externalReproQueue: make(chan *Crash, 10),
-		crashes:            make(chan *Crash, 10),
 		usedFiles:          make(map[string]time.Time),
 		saturatedCalls:     make(map[string]bool),
 	}
@@ -269,13 +259,6 @@ func RunManager(cfg *mgrconfig.Config) {
 	mgr.initHTTP() // Creates HTTP server.
 	mgr.collectUsedFiles()
 	go mgr.corpusInputHandler(corpusUpdates)
-
-	// Create RPC server for fuzzers.
-	mgr.serv, err = rpcserver.New(mgr.cfg, mgr, *flagDebug)
-	if err != nil {
-		log.Fatalf("failed to create rpc server: %v", err)
-	}
-	log.Logf(0, "serving rpc on tcp://%v", mgr.serv.Port)
 
 	if cfg.DashboardAddr != "" {
 		opts := []dashapi.DashboardOpts{}
@@ -303,23 +286,27 @@ func RunManager(cfg *mgrconfig.Config) {
 		mgr.initBench()
 	}
 
+	go mgr.checkUsedFiles()
 	go mgr.heartbeatLoop()
 	if mgr.mode != ModeSmokeTest {
 		osutil.HandleInterrupts(vm.Shutdown)
 	}
-	if mgr.vmPool == nil {
+
+	ctx := vm.ShutdownCtx()
+	mgr.rpcPool = instance.NewRPCPool(cfg, reporter, mgr.SourceCallback, mgr.CoverageFilter, *flagDebug)
+	if vmPool == nil {
+		mgr.reproMgr = newReproManager(mgr, 0, false)
 		log.Logf(0, "no VMs started (type=none)")
 		log.Logf(0, "you are supposed to start syz-executor manually as:")
-		log.Logf(0, "syz-executor runner local manager.ip %v", mgr.serv.Port)
+		log.Logf(0, "syz-executor runner local manager.ip %v", mgr.rpcPool.Port())
 		<-vm.Shutdown
 		return
 	}
-	ctx := vm.ShutdownCtx()
-	mgr.pool = vm.NewDispatcher(mgr.vmPool, mgr.fuzzerInstance)
-	mgr.reproMgr = newReproManager(mgr, mgr.vmPool.Count()-mgr.cfg.FuzzingVMs, mgr.cfg.DashboardOnlyRepro)
-	go mgr.processFuzzingResults(ctx)
-	go mgr.checkUsedFiles()
+
+	mgr.pool = vm.NewDispatcher(vmPool, mgr.rpcPool.InstanceRunner)
+	mgr.reproMgr = newReproManager(mgr, vmPool.Count()-mgr.cfg.FuzzingVMs, mgr.cfg.DashboardOnlyRepro)
 	go mgr.reproMgr.Loop(ctx)
+
 	mgr.pool.Loop(ctx)
 }
 
@@ -340,7 +327,7 @@ func (mgr *Manager) heartbeatLoop() {
 		if mgr.firstConnect.Load() == 0 {
 			continue
 		}
-		mgr.statFuzzingTime.Add(diff * mgr.serv.StatNumFuzzing.Val())
+		mgr.statFuzzingTime.Add(diff * mgr.rpcPool.StatNumFuzzing.Val())
 		buf := new(bytes.Buffer)
 		for _, stat := range stats.Collect(stats.Console) {
 			fmt.Fprintf(buf, "%v=%v ", stat.Name, stat.Value)
@@ -394,7 +381,8 @@ func (mgr *Manager) processFuzzingResults(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case crash := <-mgr.crashes:
+		case rep := <-mgr.rpcPool.Reports:
+			crash := &Crash{Report: rep}
 			needRepro := mgr.saveCrash(crash)
 			if mgr.cfg.Reproduce && needRepro {
 				mgr.reproMgr.Enqueue(crash)
@@ -469,7 +457,8 @@ func reportReproError(err error) {
 }
 
 func (mgr *Manager) runRepro(crash *Crash) *ReproResult {
-	res, stats, err := repro.Run(crash.Output, mgr.cfg, mgr.enabledFeatures, mgr.reporter, mgr.pool)
+	res, stats, err := repro.Run(crash.Output, mgr.cfg, mgr.machineInfo.Load().Features,
+		mgr.reporter, mgr.pool)
 	ret := &ReproResult{
 		crash: crash,
 		repro: res,
@@ -629,11 +618,11 @@ func (mgr *Manager) preloadCorpus() {
 	mgr.corpusPreload <- candidates
 }
 
-func (mgr *Manager) loadCorpus() []fuzzer.Candidate {
+func (mgr *Manager) loadCorpus(info instance.MachineInfo) []fuzzer.Candidate {
 	seeds := 0
 	var candidates []fuzzer.Candidate
 	for _, item := range <-mgr.corpusPreload {
-		if containsDisabled(item.Prog, mgr.targetEnabledSyscalls) {
+		if containsDisabled(item.Prog, info.Syscalls) {
 			if mgr.cfg.PreserveCorpus {
 				// This program contains a disabled syscall.
 				// We won't execute it, but remember its hash so
@@ -644,7 +633,7 @@ func (mgr *Manager) loadCorpus() []fuzzer.Candidate {
 			// We cut out the disabled syscalls and retriage/minimize what remains from the prog.
 			// The original prog will be deleted from the corpus.
 			item.Flags &= ^fuzzer.ProgMinimized
-			programLeftover(mgr.target, mgr.targetEnabledSyscalls, item.Prog)
+			programLeftover(mgr.target, info.Syscalls, item.Prog)
 			if len(item.Prog.Calls) == 0 {
 				continue
 			}
@@ -695,95 +684,6 @@ func containsDisabled(p *prog.Prog, enabled map[*prog.Syscall]bool) bool {
 	return false
 }
 
-func (mgr *Manager) fuzzerInstance(ctx context.Context, inst *vm.Instance, updInfo dispatcher.UpdateInfo) {
-	index := inst.Index()
-	instanceName := fmt.Sprintf("vm-%d", index)
-	injectExec := make(chan bool, 10)
-	mgr.serv.CreateInstance(instanceName, injectExec, updInfo)
-
-	rep, vmInfo, err := mgr.runInstanceInner(ctx, inst, instanceName, injectExec)
-	lastExec, machineInfo := mgr.serv.ShutdownInstance(instanceName, rep != nil)
-	if rep != nil {
-		prependExecuting(rep, lastExec)
-		if len(vmInfo) != 0 {
-			machineInfo = append(append(vmInfo, '\n'), machineInfo...)
-		}
-		rep.MachineInfo = machineInfo
-	}
-	if err == nil && rep != nil {
-		mgr.crashes <- &Crash{
-			instanceName: instanceName,
-			Report:       rep,
-		}
-	}
-	if err != nil {
-		log.Logf(1, "%s: failed with error: %v", instanceName, err)
-	}
-}
-
-func (mgr *Manager) runInstanceInner(ctx context.Context, inst *vm.Instance, instanceName string,
-	injectExec <-chan bool) (*report.Report, []byte, error) {
-	start := time.Now()
-
-	fwdAddr, err := inst.Forward(mgr.serv.Port)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to setup port forwarding: %w", err)
-	}
-
-	// If ExecutorBin is provided, it means that syz-executor is already in the image,
-	// so no need to copy it.
-	executorBin := mgr.sysTarget.ExecutorBin
-	if executorBin == "" {
-		executorBin, err = inst.Copy(mgr.cfg.ExecutorBin)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to copy binary: %w", err)
-		}
-	}
-
-	// Run the fuzzer binary.
-	mgr.bootTime.Save(time.Since(start))
-	start = time.Now()
-
-	addrPort := strings.Split(fwdAddr, ":")
-	cmd := fmt.Sprintf("%v runner %v %v %v", executorBin, instanceName, addrPort[0], addrPort[1])
-	_, rep, err := inst.Run(mgr.cfg.Timeouts.VMRunningTime, mgr.reporter, cmd,
-		vm.ExitTimeout, vm.StopContext(ctx), vm.InjectExecuting(injectExec),
-		vm.EarlyFinishCb(func() {
-			// Depending on the crash type and kernel config, fuzzing may continue
-			// running for several seconds even after kernel has printed a crash report.
-			// This litters the log and we want to prevent it.
-			mgr.serv.StopFuzzing(instanceName)
-		}),
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to run fuzzer: %w", err)
-	}
-	if rep == nil {
-		// This is the only "OK" outcome.
-		log.Logf(0, "%s: running for %v, restarting", instanceName, time.Since(start))
-		return nil, nil, nil
-	}
-	vmInfo, err := inst.Info()
-	if err != nil {
-		vmInfo = []byte(fmt.Sprintf("error getting VM info: %v\n", err))
-	}
-	return rep, vmInfo, nil
-}
-
-func prependExecuting(rep *report.Report, lastExec []rpcserver.ExecRecord) {
-	buf := new(bytes.Buffer)
-	fmt.Fprintf(buf, "last executing test programs:\n\n")
-	for _, exec := range lastExec {
-		fmt.Fprintf(buf, "%v ago: executing program %v (id=%v):\n%s\n", exec.Time, exec.Proc, exec.ID, exec.Prog)
-	}
-	fmt.Fprintf(buf, "kernel console output (not intermixed with test programs):\n\n")
-	rep.Output = append(buf.Bytes(), rep.Output...)
-	n := len(buf.Bytes())
-	rep.StartPos += n
-	rep.EndPos += n
-	rep.SkipPos += n
-}
-
 func (mgr *Manager) emailCrash(crash *Crash) {
 	if len(mgr.cfg.EmailAddrs) == 0 {
 		return
@@ -820,7 +720,7 @@ func (mgr *Manager) saveCrash(crash *Crash) bool {
 	if crash.Suppressed {
 		flags += " [suppressed]"
 	}
-	log.Logf(0, "%s: crash: %v%v", crash.instanceName, crash.Title, flags)
+	log.Logf(0, "crash: %v%v", crash.Title, flags)
 
 	if mgr.mode == ModeSmokeTest {
 		data, err := json.Marshal(crash.Report)
@@ -942,8 +842,8 @@ func (mgr *Manager) needRepro(crash *Crash) bool {
 	if crash.fromHub || crash.fromDashboard {
 		return true
 	}
-	if !mgr.checkDone.Load() || (mgr.enabledFeatures&flatrpc.FeatureLeak != 0 &&
-		crash.Type != crash_pkg.MemoryLeak) {
+	info := mgr.machineInfo.Load()
+	if info == nil || (info.Features&flatrpc.FeatureLeak != 0 && crash.Type != crash_pkg.MemoryLeak) {
 		// Leak checking is very slow, don't bother reproducing other crashes on leak instance.
 		return false
 	}
@@ -1279,10 +1179,10 @@ func setGuiltyFiles(crash *dashapi.Crash, report *report.Report) {
 }
 
 func (mgr *Manager) collectSyscallInfo() map[string]*corpus.CallCov {
-	mgr.mu.Lock()
-	enabledSyscalls := mgr.targetEnabledSyscalls
-	mgr.mu.Unlock()
-
+	var enabledSyscalls map[*prog.Syscall]bool
+	if info := mgr.machineInfo.Load(); info != nil {
+		enabledSyscalls = info.Syscalls
+	}
 	if enabledSyscalls == nil {
 		return nil
 	}
@@ -1296,7 +1196,7 @@ func (mgr *Manager) collectSyscallInfo() map[string]*corpus.CallCov {
 	return calls
 }
 
-func (mgr *Manager) BugFrames() (leaks, races []string) {
+func (mgr *Manager) bugFrames() (leaks, races []string) {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 	for frame := range mgr.memoryLeakFrames {
@@ -1308,10 +1208,7 @@ func (mgr *Manager) BugFrames() (leaks, races []string) {
 	return
 }
 
-func (mgr *Manager) MachineChecked(features flatrpc.Feature, enabledSyscalls map[*prog.Syscall]bool) queue.Source {
-	if len(enabledSyscalls) == 0 {
-		log.Fatalf("all system calls are disabled")
-	}
+func (mgr *Manager) SourceCallback(info instance.MachineInfo) rpcserver.Source {
 	if mgr.mode == ModeSmokeTest {
 		mgr.exit("smoke test")
 	}
@@ -1321,28 +1218,22 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature, enabledSyscalls map
 	if mgr.phase != phaseInit {
 		panic("machineChecked() called not during phaseInit")
 	}
-	if mgr.checkDone.Swap(true) {
-		panic("MachineChecked called twice")
-	}
-	mgr.enabledFeatures = features
-	mgr.targetEnabledSyscalls = enabledSyscalls
+
 	mgr.firstConnect.Store(time.Now().Unix())
-	statSyscalls := stats.Create("syscalls", "Number of enabled syscalls",
-		stats.Simple, stats.NoGraph, stats.Link("/syscalls"))
-	statSyscalls.Add(len(enabledSyscalls))
-	corpus := mgr.loadCorpus()
+	mgr.machineInfo.Store(&info)
+
+	corpus := mgr.loadCorpus(info)
 	mgr.phase = phaseLoadedCorpus
-	opts := mgr.defaultExecOpts()
 
 	if mgr.mode == ModeFuzzing {
 		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 		fuzzerObj := fuzzer.NewFuzzer(context.Background(), &fuzzer.Config{
 			Corpus:         mgr.corpus,
 			Coverage:       mgr.cfg.Cover,
-			FaultInjection: features&flatrpc.FeatureFault != 0,
-			Comparisons:    features&flatrpc.FeatureComparisons != 0,
+			FaultInjection: info.Features&flatrpc.FeatureFault != 0,
+			Comparisons:    info.Features&flatrpc.FeatureComparisons != 0,
 			Collide:        true,
-			EnabledCalls:   enabledSyscalls,
+			EnabledCalls:   info.Syscalls,
 			NoMutateCalls:  mgr.cfg.NoMutateCalls,
 			FetchRawCover:  mgr.cfg.RawCover,
 			Logf: func(level int, msg string, args ...interface{}) {
@@ -1362,26 +1253,31 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature, enabledSyscalls map
 
 		go mgr.corpusMinimization()
 		go mgr.fuzzerLoop(fuzzerObj)
+		go mgr.processFuzzingResults(context.Background())
 		if mgr.dash != nil {
 			go mgr.dashboardReporter()
 			if mgr.cfg.Reproduce {
 				go mgr.dashboardReproTasks()
 			}
 		}
-		return queue.DefaultOpts(fuzzerObj, opts)
+		return rpcserver.Source{
+			Source:    queue.DefaultOpts(fuzzerObj, info.ExecOpts),
+			MaxSignal: fuzzerObj.Cover.CopyMaxSignal,
+			BugFrames: mgr.bugFrames,
+		}
 	} else if mgr.mode == ModeCorpusRun {
 		ctx := &corpusRunner{
 			candidates: corpus,
 			rnd:        rand.New(rand.NewSource(time.Now().UnixNano())),
 		}
-		return queue.DefaultOpts(ctx, opts)
+		return rpcserver.Source{Source: queue.DefaultOpts(ctx, info.ExecOpts)}
 	} else if mgr.mode == ModeRunTests {
 		ctx := &runtest.Context{
 			Dir:      filepath.Join(mgr.cfg.Syzkaller, "sys", mgr.cfg.Target.OS, "test"),
 			Target:   mgr.cfg.Target,
-			Features: features,
+			Features: info.Features,
 			EnabledCalls: map[string]map[*prog.Syscall]bool{
-				mgr.cfg.Sandbox: enabledSyscalls,
+				mgr.cfg.Sandbox: info.Syscalls,
 			},
 			LogFunc: func(text string) { fmt.Println(text) },
 			Verbose: true,
@@ -1394,7 +1290,11 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature, enabledSyscalls map
 			}
 			mgr.exit("tests")
 		}()
-		return ctx
+		go func() {
+			report := <-mgr.rpcPool.Reports
+			log.Fatalf("unexpected crash: %s", report.Title)
+		}()
+		return rpcserver.Source{Source: ctx}
 	}
 	panic(fmt.Sprintf("unexpected mode %q", mgr.mode))
 }
@@ -1425,44 +1325,12 @@ func (cr *corpusRunner) Next() *queue.Request {
 	}
 }
 
-func (mgr *Manager) defaultExecOpts() flatrpc.ExecOpts {
-	env := csource.FeaturesToFlags(mgr.enabledFeatures, nil)
-	if mgr.cfg.Experimental.ResetAccState {
-		env |= flatrpc.ExecEnvResetState
-	}
-	if mgr.cfg.Cover {
-		env |= flatrpc.ExecEnvSignal
-	}
-	sandbox, err := flatrpc.SandboxToFlags(mgr.cfg.Sandbox)
-	if err != nil {
-		panic(fmt.Sprintf("failed to parse sandbox: %v", err))
-	}
-	env |= sandbox
-
-	exec := flatrpc.ExecFlagThreaded
-	if !mgr.cfg.RawCover {
-		exec |= flatrpc.ExecFlagDedupCover
-	}
-	return flatrpc.ExecOpts{
-		EnvFlags:   env,
-		ExecFlags:  exec,
-		SandboxArg: mgr.cfg.SandboxArg,
-	}
-}
-
 func (mgr *Manager) corpusMinimization() {
 	for range time.NewTicker(time.Minute).C {
 		mgr.mu.Lock()
 		mgr.minimizeCorpusLocked()
 		mgr.mu.Unlock()
 	}
-}
-
-func (mgr *Manager) MaxSignal() signal.Signal {
-	if fuzzer := mgr.fuzzer.Load(); fuzzer != nil {
-		return fuzzer.Cover.CopyMaxSignal()
-	}
-	return nil
 }
 
 func (mgr *Manager) fuzzerLoop(fuzzer *fuzzer.Fuzzer) {
@@ -1472,7 +1340,7 @@ func (mgr *Manager) fuzzerLoop(fuzzer *fuzzer.Fuzzer) {
 			newSignal := fuzzer.Cover.GrabSignalDelta()
 			log.Logf(3, "distributing %d new signal", len(newSignal))
 			if len(newSignal) != 0 {
-				mgr.serv.DistributeSignalDelta(newSignal)
+				mgr.rpcPool.DistributeSignalDelta(newSignal)
 			}
 		}
 
@@ -1483,8 +1351,9 @@ func (mgr *Manager) fuzzerLoop(fuzzer *fuzzer.Fuzzer) {
 			}
 			mgr.mu.Lock()
 			if mgr.phase == phaseLoadedCorpus {
-				if mgr.enabledFeatures&flatrpc.FeatureLeak != 0 {
-					mgr.serv.TriagedCorpus()
+				info := mgr.machineInfo.Load()
+				if info.Features&flatrpc.FeatureLeak != 0 {
+					mgr.rpcPool.TriagedCorpus()
 				}
 				if mgr.cfg.HubClient != "" {
 					mgr.phase = phaseTriagedCorpus
@@ -1522,7 +1391,7 @@ func (mgr *Manager) hubIsUnreachable() {
 }
 
 func (mgr *Manager) collectUsedFiles() {
-	if mgr.vmPool == nil {
+	if mgr.rpcPool == nil {
 		return
 	}
 	addUsedFile := func(f string) {
@@ -1583,7 +1452,7 @@ func (mgr *Manager) dashboardReporter() {
 			FuzzingTime:       time.Duration(mgr.statFuzzingTime.Val()) - lastFuzzingTime,
 			Crashes:           uint64(mgr.statCrashes.Val()) - lastCrashes,
 			SuppressedCrashes: uint64(mgr.statSuppressed.Val()) - lastSuppressedCrashes,
-			Execs:             uint64(mgr.serv.StatExecs.Val()) - lastExecs,
+			Execs:             uint64(mgr.rpcPool.StatExecs.Val()) - lastExecs,
 		}
 		if mgr.phase >= phaseTriagedCorpus && !triageInfoSent {
 			triageInfoSent = true
