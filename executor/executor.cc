@@ -1040,6 +1040,9 @@ thread_t* schedule_call(int call_index, int call_num, uint64 copyout_index, uint
 	return th;
 }
 
+const uint32 signal_array_size = 32768;
+uint64 write_signal_array[signal_array_size];
+
 template <typename cover_data_t>
 uint32 write_signal(flatbuffers::FlatBufferBuilder& fbb, cover_t* cov, bool all)
 {
@@ -1050,6 +1053,8 @@ uint32 write_signal(flatbuffers::FlatBufferBuilder& fbb, cover_t* cov, bool all)
 	uint32 nsig = 0;
 	cover_data_t prev_pc = 0;
 	bool prev_filter = true;
+
+	uint32 save_pos = 0;
 	for (uint32 i = 0; i < cov->size; i++) {
 		cover_data_t pc = cover_data[i] + cov->pc_offset;
 		uint64 sig = pc;
@@ -1064,7 +1069,37 @@ uint32 write_signal(flatbuffers::FlatBufferBuilder& fbb, cover_t* cov, bool all)
 		bool ignore = !filter && !prev_filter;
 		prev_pc = pc;
 		prev_filter = filter;
-		if (ignore || dedup(sig))
+		if (ignore || save_pos >= signal_array_size)
+			continue;
+		write_signal_array[save_pos++] = sig;
+	}
+
+	std::sort(write_signal_array, write_signal_array + save_pos);
+	for (uint32 i = 0; i < save_pos;) {
+		uint64 sig = write_signal_array[i];
+		uint32 count = 0;
+		for (; i < save_pos && write_signal_array[i] == sig; i++) {
+			count++;
+		}
+
+		uint64 logVal = 0;
+		if (count <= 3) {
+			logVal = count - 1; // 0, 1, 2.
+		} else if (count <= 8) {
+			logVal = 3;
+		} else if (count <= 16) {
+			logVal = 4;
+		} else if (count <= 64) {
+			logVal = 5;
+		} else if (count <= 128) {
+			logVal = 6;
+		} else {
+			logVal = 7;
+		}
+
+		uint64 mask = ~7;
+		sig = (sig & mask) + logVal;
+		if (dedup(sig))
 			continue;
 		if (!all && max_signal && max_signal->Contains(sig))
 			continue;
