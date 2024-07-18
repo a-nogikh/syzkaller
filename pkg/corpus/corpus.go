@@ -23,7 +23,7 @@ type Corpus struct {
 	signal  signal.Signal // total signal of all items
 	cover   cover.Cover   // total coverage of all items
 	updates chan<- NewItemEvent
-	*ProgramsList
+	*progSelector
 	StatProgs  *stats.Val
 	StatSignal *stats.Val
 	StatCover  *stats.Val
@@ -38,7 +38,7 @@ func NewMonitoredCorpus(ctx context.Context, updates chan<- NewItemEvent) *Corpu
 		ctx:          ctx,
 		progs:        make(map[string]*Item),
 		updates:      updates,
-		ProgramsList: &ProgramsList{},
+		progSelector: newProgSelector(),
 	}
 	corpus.StatProgs = stats.Create("corpus", "Number of test programs in the corpus", stats.Console,
 		stats.Link("/corpus"), stats.Graph("corpus"), stats.LenOf(&corpus.progs, &corpus.mu))
