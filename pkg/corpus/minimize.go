@@ -32,11 +32,11 @@ func (corpus *Corpus) Minimize(cover bool) {
 	})
 
 	corpus.progs = make(map[string]*Item)
-	programsList := &ProgramsList{}
+	selector := newProgSelector()
 	for _, ctx := range signal.Minimize(inputs) {
 		inp := ctx.(*Item)
 		corpus.progs[inp.Sig] = inp
-		programsList.saveProgram(inp.Prog, inp.Signal)
+		selector.saveProgram(inp.Prog, inp.Signal)
 	}
-	corpus.ProgramsList.replace(programsList)
+	corpus.progSelector.replace(selector)
 }
