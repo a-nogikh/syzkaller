@@ -1,7 +1,7 @@
 // Copyright 2024 syzkaller project authors. All rights reserved.
 // Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 
-package main
+package manager
 
 import (
 	"context"
@@ -17,7 +17,7 @@ func TestReproManager(t *testing.T) {
 	mock := &reproMgrMock{
 		run: make(chan runCallback),
 	}
-	obj := newReproManager(mock, 3, false)
+	obj := NewReproManager(mock, 3, false)
 
 	ctx, done := context.WithCancel(context.Background())
 	complete := make(chan struct{})
@@ -53,8 +53,8 @@ func TestReproManager(t *testing.T) {
 	assert.EqualValues(t, 3, mock.reserved.Load())
 
 	// Pretend that reproducers have finished.
-	called.ret <- &ReproResult{crash: &Crash{fromHub: true}}
-	called2.ret <- &ReproResult{crash: &Crash{fromHub: true}}
+	called.ret <- &ReproResult{Crash: &Crash{FromHub: true}}
+	called2.ret <- &ReproResult{Crash: &Crash{FromHub: true}}
 
 	// Wait until the number of reserved VMs goes to 0.
 	for i := 0; i < 100; i++ {
@@ -71,22 +71,22 @@ func TestReproOrder(t *testing.T) {
 	mock := &reproMgrMock{
 		run: make(chan runCallback),
 	}
-	obj := newReproManager(mock, 3, false)
+	obj := NewReproManager(mock, 3, false)
 
 	// The right order is A B C.
 	crashes := []*Crash{
 		{
 			Report:        &report.Report{Title: "A"},
-			fromDashboard: true,
-			manual:        true,
+			FromDashboard: true,
+			Manual:        true,
 		},
 		{
 			Report:        &report.Report{Title: "B"},
-			fromDashboard: true,
+			FromDashboard: true,
 		},
 		{
 			Report:  &report.Report{Title: "C"},
-			fromHub: true,
+			FromHub: true,
 		},
 	}
 
@@ -115,7 +115,7 @@ type runCallback struct {
 	ret   chan *ReproResult
 }
 
-func (m *reproMgrMock) runRepro(crash *Crash) *ReproResult {
+func (m *reproMgrMock) RunRepro(crash *Crash) *ReproResult {
 	retCh := make(chan *ReproResult)
 	m.run <- runCallback{crash: crash, ret: retCh}
 	ret := <-retCh
@@ -123,10 +123,10 @@ func (m *reproMgrMock) runRepro(crash *Crash) *ReproResult {
 	return ret
 }
 
-func (m *reproMgrMock) needRepro(crash *Crash) bool {
+func (m *reproMgrMock) NeedRepro(crash *Crash) bool {
 	return true
 }
 
-func (m *reproMgrMock) resizeReproPool(VMs int) {
+func (m *reproMgrMock) ResizeReproPool(VMs int) {
 	m.reserved.Store(int64(VMs))
 }

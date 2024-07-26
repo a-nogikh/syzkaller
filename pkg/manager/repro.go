@@ -1,32 +1,64 @@
 // Copyright 2024 syzkaller project authors. All rights reserved.
 // Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 
-package main
+package manager
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"sync"
 
 	"github.com/google/syzkaller/pkg/log"
+	"github.com/google/syzkaller/pkg/report"
+	"github.com/google/syzkaller/pkg/repro"
 	"github.com/google/syzkaller/pkg/stat"
 )
 
-type reproManagerView interface {
-	runRepro(crash *Crash) *ReproResult // TODO: consider moving runRepro() to repro.go.
-	needRepro(crash *Crash) bool
-	resizeReproPool(size int)
+type ReproResult struct {
+	Crash  *Crash // the original crash
+	Repro  *repro.Result
+	Strace *repro.StraceResult
+	Stats  *repro.Stats
+	Err    error
 }
 
-type reproManager struct {
+type Crash struct {
+	InstanceIndex int
+	FromHub       bool // this crash was created based on a repro from syz-hub
+	FromDashboard bool // .. or from dashboard
+	Manual        bool
+	*report.Report
+}
+
+func (c *Crash) FullTitle() string {
+	if c.Report.Title != "" {
+		return c.Report.Title
+	}
+	// Just use some unique, but stable titles.
+	if c.FromDashboard {
+		return fmt.Sprintf("dashboard crash %p", c)
+	} else if c.FromHub {
+		return fmt.Sprintf("crash from hub %p", c)
+	}
+	panic("the crash is expected to have a report")
+}
+
+type ReproManagerView interface {
+	RunRepro(crash *Crash) *ReproResult // TODO: consider moving runRepro() to repro.go.
+	NeedRepro(crash *Crash) bool
+	ResizeReproPool(size int)
+}
+
+type ReproManager struct {
 	Done chan *ReproResult
 
 	statNumReproducing *stat.Val
 	statPending        *stat.Val
 
 	onlyOnce  bool
-	mgr       reproManagerView
+	mgr       ReproManagerView
 	parallel  chan struct{}
 	pingQueue chan struct{}
 	reproVMs  int
@@ -37,8 +69,8 @@ type reproManager struct {
 	attempted   map[string]bool
 }
 
-func newReproManager(mgr reproManagerView, reproVMs int, onlyOnce bool) *reproManager {
-	ret := &reproManager{
+func NewReproManager(mgr ReproManagerView, reproVMs int, onlyOnce bool) *ReproManager {
+	ret := &ReproManager{
 		Done: make(chan *ReproResult, 10),
 
 		mgr:         mgr,
@@ -66,7 +98,7 @@ func newReproManager(mgr reproManagerView, reproVMs int, onlyOnce bool) *reproMa
 
 // startReproduction() is assumed to be called only once.
 // The agument is the maximum number of VMs dedicated to the bug reproduction.
-func (m *reproManager) StartReproduction() {
+func (m *ReproManager) StartReproduction() {
 	count := 0
 	for ; m.calculateReproVMs(count+1) <= m.reproVMs; count++ {
 		m.parallel <- struct{}{}
@@ -74,7 +106,7 @@ func (m *reproManager) StartReproduction() {
 	log.Logf(0, "starting bug reproductions (max %d VMs, %d repros)", m.reproVMs, count)
 }
 
-func (m *reproManager) calculateReproVMs(repros int) int {
+func (m *ReproManager) calculateReproVMs(repros int) int {
 	// Let's allocate 1.33 VMs per a reproducer thread.
 	if m.reproVMs == 1 && repros == 1 {
 		// With one exception -- if we have only one VM, let's still do one repro.
@@ -83,24 +115,24 @@ func (m *reproManager) calculateReproVMs(repros int) int {
 	return (repros*4 + 2) / 3
 }
 
-func (m *reproManager) CanReproMore() bool {
+func (m *ReproManager) CanReproMore() bool {
 	return len(m.parallel) != 0
 }
 
-func (m *reproManager) Reproducing() map[string]bool {
+func (m *ReproManager) Reproducing() map[string]bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return maps.Clone(m.reproducing)
 }
 
 // Empty returns true if there are neither running nor planned bug reproductions.
-func (m *reproManager) Empty() bool {
+func (m *ReproManager) Empty() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.reproducing) == 0 && len(m.queue) == 0
 }
 
-func (m *reproManager) Enqueue(crash *Crash) {
+func (m *ReproManager) Enqueue(crash *Crash) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -123,18 +155,19 @@ func (m *reproManager) Enqueue(crash *Crash) {
 	}
 }
 
-func (m *reproManager) popCrash() *Crash {
+func (m *ReproManager) popCrash() *Crash {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// TODO: move it to Crash.PrioLess() bool. Make Crash an interface.
 	newBetter := func(base, new *Crash) bool {
 		// First, serve manual requests.
-		if new.manual != base.manual {
-			return new.manual
+		if new.Manual != base.Manual {
+			return new.Manual
 		}
 		// Then, deprioritize hub reproducers.
-		if new.fromHub != base.fromHub {
-			return !new.fromHub
+		if new.FromHub != base.FromHub {
+			return !new.FromHub
 		}
 		return false
 	}
@@ -156,7 +189,7 @@ func (m *reproManager) popCrash() *Crash {
 	return crash
 }
 
-func (m *reproManager) Loop(ctx context.Context) {
+func (m *ReproManager) Loop(ctx context.Context) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -169,7 +202,7 @@ func (m *reproManager) Loop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			}
-			if crash == nil || !m.mgr.needRepro(crash) {
+			if crash == nil || !m.mgr.NeedRepro(crash) {
 				continue
 			}
 		}
@@ -203,24 +236,24 @@ func (m *reproManager) Loop(ctx context.Context) {
 	}
 }
 
-func (m *reproManager) handle(crash *Crash) {
+func (m *ReproManager) handle(crash *Crash) {
 	log.Logf(0, "start reproducing '%v'", crash.FullTitle())
 
-	res := m.mgr.runRepro(crash)
+	res := m.mgr.RunRepro(crash)
 
 	crepro := false
 	title := ""
-	if res.repro != nil {
-		crepro = res.repro.CRepro
-		title = res.repro.Report.Title
+	if res.Repro != nil {
+		crepro = res.Repro.CRepro
+		title = res.Repro.Report.Title
 	}
 	log.Logf(0, "repro finished '%v', repro=%v crepro=%v desc='%v' hub=%v from_dashboard=%v",
-		crash.FullTitle(), res.repro != nil, crepro, title, crash.fromHub, crash.fromDashboard,
+		crash.FullTitle(), res.Repro != nil, crepro, title, crash.FromHub, crash.FromDashboard,
 	)
 	m.Done <- res
 }
 
-func (m *reproManager) adjustPoolSizeLocked() {
+func (m *ReproManager) adjustPoolSizeLocked() {
 	// Avoid the +-1 jitter by considering the repro queue size as well.
 
 	// We process same-titled crashes sequentially, so only count unique ones.
@@ -231,5 +264,5 @@ func (m *reproManager) adjustPoolSizeLocked() {
 
 	needRepros := len(uniqueTitles)
 	VMs := min(m.reproVMs, m.calculateReproVMs(needRepros))
-	m.mgr.resizeReproPool(VMs)
+	m.mgr.ResizeReproPool(VMs)
 }

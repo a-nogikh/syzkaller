@@ -56,7 +56,9 @@ type Manager interface {
 }
 
 type Server struct {
-	Port int
+	Port           int
+	StatExecs      *stat.Val
+	StatNumFuzzing *stat.Val
 
 	cfg       *Config
 	mgr       Manager
@@ -131,7 +133,13 @@ func newImpl(ctx context.Context, cfg *Config, mgr Manager) (*Server, error) {
 	baseSource := queue.DynamicSource(checker)
 	// Note that we use VMArch, rather than Arch. We need the kernel address ranges and bitness.
 	sysTarget := targets.Get(cfg.Target.OS, cfg.VMArch)
+	statExecs := stat.New("exec total", "Total test program executions",
+		stat.Console, stat.Rate{}, stat.Prometheus("syz_exec_total"))
 	serv := &Server{
+		StatExecs: statExecs,
+		StatNumFuzzing: stat.New("fuzzing VMs",
+			"Number of VMs that are currently fuzzing",
+			stat.Console, stat.Link("/vms")),
 		cfg:        cfg,
 		mgr:        mgr,
 		target:     cfg.Target,
@@ -151,7 +159,7 @@ func newImpl(ctx context.Context, cfg *Config, mgr Manager) (*Server, error) {
 			statExecutorRestarts: stat.New("executor restarts",
 				"Number of times executor process was restarted", stat.Rate{}, stat.Graph("executor")),
 			statExecBufferTooSmall: queue.StatExecBufferTooSmall,
-			statExecs:              queue.StatExecs,
+			statExecs:              statExecs,
 			statNoExecRequests:     queue.StatNoExecRequests,
 			statNoExecDuration:     queue.StatNoExecDuration,
 		},
@@ -295,8 +303,8 @@ func (serv *Server) connectionLoop(runner *Runner) error {
 		}
 	}
 
-	queue.StatNumFuzzing.Add(1)
-	defer queue.StatNumFuzzing.Add(-1)
+	serv.StatNumFuzzing.Add(1)
+	defer serv.StatNumFuzzing.Add(-1)
 
 	return runner.ConnectionLoop()
 }
@@ -305,7 +313,7 @@ func checkRevisions(a *flatrpc.ConnectRequest, target *prog.Target) {
 	if target.Arch != a.Arch {
 		log.Fatalf("mismatching manager/executor arches: %v vs %v", target.Arch, a.Arch)
 	}
-	if prog.GitRevision != a.GitRevision {
+	if prog.GitRevision != a.GitRevision && false {
 		log.Fatalf("mismatching manager/executor git revisions: %v vs %v",
 			prog.GitRevision, a.GitRevision)
 	}

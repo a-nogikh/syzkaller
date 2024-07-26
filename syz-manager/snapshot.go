@@ -9,15 +9,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/flatbuffers/go"
+	flatbuffers "github.com/google/flatbuffers/go"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/log"
+	"github.com/google/syzkaller/pkg/manager"
 	"github.com/google/syzkaller/vm"
 )
 
 func (mgr *Manager) snapshotLoop() {
-	queue.StatNumFuzzing.Add(mgr.vmPool.Count())
+	mgr.serv.StatNumFuzzing.Add(mgr.vmPool.Count())
 	for index := 0; index < mgr.vmPool.Count(); index++ {
 		index := index
 		go func() {
@@ -49,7 +50,7 @@ func (mgr *Manager) snapshotVM(index int) error {
 	builder := flatbuffers.NewBuilder(0)
 	var envFlags flatrpc.ExecEnv
 	for first := true; ; first = false {
-		queue.StatExecs.Add(1)
+		mgr.serv.StatExecs.Add(1)
 		req := mgr.source.Next()
 		if first {
 			envFlags = req.ExecOpts.EnvFlags
@@ -76,7 +77,7 @@ func (mgr *Manager) snapshotVM(index int) error {
 			fmt.Fprintf(buf, "program:\n%s\n", req.Prog.Serialize())
 			buf.Write(rep.Output)
 			rep.Output = buf.Bytes()
-			mgr.crashes <- &Crash{Report: rep}
+			mgr.crashes <- &manager.Crash{Report: rep}
 		}
 
 		req.Done(res)
@@ -127,7 +128,7 @@ func (mgr *Manager) snapshotRun(inst *vm.Instance, builder *flatbuffers.Builder,
 		return nil, nil, err
 	}
 	elapsed := time.Since(start)
-	queue.StatExecs.Add(1)
+	mgr.serv.StatExecs.Add(1)
 
 	execError := ""
 	var info *flatrpc.ProgInfo

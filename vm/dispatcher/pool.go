@@ -85,6 +85,7 @@ func (p *Pool[T]) runInstance(ctx context.Context, inst *poolInstance[T]) {
 
 	obj, err := p.creator(inst.idx)
 	if err != nil {
+		log.Logf(0, "boot error: %s", err)
 		p.BootErrors <- err
 		return
 	}
