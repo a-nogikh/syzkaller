@@ -4,6 +4,7 @@
 package corpus
 
 import (
+	"math"
 	"math/rand"
 	"sort"
 	"sync"
@@ -41,7 +42,7 @@ func (pl *ProgramsList) Programs() []*prog.Prog {
 func (pl *ProgramsList) saveProgram(p *prog.Prog, signal signal.Signal) {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
-	prio := int64(len(signal))
+	prio := int64(math.Sqrt(float64(len(signal))))
 	if prio == 0 {
 		prio = 1
 	}
