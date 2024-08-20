@@ -4,6 +4,7 @@
 package fuzzer
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
+	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/prog"
 )
@@ -31,10 +33,28 @@ func genProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *queue.Request {
 }
 
 func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *queue.Request {
-	p := fuzzer.Config.Corpus.ChooseProgram(rnd)
-	if p == nil {
-		return nil
+	debug := ""
+
+	var bestVal int
+	var p *prog.Prog
+	var bestRaw []uint64
+
+	// It will likely be a bit racy, but we don't care that much.
+	for i := 0; i < 2; i++ {
+		candidate, raw := fuzzer.Config.Corpus.ChooseProgram(rnd)
+		if candidate == nil {
+			return nil
+		}
+		val := fuzzer.seeds.evaluate(raw)
+		debug += fmt.Sprintf(" (%d PCs, val=%d)", len(raw), val)
+		if val >= bestVal {
+			bestVal = val
+			bestRaw = raw
+			p = candidate
+		}
 	}
+	log.Logf(2, "seeds:"+debug)
+	fuzzer.seeds.save(bestRaw)
 	newP := p.Clone()
 	newP.Mutate(rnd,
 		prog.RecommendedCalls,

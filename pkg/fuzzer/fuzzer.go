@@ -35,6 +35,8 @@ type Fuzzer struct {
 	ctMu         sync.Mutex // TODO: use RWLock.
 	ctRegenerate chan struct{}
 
+	seeds seedSelection
+
 	execQueues
 }
 
