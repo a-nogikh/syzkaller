@@ -245,7 +245,7 @@ func (mgr *Manager) httpCorpus(w http.ResponseWriter, r *http.Request) {
 		data.Inputs = append(data.Inputs, &UIInput{
 			Sig:   inp.Sig,
 			Short: inp.Prog.String(),
-			Cover: len(inp.Cover),
+			Cover: inp.Signal.Len(),
 		})
 	}
 	sort.Slice(data.Inputs, func(i, j int) bool {
