@@ -5,7 +5,6 @@ package corpus
 
 import (
 	"math/rand"
-	"sort"
 	"sync"
 
 	"github.com/google/syzkaller/pkg/signal"
@@ -16,20 +15,17 @@ type ProgramsList struct {
 	mu       sync.RWMutex
 	progs    []*prog.Prog
 	sumPrios int64
-	accPrios []int64
+	signals  [][]uint64
 }
 
-func (pl *ProgramsList) ChooseProgram(r *rand.Rand) *prog.Prog {
+func (pl *ProgramsList) ChooseProgram(r *rand.Rand) (*prog.Prog, []uint64) {
 	pl.mu.RLock()
 	defer pl.mu.RUnlock()
 	if len(pl.progs) == 0 {
-		return nil
+		return nil, nil
 	}
-	randVal := r.Int63n(pl.sumPrios + 1)
-	idx := sort.Search(len(pl.accPrios), func(i int) bool {
-		return pl.accPrios[i] >= randVal
-	})
-	return pl.progs[idx]
+	idx := r.Intn(len(pl.progs))
+	return pl.progs[idx], pl.signals[idx]
 }
 
 func (pl *ProgramsList) Programs() []*prog.Prog {
@@ -46,14 +42,14 @@ func (pl *ProgramsList) saveProgram(p *prog.Prog, signal signal.Signal) {
 		prio = 1
 	}
 	pl.sumPrios += prio
-	pl.accPrios = append(pl.accPrios, pl.sumPrios)
 	pl.progs = append(pl.progs, p)
+	pl.signals = append(pl.signals, signal.ToRaw())
 }
 
 func (pl *ProgramsList) replace(other *ProgramsList) {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
 	pl.sumPrios = other.sumPrios
-	pl.accPrios = other.accPrios
+	pl.signals = other.signals
 	pl.progs = other.progs
 }
