@@ -69,6 +69,7 @@ type triageCall struct {
 
 	// Filled after deflake:
 	signals         [deflakeNeedRuns]signal.Signal
+	allSignal       signal.Signal // union of signal for all calls
 	stableSignal    signal.Signal
 	newStableSignal signal.Signal
 	cover           cover.Cover
@@ -170,13 +171,22 @@ func (job *triageJob) handleCall(call int, info *triageCall) {
 	}
 	job.fuzzer.Logf(2, "added new input for %v to the corpus: %s", callName, p)
 	input := corpus.NewInput{
-		Prog:     p,
-		Call:     call,
-		Signal:   info.stableSignal,
-		Cover:    info.cover.Serialize(),
-		RawCover: info.rawCover,
+		Prog:      p,
+		Call:      call,
+		Signal:    info.stableSignal,
+		AllSignal: info.allSignal,
+		Cover:     info.cover.Serialize(),
+		RawCover:  info.rawCover,
 	}
 	job.fuzzer.Config.Corpus.Save(input)
+}
+
+func progIndices(p *prog.Prog) []int {
+	indices := make([]int, 0, len(p.Calls))
+	for i := range p.Calls {
+		indices = append(indices, i)
+	}
+	return indices
 }
 
 func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result) (stop bool) {
@@ -187,12 +197,15 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 	} else if job.flags&ProgFromCorpus == 0 {
 		needRuns = deflakeNeedRuns
 	}
+
+	indices := progIndices(job.p)
+
+	var allSignal signal.Signal
+
 	prevTotalNewSignal := 0
 	for run := 1; ; run++ {
 		totalNewSignal := 0
-		indices := make([]int, 0, len(job.calls))
-		for call, info := range job.calls {
-			indices = append(indices, call)
+		for _, info := range job.calls {
 			totalNewSignal += len(info.newSignal)
 		}
 		if job.stopDeflake(run, needRuns, prevTotalNewSignal == totalNewSignal) {
@@ -218,6 +231,10 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 			if info == nil {
 				job.fuzzer.triageProgCall(job.p, res, call, &job.calls)
 				info = job.calls[call]
+			}
+			if res != nil {
+				prio := signalPrio(job.p, res, call)
+				allSignal.Merge(signal.FromRaw(res.Signal, prio))
 			}
 			if info == nil || res == nil {
 				return
@@ -249,6 +266,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 		deflakeCall(-1, result.Info.Extra)
 	}
 	for _, info := range job.calls {
+		info.allSignal = allSignal
 		info.stableSignal = info.signals[needRuns-1]
 		info.newStableSignal = info.newSignal.Intersection(info.stableSignal)
 	}
@@ -301,6 +319,13 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
 		minimizeAttempts = 2
 	}
 	stop := false
+	var newAllSignal signal.Signal
+	mergeSignal := func(p *prog.Prog, call int, info *flatrpc.CallInfo) {
+		if info == nil {
+			return
+		}
+		newAllSignal.Merge(signal.FromRaw(info.Signal, signalPrio(p, info, call)))
+	}
 	p, call := prog.Minimize(job.p, call, prog.MinimizeCorpus, func(p1 *prog.Prog, call1 int) bool {
 		if stop {
 			return false
@@ -310,7 +335,7 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
 			result := job.execute(&queue.Request{
 				Prog:            p1,
 				ExecOpts:        setFlags(flatrpc.ExecFlagCollectSignal),
-				ReturnAllSignal: []int{call1},
+				ReturnAllSignal: progIndices(p1),
 				Stat:            job.fuzzer.statExecMinimize,
 			}, 0)
 			if result.Stop() {
@@ -328,11 +353,18 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
 				mergedSignal.Merge(thisSignal)
 			}
 			if info.newStableSignal.Intersection(mergedSignal).Len() == info.newStableSignal.Len() {
+				for i, callInfo := range result.Info.Calls {
+					mergeSignal(p1, i, callInfo)
+				}
+				mergeSignal(p1, -1, result.Info.Extra)
 				return true
 			}
 		}
 		return false
 	})
+	if newAllSignal != nil {
+		info.allSignal = newAllSignal
+	}
 	if stop {
 		return nil, 0
 	}

@@ -74,11 +74,12 @@ func (item Item) StringCall() string {
 }
 
 type NewInput struct {
-	Prog     *prog.Prog
-	Call     int
-	Signal   signal.Signal
-	Cover    []uint64
-	RawCover []uint64
+	Prog      *prog.Prog
+	Call      int
+	Signal    signal.Signal
+	AllSignal signal.Signal
+	Cover     []uint64
+	RawCover  []uint64
 }
 
 type NewItemEvent struct {
@@ -103,7 +104,7 @@ func (corpus *Corpus) Save(inp NewInput) {
 	if old, ok := corpus.progs[sig]; ok {
 		exists = true
 		newSignal := old.Signal.Copy()
-		newSignal.Merge(inp.Signal)
+		newSignal.Merge(inp.AllSignal)
 		var newCover cover.Cover
 		newCover.Merge(old.Cover)
 		newCover.Merge(inp.Cover)
@@ -127,11 +128,11 @@ func (corpus *Corpus) Save(inp NewInput) {
 			Call:    inp.Call,
 			Prog:    inp.Prog,
 			HasAny:  inp.Prog.ContainsAny(),
-			Signal:  inp.Signal,
+			Signal:  inp.AllSignal,
 			Cover:   inp.Cover,
 			Updates: []ItemUpdate{update},
 		}
-		corpus.saveProgram(inp.Prog, inp.Signal)
+		corpus.saveProgram(inp.Prog, inp.AllSignal)
 	}
 	corpus.signal.Merge(inp.Signal)
 	newCover := corpus.cover.MergeDiff(inp.Cover)
@@ -147,6 +148,7 @@ func (corpus *Corpus) Save(inp NewInput) {
 		}
 	}
 }
+
 func (corpus *Corpus) Signal() signal.Signal {
 	corpus.mu.RLock()
 	defer corpus.mu.RUnlock()
