@@ -51,6 +51,7 @@ var (
 	flagSandboxArg = flag.Int("sandbox_arg", 0, "argument for sandbox runner to adjust it via config")
 	flagDebug      = flag.Bool("debug", false, "debug output from executor")
 	flagSlowdown   = flag.Int("slowdown", 1, "execution slowdown caused by emulation/instrumentation")
+	flagShuffle    = flag.Bool("shuffle", false, "execute the programs randomly")
 
 	// The in the stress mode resembles simple unguided fuzzer.
 	// This mode can be used as an intermediate step when porting syzkaller to a new OS,
@@ -140,12 +141,14 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+	rs := rand.NewSource(time.Now().UnixNano())
 	rpcCtx, done := context.WithCancel(context.Background())
 	ctx := &Context{
 		target:    target,
 		done:      done,
 		progs:     progs,
-		rs:        rand.NewSource(time.Now().UnixNano()),
+		rs:        rs,
+		rnd:       rand.New(rs),
 		coverFile: *flagCoverFile,
 		output:    *flagOutput,
 		signal:    *flagSignal,
@@ -193,6 +196,7 @@ type Context struct {
 	logMu       sync.Mutex
 	posMu       sync.Mutex
 	rs          rand.Source
+	rnd         *rand.Rand
 	coverFile   string
 	output      bool
 	signal      bool
@@ -339,8 +343,13 @@ func (ctx *Context) getProgramIndex() int {
 	if ctx.repeat > 0 && ctx.pos >= len(ctx.progs)*ctx.repeat {
 		return -1
 	}
-	idx := ctx.pos % len(ctx.progs)
-	if idx == 0 && time.Since(ctx.lastPrint) > 5*time.Second {
+	var idx int
+	if ctx.repeat == 0 && *flagShuffle {
+		idx = ctx.rnd.Intn(len(ctx.progs))
+	} else {
+		idx = ctx.pos % len(ctx.progs)
+	}
+	if ctx.pos%len(ctx.progs) == 0 && time.Since(ctx.lastPrint) > 5*time.Second {
 		log.Logf(0, "executed programs: %v", ctx.pos)
 		ctx.lastPrint = time.Now()
 	}
