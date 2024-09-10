@@ -63,7 +63,7 @@ type Server interface {
 	Port() int
 	TriagedCorpus()
 	CreateInstance(id int, injectExec chan<- bool, updInfo dispatcher.UpdateInfo) chan error
-	ShutdownInstance(id int, crashed bool, extraExecs ...report.ExecutorInfo) ([]ExecRecord, []byte)
+	ShutdownInstance(id int, crashed bool, extraExecs ...report.ExecutorInfo) ([]ExecRecord, []byte, []byte)
 	StopFuzzing(id int)
 	DistributeSignalDelta(plus signal.Signal)
 }
@@ -415,6 +415,7 @@ func (serv *server) CreateInstance(id int, injectExec chan<- bool, updInfo dispa
 		injectExec:    injectExec,
 		infoc:         make(chan chan []byte),
 		requests:      make(map[int64]*queue.Request),
+		allRequests:   make(map[int64]*progStatus),
 		executing:     make(map[int64]bool),
 		lastExec:      MakeLastExecuting(serv.cfg.Procs, 6),
 		stats:         serv.runnerStats,
@@ -445,12 +446,13 @@ func (serv *server) StopFuzzing(id int) {
 	runner.Stop()
 }
 
-func (serv *server) ShutdownInstance(id int, crashed bool, extraExecs ...report.ExecutorInfo) ([]ExecRecord, []byte) {
+func (serv *server) ShutdownInstance(id int, crashed bool, extraExecs ...report.ExecutorInfo) ([]ExecRecord, []byte, []byte) {
 	serv.mu.Lock()
 	runner := serv.runners[id]
 	delete(serv.runners, id)
 	serv.mu.Unlock()
-	return runner.Shutdown(crashed, extraExecs...), runner.MachineInfo()
+	records, log := runner.Shutdown(crashed, extraExecs...)
+	return records, log, runner.MachineInfo()
 }
 
 func (serv *server) DistributeSignalDelta(plus signal.Signal) {

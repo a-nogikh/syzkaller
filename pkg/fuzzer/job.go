@@ -34,7 +34,7 @@ type JobInfo struct {
 	Type  string
 	Execs atomic.Int32
 
-	syncBuffer
+	SyncBuffer
 }
 
 func (ji *JobInfo) ID() string {
@@ -579,12 +579,12 @@ func (job *hintsJob) getInfo() *JobInfo {
 	return job.info
 }
 
-type syncBuffer struct {
+type SyncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
-func (sb *syncBuffer) Logf(logFmt string, args ...any) {
+func (sb *SyncBuffer) Logf(logFmt string, args ...any) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
@@ -593,7 +593,7 @@ func (sb *syncBuffer) Logf(logFmt string, args ...any) {
 	sb.buf.WriteByte('\n')
 }
 
-func (sb *syncBuffer) Bytes() []byte {
+func (sb *SyncBuffer) Bytes() []byte {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 	return sb.buf.Bytes()

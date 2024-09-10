@@ -522,9 +522,17 @@ func (mgr *Manager) fuzzerInstance(ctx context.Context, inst *vm.Instance, updIn
 	if rep != nil && rep.Executor != nil {
 		extraExecs = []report.ExecutorInfo{*rep.Executor}
 	}
-	lastExec, machineInfo := serv.ShutdownInstance(inst.Index(), rep != nil, extraExecs...)
+	lastExec, progLog, machineInfo := serv.ShutdownInstance(inst.Index(), rep != nil, extraExecs...)
+	// Only save crashes with lost programs in Comm:.
+	if len(progLog) == 0 && rep != nil {
+		log.Logf(0, "ignoring crash %q because it had the Comm prog in place", rep.Title)
+		rep = nil
+	}
 	if rep != nil {
 		rpcserver.PrependExecuting(rep, lastExec)
+		rep.Report = append(rep.Report, "\n\nThe log of the lost program: "...)
+		rep.Report = append(rep.Report, progLog...)
+
 		if len(vmInfo) != 0 {
 			machineInfo = append(append(vmInfo, '\n'), machineInfo...)
 		}
@@ -566,7 +574,7 @@ func (mgr *Manager) runInstanceInner(ctx context.Context, inst *vm.Instance, inj
 		return nil, nil, fmt.Errorf("failed to parse manager's address")
 	}
 	cmd := fmt.Sprintf("%v runner %v %v %v", executorBin, inst.Index(), host, port)
-	_, rep, err := inst.Run(mgr.cfg.Timeouts.VMRunningTime, mgr.reporter, cmd,
+	_, rep, err := inst.Run(15*time.Minute, mgr.reporter, cmd,
 		vm.ExitTimeout, vm.StopContext(ctx), vm.InjectExecuting(injectExec),
 		finishCb,
 	)

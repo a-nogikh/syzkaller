@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/flatrpc"
+	"github.com/google/syzkaller/pkg/fuzzer"
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/osutil"
@@ -51,6 +52,12 @@ type Runner struct {
 	conn        *flatrpc.Conn
 	stopped     bool
 	machineInfo []byte
+	allRequests map[int64]*progStatus
+}
+
+type progStatus struct {
+	Prog []byte
+	fuzzer.SyncBuffer
 }
 
 type runnerStats struct {
@@ -337,6 +344,11 @@ func (runner *Runner) sendRequest(req *queue.Request) error {
 		},
 	}
 	runner.requests[id] = req
+	status := &progStatus{
+		Prog: req.Prog.Serialize(),
+	}
+	status.Logf("sent to the executor")
+	runner.allRequests[id] = status
 	return flatrpc.Send(runner.conn, msg)
 }
 
@@ -345,6 +357,7 @@ func (runner *Runner) handleExecutingMessage(msg *flatrpc.ExecutingMessage) erro
 	if req == nil {
 		return fmt.Errorf("can't find executing request %v", msg.Id)
 	}
+	runner.allRequests[msg.Id].Logf("started executing")
 	proc := int(msg.ProcId)
 	if proc < 0 || proc >= runner.procs {
 		return fmt.Errorf("got bad proc id %v", proc)
@@ -374,6 +387,7 @@ func (runner *Runner) handleExecResult(msg *flatrpc.ExecResult) error {
 	if req == nil {
 		return fmt.Errorf("can't find executed request %v", msg.Id)
 	}
+	runner.allRequests[msg.Id].Logf("result: error=%s", msg.Error)
 	delete(runner.requests, msg.Id)
 	delete(runner.executing, msg.Id)
 	if msg.Info != nil {
@@ -404,6 +418,12 @@ func (runner *Runner) handleExecResult(msg *flatrpc.ExecResult) error {
 			msg.Info.ExtraRaw = nil
 			runner.convertCallInfo(msg.Info.Extra)
 		}
+
+		for i, call := range msg.Info.Calls {
+			runner.allRequests[msg.Id].Logf("call #%d: errno=%d", i, call.Error)
+		}
+	} else {
+		runner.allRequests[msg.Id].Logf("msg.Info is nil")
 	}
 	status := queue.Success
 	var resErr error
@@ -508,7 +528,7 @@ func (runner *Runner) Stop() {
 	}
 }
 
-func (runner *Runner) Shutdown(crashed bool, extraExecs ...report.ExecutorInfo) []ExecRecord {
+func (runner *Runner) Shutdown(crashed bool, extraExecs ...report.ExecutorInfo) ([]ExecRecord, []byte) {
 	runner.mu.Lock()
 	runner.stopped = true
 	finished := runner.finished
@@ -531,13 +551,33 @@ func (runner *Runner) Shutdown(crashed bool, extraExecs ...report.ExecutorInfo) 
 		}
 	}
 	for id, req := range runner.requests {
+		runner.allRequests[id].Logf("finished in shutdown, crashed=%v", crashed)
 		status := queue.Restarted
 		if crashed && runner.executing[id] {
 			status = queue.Crashed
 		}
 		req.Done(&queue.Result{Status: status})
 	}
-	return records
+
+	var log []byte
+	for _, info := range extraExecs {
+		found := false
+		for _, record := range records {
+			if record.ID == info.ExecID {
+				found = true
+			}
+		}
+		if found {
+			continue
+		}
+		status := runner.allRequests[int64(info.ExecID)]
+		if status != nil {
+			log = status.Bytes()
+			log = append(log, []byte(fmt.Sprintf("\n\nThe lost program (id=%d): %s", info.ExecID, status.Prog))...)
+			break
+		}
+	}
+	return records, log
 }
 
 func (runner *Runner) MachineInfo() []byte {
