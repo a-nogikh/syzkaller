@@ -767,10 +767,10 @@ func (mgr *Manager) NeedRepro(crash *manager.Crash) bool {
 	return needRepro
 }
 
-func truncateReproLog(log []byte) []byte {
+func truncateReproLog(fullLog []byte) []byte {
 	// Repro logs can get quite large and we have trouble sending large API requests (see #4495).
 	// Let's truncate the log to a 512KB prefix and 512KB suffix.
-	return report.Truncate(log, 512000, 512000)
+	return log.Truncate(fullLog, 512000, 512000)
 }
 
 func (mgr *Manager) saveFailedRepro(rep *report.Report, stats *repro.Stats) {
