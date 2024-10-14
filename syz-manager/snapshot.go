@@ -127,7 +127,6 @@ func (mgr *Manager) snapshotRun(inst *vm.Instance, builder *flatbuffers.Builder,
 		return nil, nil, err
 	}
 	elapsed := time.Since(start)
-
 	res := parseExecResult(resData)
 	if res.Info != nil {
 		res.Info.Elapsed = uint64(elapsed)

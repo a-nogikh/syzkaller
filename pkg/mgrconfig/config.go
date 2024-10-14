@@ -154,6 +154,8 @@ type Config struct {
 	// eg. "0xffffffff81000000:0x10\n"
 	CovFilter CovFilterCfg `json:"cover_filter,omitempty"`
 
+	FuzzFilter CovFilterCfg `json:"fuzz_filter,omitempty"`
+
 	// For each prog in the corpus, remember the raw array of PCs obtained from the kernel.
 	// It can be useful for debugging syzkaller descriptions and syzkaller itself.
 	// Disabled by default as it slows down fuzzing.

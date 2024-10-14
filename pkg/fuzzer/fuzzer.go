@@ -87,13 +87,17 @@ func newExecQueues(fuzzer *Fuzzer) execQueues {
 		triageQueue:          queue.DynamicOrder(),
 		smashQueue:           queue.Plain(),
 	}
+	// Alternate smash jobs with exec/fuzz once in 3 times.
+	skipQueue := 3
+	if fuzzer.Config.Diff {
+		skipQueue = 2
+	}
 	// Sources are listed in the order, in which they will be polled.
 	ret.source = queue.Order(
 		ret.triageCandidateQueue,
 		ret.candidateQueue,
 		ret.triageQueue,
-		// Alternate smash jobs with exec/fuzz once in 3 times.
-		queue.Alternate(ret.smashQueue, 3),
+		queue.Alternate(ret.smashQueue, skipQueue),
 		queue.Callback(fuzzer.genFuzz),
 	)
 	return ret
@@ -197,6 +201,8 @@ type Config struct {
 	NoMutateCalls  map[int]bool
 	FetchRawCover  bool
 	NewInputFilter func(call string) bool
+	Diff           bool
+	FuzzPCs        map[uint64]bool
 }
 
 func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *flatrpc.CallInfo, call int, triage *map[int]*triageCall) {

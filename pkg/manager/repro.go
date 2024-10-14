@@ -46,7 +46,7 @@ func (c *Crash) FullTitle() string {
 }
 
 type ReproManagerView interface {
-	RunRepro(crash *Crash) *ReproResult
+	RunRepro(crash *Crash) *ReproResult // TODO: consider moving runRepro() to repro.go.
 	NeedRepro(crash *Crash) bool
 	ResizeReproPool(size int)
 }

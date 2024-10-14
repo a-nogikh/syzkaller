@@ -87,6 +87,19 @@ type triageJob struct {
 	info *JobInfo
 }
 
+func progCover(resp *queue.Result) cover.Cover {
+	var ret cover.Cover
+	if resp != nil && resp.Info != nil {
+		for _, info := range resp.Info.Calls {
+			ret.Merge(info.Cover)
+		}
+		if resp.Info.Extra != nil {
+			ret.Merge(resp.Info.Extra.Cover)
+		}
+	}
+	return ret
+}
+
 type triageCall struct {
 	errno     int32
 	newSignal signal.Signal
@@ -97,6 +110,7 @@ type triageCall struct {
 	newStableSignal signal.Signal
 	cover           cover.Cover
 	rawCover        []uint64
+	allCover        cover.Cover
 }
 
 // As demonstrated in #4639, programs reproduce with a very high, but not 100% probability.
@@ -155,14 +169,14 @@ func (job *triageJob) run(fuzzer *Fuzzer) {
 		call, info := call, info
 		wg.Add(1)
 		go func() {
-			job.handleCall(call, info)
+			job.handleCall(call, info, fuzzer)
 			wg.Done()
 		}()
 	}
 	wg.Wait()
 }
 
-func (job *triageJob) handleCall(call int, info *triageCall) {
+func (job *triageJob) handleCall(call int, info *triageCall, fuzzer *Fuzzer) {
 	if info.newStableSignal.Empty() {
 		return
 	}
@@ -178,7 +192,21 @@ func (job *triageJob) handleCall(call int, info *triageCall) {
 	if !job.fuzzer.Config.NewInputFilter(callName) {
 		return
 	}
-	if job.flags&ProgSmashed == 0 {
+
+	cover := info.cover.Serialize()
+	mayFuzz := true
+	if pcs := job.fuzzer.Config.FuzzPCs; pcs != nil {
+		mayFuzz = false
+		for _, pc := range info.allCover.Serialize() {
+			pc -= 5 // TODO: call PreviousInstructionPC instead.
+			if pcs[pc] {
+				mayFuzz = true
+				break
+			}
+		}
+	}
+
+	if job.flags&ProgSmashed == 0 && mayFuzz {
 		job.fuzzer.startJob(job.fuzzer.statJobsSmash, &smashJob{
 			exec: job.fuzzer.smashQueue,
 			p:    p.Clone(),
@@ -209,12 +237,14 @@ func (job *triageJob) handleCall(call int, info *triageCall) {
 		}
 	}
 	job.fuzzer.Logf(2, "added new input for %v to the corpus: %s", callName, p)
+
 	input := corpus.NewInput{
 		Prog:     p,
 		Call:     call,
 		Signal:   info.stableSignal,
-		Cover:    info.cover.Serialize(),
+		Cover:    cover,
 		RawCover: info.rawCover,
+		MayFuzz:  mayFuzz,
 	}
 	job.fuzzer.Config.Corpus.Save(input)
 }
@@ -229,6 +259,8 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 	} else if job.flags&ProgFromCorpus == 0 {
 		needRuns = deflakeNeedRuns
 	}
+	var allCover cover.Cover
+
 	prevTotalNewSignal := 0
 	for run := 1; ; run++ {
 		totalNewSignal := 0
@@ -255,6 +287,9 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 		if result.Info == nil {
 			continue // the program has failed
 		}
+
+		allCover.Merge(progCover(result).Serialize())
+
 		deflakeCall := func(call int, res *flatrpc.CallInfo) {
 			info := job.calls[call]
 			if info == nil {
@@ -297,6 +332,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 		job.info.Logf("call #%d [%s]: |stable signal|=%d, |new stable signal|=%d%s",
 			call, job.p.CallName(call), info.stableSignal.Len(), info.newStableSignal.Len(),
 			signalPreview(info.newStableSignal))
+		info.allCover = allCover
 	}
 	return false
 }
@@ -348,7 +384,14 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
 		minimizeAttempts = 2
 	}
 	stop := false
-	p, call := prog.Minimize(job.p, call, prog.MinimizeCorpus, func(p1 *prog.Prog, call1 int) bool {
+
+	var allCover cover.Cover
+
+	mode := prog.MinimizeCorpus
+	if job.fuzzer.Config.Diff {
+		mode = prog.MinimizeCallsOnly
+	}
+	p, call := prog.Minimize(job.p, call, mode, func(p1 *prog.Prog, call1 int) bool {
 		if stop {
 			return false
 		}
@@ -377,6 +420,7 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
 			if info.newStableSignal.Intersection(mergedSignal).Len() == info.newStableSignal.Len() {
 				job.info.Logf("[call #%d] minimization step success (|calls| = %d)",
 					call, len(p1.Calls))
+				allCover = progCover(result)
 				return true
 			}
 		}
@@ -385,6 +429,9 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
 	})
 	if stop {
 		return nil, 0
+	}
+	if allCover != nil {
+		info.allCover = allCover
 	}
 	return p, call
 }
@@ -445,7 +492,7 @@ func (job *smashJob) run(fuzzer *Fuzzer) {
 	fuzzer.Logf(2, "smashing the program %s:", job.p)
 	job.info.Logf("\n%s", job.p.Serialize())
 
-	const iters = 25
+	iters := 25
 	rnd := fuzzer.rand()
 	for i := 0; i < iters; i++ {
 		p := job.p.Clone()

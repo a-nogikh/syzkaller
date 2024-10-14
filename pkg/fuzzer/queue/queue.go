@@ -8,8 +8,10 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/hash"
@@ -449,5 +451,69 @@ func (do *defaultOpts) Next() *Request {
 	req.ExecOpts.ExecFlags |= do.opts.ExecFlags
 	req.ExecOpts.EnvFlags |= do.opts.EnvFlags
 	req.ExecOpts.SandboxArg = do.opts.SandboxArg
+	return req
+}
+
+type LimitedQueue struct {
+	mu      sync.Mutex
+	queue   []*Request
+	maxSize int
+	rnd     *rand.Rand
+}
+
+func NewLimitedQueue(size int) *LimitedQueue {
+	return &LimitedQueue{
+		maxSize: size,
+		rnd:     rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+}
+
+func (lq *LimitedQueue) Next() *Request {
+	lq.mu.Lock()
+	defer lq.mu.Unlock()
+	if len(lq.queue) > 0 {
+		pos := lq.rnd.Intn(len(lq.queue))
+		item := lq.queue[pos]
+
+		last := len(lq.queue) - 1
+		lq.queue[pos] = lq.queue[last]
+		lq.queue[last] = nil
+		lq.queue = lq.queue[0 : len(lq.queue)-1]
+		return item
+	}
+	return nil
+}
+
+func (lq *LimitedQueue) Submit(req *Request) {
+	lq.mu.Lock()
+	defer lq.mu.Unlock()
+	if len(lq.queue) < lq.maxSize {
+		lq.queue = append(lq.queue, req)
+	} else {
+		pos := lq.rnd.Intn(lq.maxSize + 1)
+		if pos < len(lq.queue) {
+			// We assume that nobody waited for the old request.
+			lq.queue[pos] = req
+		}
+	}
+}
+
+type duplicator struct {
+	queue Executor
+	src   Source
+}
+
+func Duplicator(src Source, queue Executor) Source {
+	return &duplicator{src: src, queue: queue}
+}
+
+func (d *duplicator) Next() *Request {
+	req := d.src.Next()
+	if req == nil {
+		return nil
+	}
+	d.queue.Submit(&Request{
+		Prog: req.Prog.Clone(),
+	})
 	return req
 }
