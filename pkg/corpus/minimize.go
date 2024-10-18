@@ -42,7 +42,7 @@ func (corpus *Corpus) Minimize(cover bool) {
 	for _, ctx := range signal.Minimize(inputs) {
 		inp := ctx.(*Item)
 		corpus.progs[inp.Sig] = inp
-		programsList.saveProgram(inp.Prog, inp.Signal)
+		programsList.saveProgram(inp.Prog, inp.Signal, inp.Fuzz)
 	}
 	corpus.ProgramsList.replace(programsList)
 }

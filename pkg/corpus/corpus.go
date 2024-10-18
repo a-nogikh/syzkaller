@@ -24,9 +24,10 @@ type Corpus struct {
 	cover   cover.Cover   // total coverage of all items
 	updates chan<- NewItemEvent
 	*ProgramsList
-	StatProgs  *stat.Val
-	StatSignal *stat.Val
-	StatCover  *stat.Val
+	StatProgs     *stat.Val
+	StatFuzzProgs *stat.Val
+	StatSignal    *stat.Val
+	StatCover     *stat.Val
 }
 
 func NewCorpus(ctx context.Context) *Corpus {
@@ -42,6 +43,9 @@ func NewMonitoredCorpus(ctx context.Context, updates chan<- NewItemEvent) *Corpu
 	}
 	corpus.StatProgs = stat.New("corpus", "Number of test programs in the corpus", stat.Console,
 		stat.Link("/corpus"), stat.Graph("corpus"), stat.LenOf(&corpus.progs, &corpus.mu))
+	corpus.StatFuzzProgs = stat.New("fuzz corpus", "Number of fuzz programs in the corpus", stat.Console,
+		stat.Graph("fuzz corpus"), stat.LenOf(&corpus.ProgramsList.progs, &corpus.ProgramsList.mu))
+
 	corpus.StatSignal = stat.New("signal", "Fuzzing signal in the corpus",
 		stat.LenOf(&corpus.signal, &corpus.mu))
 	corpus.StatCover = stat.New("coverage", "Source coverage in the corpus", stat.Console,
@@ -67,6 +71,7 @@ type Item struct {
 	Signal  signal.Signal
 	Cover   []uint64
 	Updates []ItemUpdate
+	Fuzz    bool
 }
 
 func (item Item) StringCall() string {
@@ -79,6 +84,7 @@ type NewInput struct {
 	Signal   signal.Signal
 	Cover    []uint64
 	RawCover []uint64
+	MayFuzz  bool
 }
 
 type NewItemEvent struct {
@@ -115,6 +121,7 @@ func (corpus *Corpus) Save(inp NewInput) {
 			Signal:  newSignal,
 			Cover:   newCover.Serialize(),
 			Updates: append([]ItemUpdate{}, old.Updates...),
+			Fuzz:    old.Fuzz,
 		}
 		const maxUpdates = 32
 		if len(newItem.Updates) < maxUpdates {
@@ -130,8 +137,9 @@ func (corpus *Corpus) Save(inp NewInput) {
 			Signal:  inp.Signal,
 			Cover:   inp.Cover,
 			Updates: []ItemUpdate{update},
+			Fuzz:    inp.MayFuzz,
 		}
-		corpus.saveProgram(inp.Prog, inp.Signal)
+		corpus.saveProgram(inp.Prog, inp.Signal, inp.MayFuzz)
 	}
 	corpus.signal.Merge(inp.Signal)
 	newCover := corpus.cover.MergeDiff(inp.Cover)

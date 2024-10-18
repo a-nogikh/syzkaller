@@ -85,7 +85,7 @@ func covFilterAddFilter(pcs map[uint64]struct{}, filters []string, foreach func(
 		sort.Strings(used[re])
 		log.Logf(0, "coverage filter: %v: %v", re, used[re])
 	}
-	if len(res) != len(used) {
+	if len(res) != len(used) && false { // TODO: it's to be expected with auto generation.
 		return fmt.Errorf("some filters don't match anything")
 	}
 	return nil

@@ -24,6 +24,12 @@ func newCover() *Cover {
 	return cover
 }
 
+func (cover *Cover) MaxSignalLen() int {
+	cover.mu.Lock()
+	defer cover.mu.Unlock()
+	return cover.maxSignal.Len()
+}
+
 // Signal that should no longer be chased after.
 // It is not returned in GrabSignalDelta().
 func (cover *Cover) AddMaxSignal(sign signal.Signal) {
