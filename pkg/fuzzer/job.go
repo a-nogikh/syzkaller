@@ -53,7 +53,37 @@ func genProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *queue.Request {
 }
 
 func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *queue.Request {
-	p := fuzzer.Config.Corpus.ChooseProgram(rnd)
+	var p *prog.Prog
+
+	// First try to go over the focused fuzzing order.
+	corpus := fuzzer.Config.Corpus
+	for _, config := range fuzzer.Config.FocusOrder {
+		if p != nil {
+			break
+		}
+		list := corpus.PerTag[config.Name]
+		focusCount := list.Count()
+		if focusCount == 0 {
+			continue
+		}
+		const countCutOff = 10
+		if focusCount < countCutOff {
+			// If there are only a few programs that cover the focus area,
+			// spend time more time mutating the whole corpus (split 50:50).
+			if rnd.Intn(2) == 0 {
+				p = list.Choose(rnd)
+			}
+		} else {
+			// If the focused part of the corpus is big enough, split more aggressively (75:25).
+			if rnd.Intn(4) != 0 {
+				p = list.Choose(rnd)
+			}
+		}
+	}
+	// Fall back to selecting from the whole corpus.
+	if p == nil {
+		p = corpus.Progs.Choose(rnd)
+	}
 	if p == nil {
 		return nil
 	}
@@ -62,7 +92,7 @@ func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *queue.Request {
 		prog.RecommendedCalls,
 		fuzzer.ChoiceTable(),
 		fuzzer.Config.NoMutateCalls,
-		fuzzer.Config.Corpus.Programs(),
+		corpus.Progs.List(),
 	)
 	return &queue.Request{
 		Prog:     newP,
@@ -97,6 +127,7 @@ type triageCall struct {
 	newStableSignal signal.Signal
 	cover           cover.Cover
 	rawCover        []uint64
+	tags            map[string]struct{}
 }
 
 // As demonstrated in #4639, programs reproduce with a very high, but not 100% probability.
@@ -155,14 +186,14 @@ func (job *triageJob) run(fuzzer *Fuzzer) {
 		call, info := call, info
 		wg.Add(1)
 		go func() {
-			job.handleCall(call, info)
+			job.handleCall(call, info, fuzzer)
 			wg.Done()
 		}()
 	}
 	wg.Wait()
 }
 
-func (job *triageJob) handleCall(call int, info *triageCall) {
+func (job *triageJob) handleCall(call int, info *triageCall, fuzzer *Fuzzer) {
 	if info.newStableSignal.Empty() {
 		return
 	}
@@ -178,7 +209,8 @@ func (job *triageJob) handleCall(call int, info *triageCall) {
 	if !job.fuzzer.Config.NewInputFilter(callName) {
 		return
 	}
-	if job.flags&ProgSmashed == 0 {
+	// If focus PC filters are specified, only smash jobs that match.
+	if job.flags&ProgSmashed == 0 && (!job.fuzzer.hasFocusTags() || len(info.tags) > 0) {
 		job.fuzzer.startJob(job.fuzzer.statJobsSmash, &smashJob{
 			exec: job.fuzzer.smashQueue,
 			p:    p.Clone(),
@@ -209,12 +241,14 @@ func (job *triageJob) handleCall(call int, info *triageCall) {
 		}
 	}
 	job.fuzzer.Logf(2, "added new input for %v to the corpus: %s", callName, p)
+
 	input := corpus.NewInput{
 		Prog:     p,
 		Call:     call,
 		Signal:   info.stableSignal,
 		Cover:    info.cover.Serialize(),
 		RawCover: info.rawCover,
+		Tags:     info.tags,
 	}
 	job.fuzzer.Config.Corpus.Save(input)
 }
@@ -229,6 +263,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 	} else if job.flags&ProgFromCorpus == 0 {
 		needRuns = deflakeNeedRuns
 	}
+	focusTags := make(map[string]struct{})
 	prevTotalNewSignal := 0
 	for run := 1; ; run++ {
 		totalNewSignal := 0
@@ -255,6 +290,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 		if result.Info == nil {
 			continue // the program has failed
 		}
+		job.fuzzer.addFocusTags(focusTags, result)
 		deflakeCall := func(call int, res *flatrpc.CallInfo) {
 			info := job.calls[call]
 			if info == nil {
@@ -294,6 +330,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 	for call, info := range job.calls {
 		info.stableSignal = info.signals[needRuns-1]
 		info.newStableSignal = info.newSignal.Intersection(info.stableSignal)
+		info.tags = focusTags
 		job.info.Logf("call #%d [%s]: |stable signal|=%d, |new stable signal|=%d%s",
 			call, job.p.CallName(call), info.stableSignal.Len(), info.newStableSignal.Len(),
 			signalPreview(info.newStableSignal))
@@ -381,6 +418,8 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
 			if info.newStableSignal.Intersection(mergedSignal).Len() == info.newStableSignal.Len() {
 				job.info.Logf("[call #%d] minimization step success (|calls| = %d)",
 					call, len(p1.Calls))
+				info.tags = make(map[string]struct{})
+				job.fuzzer.addFocusTags(info.tags, result)
 				return true
 			}
 		}
@@ -456,7 +495,7 @@ func (job *smashJob) run(fuzzer *Fuzzer) {
 		p.Mutate(rnd, prog.RecommendedCalls,
 			fuzzer.ChoiceTable(),
 			fuzzer.Config.NoMutateCalls,
-			fuzzer.Config.Corpus.Programs())
+			fuzzer.Config.Corpus.Progs.List())
 		result := fuzzer.execute(job.exec, &queue.Request{
 			Prog:     p,
 			ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),

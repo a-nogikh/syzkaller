@@ -93,7 +93,7 @@ func TestCorpusSaveConcurrency(t *testing.T) {
 			for it := 0; it < iters; it++ {
 				inp := generateInput(target, rs, 10, it)
 				corpus.Save(inp)
-				corpus.ChooseProgram(r).Clone()
+				corpus.Progs.Choose(r).Clone()
 			}
 		}()
 	}

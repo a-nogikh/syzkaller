@@ -19,7 +19,7 @@ type ProgramsList struct {
 	accPrios []int64
 }
 
-func (pl *ProgramsList) ChooseProgram(r *rand.Rand) *prog.Prog {
+func (pl *ProgramsList) Choose(r *rand.Rand) *prog.Prog {
 	pl.mu.RLock()
 	defer pl.mu.RUnlock()
 	if len(pl.progs) == 0 {
@@ -32,13 +32,19 @@ func (pl *ProgramsList) ChooseProgram(r *rand.Rand) *prog.Prog {
 	return pl.progs[idx]
 }
 
-func (pl *ProgramsList) Programs() []*prog.Prog {
+func (pl *ProgramsList) Count() int {
+	pl.mu.RLock()
+	defer pl.mu.RUnlock()
+	return len(pl.progs)
+}
+
+func (pl *ProgramsList) List() []*prog.Prog {
 	pl.mu.RLock()
 	defer pl.mu.RUnlock()
 	return pl.progs
 }
 
-func (pl *ProgramsList) saveProgram(p *prog.Prog, signal signal.Signal) {
+func (pl *ProgramsList) save(p *prog.Prog, signal signal.Signal) {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
 	prio := int64(len(signal))

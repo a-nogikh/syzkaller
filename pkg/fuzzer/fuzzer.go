@@ -205,6 +205,14 @@ type Config struct {
 	FetchRawCover  bool
 	NewInputFilter func(call string) bool
 	PatchTest      bool
+	FocusOrder     []*FocusConfig
+}
+
+type FocusConfig struct {
+	// Must be in sync with corpus.Corpus.
+	Name string
+	// Note that these must be the PCs actually returned by KCOV.
+	CoverPCs map[uint64]struct{}
 }
 
 func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *flatrpc.CallInfo, call int, triage *map[int]*triageCall) {
@@ -364,12 +372,12 @@ func (fuzzer *Fuzzer) choiceTableUpdater() {
 			return
 		case <-fuzzer.ctRegenerate:
 		}
-		fuzzer.updateChoiceTable(fuzzer.Config.Corpus.Programs())
+		fuzzer.updateChoiceTable(fuzzer.Config.Corpus.Progs.List())
 	}
 }
 
 func (fuzzer *Fuzzer) ChoiceTable() *prog.ChoiceTable {
-	progs := fuzzer.Config.Corpus.Programs()
+	progs := fuzzer.Config.Corpus.Progs.List()
 
 	fuzzer.ctMu.Lock()
 	defer fuzzer.ctMu.Unlock()
@@ -388,6 +396,35 @@ func (fuzzer *Fuzzer) ChoiceTable() *prog.ChoiceTable {
 		}
 	}
 	return fuzzer.ct
+}
+
+func (fuzzer *Fuzzer) hasFocusTags() bool {
+	return len(fuzzer.Config.FocusOrder) > 0
+}
+
+func (fuzzer *Fuzzer) addFocusTags(into map[string]struct{}, resp *queue.Result) {
+	if resp == nil || resp.Info == nil {
+		return
+	}
+tags:
+	for _, config := range fuzzer.Config.FocusOrder {
+		for _, info := range resp.Info.Calls {
+			for _, pc := range info.Cover {
+				if _, ok := config.CoverPCs[pc]; ok {
+					into[config.Name] = struct{}{}
+					continue tags
+				}
+			}
+		}
+		if resp.Info.Extra != nil {
+			for _, pc := range resp.Info.Extra.Cover {
+				if _, ok := config.CoverPCs[pc]; ok {
+					into[config.Name] = struct{}{}
+					continue tags
+				}
+			}
+		}
+	}
 }
 
 func (fuzzer *Fuzzer) RunningJobs() []*JobInfo {
