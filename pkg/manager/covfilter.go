@@ -16,8 +16,8 @@ import (
 	"github.com/google/syzkaller/pkg/mgrconfig"
 )
 
-func CreateCoverageFilter(source *ReportGeneratorWrapper, covCfg mgrconfig.CovFilterCfg) ([]uint64,
-	map[uint64]struct{}, error) {
+func CreateCoverageFilter(source *ReportGeneratorWrapper, covCfg mgrconfig.CovFilterCfg) (
+	[]uint64, map[uint64]struct{}, error) {
 	if covCfg.Empty() {
 		return nil, nil, nil
 	}
