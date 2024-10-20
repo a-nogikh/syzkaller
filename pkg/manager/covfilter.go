@@ -16,8 +16,8 @@ import (
 	"github.com/google/syzkaller/pkg/mgrconfig"
 )
 
-func CreateCoverageFilter(source *ReportGeneratorWrapper, covCfg mgrconfig.CovFilterCfg) ([]uint64,
-	map[uint64]struct{}, error) {
+func CreateCoverageFilter(source *ReportGeneratorWrapper, covCfg mgrconfig.CovFilterCfg,
+	strict bool) ([]uint64, map[uint64]struct{}, error) {
 	if covCfg.Empty() {
 		return nil, nil, nil
 	}
@@ -31,7 +31,7 @@ func CreateCoverageFilter(source *ReportGeneratorWrapper, covCfg mgrconfig.CovFi
 			apply(&sym.ObjectUnit)
 		}
 	}
-	if err := covFilterAddFilter(pcs, covCfg.Functions, foreachSymbol); err != nil {
+	if err := covFilterAddFilter(pcs, covCfg.Functions, foreachSymbol, strict); err != nil {
 		return nil, nil, err
 	}
 	foreachUnit := func(apply func(*backend.ObjectUnit)) {
@@ -39,7 +39,7 @@ func CreateCoverageFilter(source *ReportGeneratorWrapper, covCfg mgrconfig.CovFi
 			apply(&unit.ObjectUnit)
 		}
 	}
-	if err := covFilterAddFilter(pcs, covCfg.Files, foreachUnit); err != nil {
+	if err := covFilterAddFilter(pcs, covCfg.Files, foreachUnit, strict); err != nil {
 		return nil, nil, err
 	}
 	if err := covFilterAddRawPCs(pcs, covCfg.RawPCs); err != nil {
@@ -59,7 +59,8 @@ func CreateCoverageFilter(source *ReportGeneratorWrapper, covCfg mgrconfig.CovFi
 	return execPCs, pcs, nil
 }
 
-func covFilterAddFilter(pcs map[uint64]struct{}, filters []string, foreach func(func(*backend.ObjectUnit))) error {
+func covFilterAddFilter(pcs map[uint64]struct{}, filters []string, foreach func(func(*backend.ObjectUnit)),
+	strict bool) error {
 	res, err := compileRegexps(filters)
 	if err != nil {
 		return err
@@ -85,7 +86,7 @@ func covFilterAddFilter(pcs map[uint64]struct{}, filters []string, foreach func(
 		sort.Strings(used[re])
 		log.Logf(0, "coverage filter: %v: %v", re, used[re])
 	}
-	if len(res) != len(used) {
+	if strict && len(res) != len(used) {
 		return fmt.Errorf("some filters don't match anything")
 	}
 	return nil

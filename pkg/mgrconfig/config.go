@@ -235,6 +235,17 @@ type Experimental struct {
 
 	// Use automatically (auto) generated or manually (manual) written descriptions or any (any) (default: manual)
 	DescriptionsMode string `json:"descriptions_mode"`
+
+	// The parts of the kernel code the fuzzer should focus on (in the order of decreasing priority).
+	// Intended to be used during patch fuzzing to bring more attention to the modified code.
+	FocusOrder []FocusConfig `json:"focus_order,omitempty"`
+}
+
+type FocusConfig struct {
+	// The name will be used in stats and logs. Must be non-empty and unique.
+	Name string `json:"name"`
+	// Can be configured exactly like cover_filter.
+	Filter CovFilterCfg `json:"filter"`
 }
 
 type Subsystem struct {
