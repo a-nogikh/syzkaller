@@ -86,7 +86,7 @@ func TestFuzz(t *testing.T) {
 	tf.run()
 
 	t.Logf("resulting corpus:")
-	for _, p := range fuzzer.Config.Corpus.Programs() {
+	for _, p := range fuzzer.Config.Corpus.Progs.List() {
 		t.Logf("-----")
 		t.Logf("%s", p.Serialize())
 	}

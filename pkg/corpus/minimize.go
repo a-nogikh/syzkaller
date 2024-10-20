@@ -38,11 +38,21 @@ func (corpus *Corpus) Minimize(cover bool) {
 	})
 
 	corpus.progs = make(map[string]*Item)
-	programsList := &ProgramsList{}
+	all := &ProgramsList{}
+	perTag := map[string]*ProgramsList{}
+	for tag := range corpus.PerTag {
+		perTag[tag] = &ProgramsList{}
+	}
 	for _, ctx := range signal.Minimize(inputs) {
 		inp := ctx.(*Item)
 		corpus.progs[inp.Sig] = inp
-		programsList.saveProgram(inp.Prog, inp.Signal)
+		for tag := range inp.Tags {
+			perTag[tag].save(inp.Prog, inp.Signal)
+		}
+		all.save(inp.Prog, inp.Signal)
 	}
-	corpus.ProgramsList.replace(programsList)
+	corpus.Progs.replace(all)
+	for tag, newList := range perTag {
+		corpus.PerTag[tag].replace(newList)
+	}
 }

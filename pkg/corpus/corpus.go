@@ -5,6 +5,7 @@ package corpus
 
 import (
 	"context"
+	"maps"
 	"sync"
 
 	"github.com/google/syzkaller/pkg/cover"
@@ -23,7 +24,10 @@ type Corpus struct {
 	signal  signal.Signal // total signal of all items
 	cover   cover.Cover   // total coverage of all items
 	updates chan<- NewItemEvent
-	*ProgramsList
+
+	Progs  *ProgramsList
+	PerTag map[string]*ProgramsList
+
 	StatProgs  *stat.Val
 	StatSignal *stat.Val
 	StatCover  *stat.Val
@@ -34,11 +38,16 @@ func NewCorpus(ctx context.Context) *Corpus {
 }
 
 func NewMonitoredCorpus(ctx context.Context, updates chan<- NewItemEvent) *Corpus {
+	return NewTaggedCorpus(ctx, nil, updates)
+}
+
+func NewTaggedCorpus(ctx context.Context, tags []string, updates chan<- NewItemEvent) *Corpus {
 	corpus := &Corpus{
-		ctx:          ctx,
-		progs:        make(map[string]*Item),
-		updates:      updates,
-		ProgramsList: &ProgramsList{},
+		ctx:     ctx,
+		progs:   make(map[string]*Item),
+		updates: updates,
+		Progs:   &ProgramsList{},
+		PerTag:  make(map[string]*ProgramsList),
 	}
 	corpus.StatProgs = stat.New("corpus", "Number of test programs in the corpus", stat.Console,
 		stat.Link("/corpus"), stat.Graph("corpus"), stat.LenOf(&corpus.progs, &corpus.mu))
@@ -46,6 +55,13 @@ func NewMonitoredCorpus(ctx context.Context, updates chan<- NewItemEvent) *Corpu
 		stat.LenOf(&corpus.signal, &corpus.mu))
 	corpus.StatCover = stat.New("coverage", "Source coverage in the corpus", stat.Console,
 		stat.Link("/cover"), stat.Prometheus("syz_corpus_cover"), stat.LenOf(&corpus.cover, &corpus.mu))
+	for _, tag := range tags {
+		obj := &ProgramsList{}
+		corpus.PerTag[tag] = obj
+		stat.New("corpus ["+tag+"]", "Number of targeted programs",
+			stat.Console, stat.Graph("corpus"),
+			stat.LenOf(&obj.progs, &obj.mu))
+	}
 	return corpus
 }
 
@@ -67,6 +83,7 @@ type Item struct {
 	Signal  signal.Signal
 	Cover   []uint64
 	Updates []ItemUpdate
+	Tags    map[string]struct{}
 }
 
 func (item Item) StringCall() string {
@@ -79,6 +96,7 @@ type NewInput struct {
 	Signal   signal.Signal
 	Cover    []uint64
 	RawCover []uint64
+	Tags     map[string]struct{}
 }
 
 type NewItemEvent struct {
@@ -115,12 +133,20 @@ func (corpus *Corpus) Save(inp NewInput) {
 			Signal:  newSignal,
 			Cover:   newCover.Serialize(),
 			Updates: append([]ItemUpdate{}, old.Updates...),
+			Tags:    maps.Clone(old.Tags),
 		}
 		const maxUpdates = 32
 		if len(newItem.Updates) < maxUpdates {
 			newItem.Updates = append(newItem.Updates, update)
 		}
 		corpus.progs[sig] = newItem
+		for tag := range inp.Tags {
+			if _, ok := newItem.Tags[tag]; ok {
+				continue
+			}
+			newItem.Tags[tag] = struct{}{}
+			corpus.PerTag[tag].save(inp.Prog, inp.Signal)
+		}
 	} else {
 		corpus.progs[sig] = &Item{
 			Sig:     sig,
@@ -130,8 +156,12 @@ func (corpus *Corpus) Save(inp NewInput) {
 			Signal:  inp.Signal,
 			Cover:   inp.Cover,
 			Updates: []ItemUpdate{update},
+			Tags:    maps.Clone(inp.Tags),
 		}
-		corpus.saveProgram(inp.Prog, inp.Signal)
+		for tag := range inp.Tags {
+			corpus.PerTag[tag].save(inp.Prog, inp.Signal)
+		}
+		corpus.Progs.save(inp.Prog, inp.Signal)
 	}
 	corpus.signal.Merge(inp.Signal)
 	newCover := corpus.cover.MergeDiff(inp.Cover)
@@ -147,6 +177,7 @@ func (corpus *Corpus) Save(inp NewInput) {
 		}
 	}
 }
+
 func (corpus *Corpus) Signal() signal.Signal {
 	corpus.mu.RLock()
 	defer corpus.mu.RUnlock()
