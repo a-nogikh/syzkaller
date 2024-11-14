@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - name: minio
+        image: minio/minio:latest
+        args:
+        - server
+        - /data
+        - --console-address
+        - :9001 # Expose the console on port 9001
+        ports:
+        - containerPort: 9000 # MinIO API port
+        - containerPort: 9001 # MinIO Console port
+        env:
+        - name: MINIO_ACCESS_KEY
+          value: "minioadmin" # Replace with a strong key in production
+        - name: MINIO_SECRET_KEY
+          value: "minioadmin" # Replace with a strong secret in production
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        emptyDir: {} # Use an emptyDir for simplicity in Minikube. For production, use a persistent volume.
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  # namespace: argo  # Choose the appropriate namespace
+spec:
+  selector:
+    app: minio
+  type: NodePort # Or LoadBalancer if needed
+  ports:
+    - name: "ui-address"
+      port: 9000
+      targetPort: 9000
+      protocol: TCP
+      nodePort: 30000 # Example NodePort
+    - name: "console-address"
+      port: 9001
+      targetPort: 9001
+      protocol: TCP
+      nodePort: 30001 # Example NodePort
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-minio-cred
+type: Opaque # This is the default type, but it's good to be explicit
+stringData: # Use stringData for non-encoded string values
+  accesskey: minioadmin # Replace with your actual access key
+  secretkey: minioadmin # Replace with your actual secret key
+

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,8 @@ import (
 	"syscall"
 	"time"
 	_ "unsafe" // required to use go:linkname
+
+	"github.com/google/syzkaller/syz-cluster/pkg/app"
 )
 
 const (
@@ -277,6 +280,14 @@ func MkdirAll(dir string) error {
 
 func WriteFile(filename string, data []byte) error {
 	return os.WriteFile(filename, data, DefaultFilePerm)
+}
+
+func WriteJSON[T any](filename string, obj T) error {
+	jsonData, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		app.Fatalf("failed to marshal the result: %v", err)
+	}
+	return WriteFile(filename, jsonData)
 }
 
 func WriteGzipStream(filename string, reader io.Reader) error {

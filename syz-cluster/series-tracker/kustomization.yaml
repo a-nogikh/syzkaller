@@ -1,0 +1,4 @@
+resources:
+- deployment.yaml
+- git-pvc.yaml
+- blobs-pvc-dev.yaml
