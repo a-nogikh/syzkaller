@@ -1,0 +1,14 @@
+resources:
+  - ../../controller
+
+patches:
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+
+images:
+  - name: controller-image
+    newName: controller-image-local:latest
