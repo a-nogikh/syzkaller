@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/google/syzkaller/syz-cluster/pkg/report"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,6 +17,8 @@ type AppConfig struct {
 	ParallelWorkflows int `yaml:"parallelWorkflows"`
 	// What Lore archives are to be polled for new patch series.
 	LoreArchives []string `yaml:"loreArchives"`
+	// Parameters used for sending/generating emails.
+	EmailReporting *report.Config `yaml:"emailReporting"`
 }
 
 // The project configuration is expected to be mounted at /config/config.yaml.

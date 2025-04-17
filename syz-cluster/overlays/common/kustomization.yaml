@@ -8,6 +8,7 @@ resources:
   - ../../series-tracker
   - ../../kernel-disk
   - ../../reporter-server
+  - ../../email-reporter
   - ../../workflow
   - network-deny-all.yaml
   - network-policy-controller.yaml

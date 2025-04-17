@@ -12,9 +12,9 @@ import (
 )
 
 type Config struct {
-	Name         string
-	DocsLink     string
-	SupportEmail string
+	Name         string `yaml:"name"`
+	DocsLink     string `yaml:"docs"`
+	SupportEmail string `yaml:"supportEmail"`
 }
 
 //go:embed template.txt
