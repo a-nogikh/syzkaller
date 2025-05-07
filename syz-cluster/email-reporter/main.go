@@ -30,7 +30,18 @@ func main() {
 	if cfg.EmailReporting == nil {
 		app.Fatalf("reporting is not configured: %v", err)
 	}
-	sender := &smtpSender{}
+	projectName, err := app.GCPProjectName(ctx)
+	if err != nil {
+		app.Fatalf("failed to query project name: %s", err)
+	}
+	secrets, err := app.NewGCPSecretManager(ctx, projectName)
+	if err != nil {
+		app.Fatalf("failed to create a secret manager: %s", err)
+	}
+	sender, err := newSender(ctx, cfg.EmailReporting, secrets)
+	if err != nil {
+		app.Fatalf("failed to create an SMTP sender: %s", err)
+	}
 	handler := &Handler{
 		apiClient:   app.DefaultReporterClient(),
 		emailConfig: cfg.EmailReporting,

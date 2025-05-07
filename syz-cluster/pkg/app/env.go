@@ -9,6 +9,7 @@ import (
 	"os"
 	"testing"
 
+	"cloud.google.com/go/compute/metadata"
 	"cloud.google.com/go/spanner"
 	"github.com/google/syzkaller/syz-cluster/pkg/api"
 	"github.com/google/syzkaller/syz-cluster/pkg/blob"
@@ -75,4 +76,17 @@ func DefaultClient() *api.Client {
 
 func DefaultReporterClient() *api.ReporterClient {
 	return api.NewReporterClient(`http://reporter-server-service:8080`)
+}
+
+func GCPProjectName(ctx context.Context) (string, error) {
+	if !metadata.OnGCE() {
+		// This is not a fundamental requirement, but it allows us to avoid creating a separate
+		// config entry for the GCP project name.
+		return "", fmt.Errorf("only assumed to be run on GKE/GCE")
+	}
+	projectID, err := metadata.ProjectIDWithContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	return projectID, nil
 }
