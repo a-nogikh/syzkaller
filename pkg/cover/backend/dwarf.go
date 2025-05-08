@@ -236,6 +236,7 @@ func makeDWARFUnsafe(params *dwarfParams) (*Impl, error) {
 	if len(allSymbols) == 0 || len(allUnits) == 0 {
 		return nil, fmt.Errorf("failed to parse DWARF (set CONFIG_DEBUG_INFO=y on linux)")
 	}
+
 	var interner symbolizer.Interner
 	impl := &Impl{
 		Units:   allUnits,
@@ -288,6 +289,7 @@ func buildSymbols(symbols []*Symbol, ranges []pcRange, coverPoints [2][]uint64) 
 		for ; rangeIndex < len(ranges) && ranges[rangeIndex].end <= s.Start; rangeIndex++ {
 		}
 		if rangeIndex == len(ranges) || s.Start < ranges[rangeIndex].start || len(s.PCs) == 0 {
+			fmt.Printf("symbol %q is dropped since it's not in the ranges\n", s.Name)
 			continue // drop the symbol
 		}
 		unit := ranges[rangeIndex].unit
@@ -351,49 +353,116 @@ type pcFixFn = (func([2]uint64) ([2]uint64, bool))
 func readTextRanges(debugInfo *dwarf.Data, module *vminfo.KernelModule, pcFix pcFixFn) (
 	[]pcRange, []*CompileUnit, error) {
 	var ranges []pcRange
-	var units []*CompileUnit
-	for r := debugInfo.Reader(); ; {
-		ent, err := r.Next()
-		if err != nil {
-			return nil, nil, err
+	unitMap := map[string]*CompileUnit{}
+	getUnit := func(name string) *CompileUnit {
+		if strings.Contains(name, "/@/") {
+			name, _, _ = strings.Cut(name, "/@/")
 		}
-		if ent == nil {
-			break
+		unit := unitMap[name]
+		if unit != nil {
+			return unit
 		}
-		if ent.Tag != dwarf.TagCompileUnit {
-			return nil, nil, fmt.Errorf("found unexpected tag %v on top level", ent.Tag)
-		}
-		attrName := ent.Val(dwarf.AttrName)
-		if attrName == nil {
-			continue
-		}
-		unit := &CompileUnit{
+		unit = &CompileUnit{
 			ObjectUnit: ObjectUnit{
-				Name: attrName.(string),
+				Name: name,
 			},
 			Module: module,
 		}
-		units = append(units, unit)
-		ranges1, err := debugInfo.Ranges(ent)
-		if err != nil {
-			return nil, nil, err
+		unitMap[name] = unit
+		return unit
+	}
+	r := debugInfo.Reader()
+	ent, err := r.Next()
+	if err != nil {
+		return nil, nil, err
+	}
+	for ent != nil {
+		if ent.Tag != dwarf.TagCompileUnit {
+			return nil, nil, fmt.Errorf("found unexpected tag %v on top level", ent.Tag)
 		}
+		attrName, attrCompDir := ent.Val(dwarf.AttrName), ent.Val(dwarf.AttrCompDir)
+		if attrName == nil {
+			continue
+		}
+		unitName := attrCompDir.(string) + attrName.(string)
+		const languageRust = 28
 
-		var filtered bool
-		for _, r := range ranges1 {
-			if pcFix != nil {
-				r, filtered = pcFix(r)
-				if filtered {
-					continue
+		language := ent.Val(dwarf.AttrLanguage)
+		if language != nil && language.(int64) == languageRust {
+			fmt.Printf("%s is in Rust\n", unitName)
+
+			lr, err := debugInfo.LineReader(ent)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to query line reader: %w", err)
+			}
+
+			var entry dwarf.LineEntry
+
+			type tmp struct {
+				addr uint64
+				name string
+			}
+
+			var rec []tmp
+			for {
+				if err := lr.Next(&entry); err != nil {
+					if err == io.EOF {
+						break
+					}
+					panic(err)
+				}
+				r := [2]uint64{entry.Address, entry.Address}
+				if pcFix != nil {
+					r, _ = pcFix(r)
+				}
+				rec = append(rec, tmp{addr: r[0], name: entry.File.Name})
+			}
+
+			for i := 0; i < len(rec); i++ {
+				start := rec[i].addr
+				end := start
+				if i+1 < len(rec) {
+					end = rec[i+1].addr - 1
+				}
+				unit := getUnit(rec[i].name)
+				if module.Name == "" {
+					ranges = append(ranges, pcRange{start, end, unit})
+				} else {
+					ranges = append(ranges, pcRange{start + module.Addr, end + module.Addr, unit})
 				}
 			}
-			if module.Name == "" {
-				ranges = append(ranges, pcRange{r[0], r[1], unit})
-			} else {
-				ranges = append(ranges, pcRange{r[0] + module.Addr, r[1] + module.Addr, unit})
+
+		} else {
+			unit := getUnit(unitName)
+			ranges1, err := debugInfo.Ranges(ent)
+			if err != nil {
+				return nil, nil, err
+			}
+			var filtered bool
+			for _, r := range ranges1 {
+				if pcFix != nil {
+					r, filtered = pcFix(r)
+					if filtered {
+						continue
+					}
+				}
+				if module.Name == "" {
+					ranges = append(ranges, pcRange{r[0], r[1], unit})
+				} else {
+					ranges = append(ranges, pcRange{r[0] + module.Addr, r[1] + module.Addr, unit})
+				}
 			}
 		}
 		r.SkipChildren()
+		ent, err = r.Next()
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	var units []*CompileUnit
+	for _, item := range unitMap {
+		units = append(units, item)
 	}
 	return ranges, units, nil
 }
