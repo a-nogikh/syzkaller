@@ -351,49 +351,171 @@ type pcFixFn = (func([2]uint64) ([2]uint64, bool))
 func readTextRanges(debugInfo *dwarf.Data, module *vminfo.KernelModule, pcFix pcFixFn) (
 	[]pcRange, []*CompileUnit, error) {
 	var ranges []pcRange
-	var units []*CompileUnit
-	for r := debugInfo.Reader(); ; {
-		ent, err := r.Next()
-		if err != nil {
-			return nil, nil, err
+	unitMap := map[string]*CompileUnit{}
+	getUnit := func(name string) *CompileUnit {
+		if strings.Contains(name, "/@/") {
+			name, _, _ = strings.Cut(name, "/@/")
 		}
-		if ent == nil {
-			break
+		unit := unitMap[name]
+		if unit != nil {
+			return unit
 		}
-		if ent.Tag != dwarf.TagCompileUnit {
-			return nil, nil, fmt.Errorf("found unexpected tag %v on top level", ent.Tag)
-		}
-		attrName := ent.Val(dwarf.AttrName)
-		if attrName == nil {
-			continue
-		}
-		unit := &CompileUnit{
+		unit = &CompileUnit{
 			ObjectUnit: ObjectUnit{
-				Name: attrName.(string),
+				Name: name,
 			},
 			Module: module,
 		}
-		units = append(units, unit)
-		ranges1, err := debugInfo.Ranges(ent)
-		if err != nil {
-			return nil, nil, err
+		unitMap[name] = unit
+		return unit
+	}
+	r := debugInfo.Reader()
+	ent, err := r.Next()
+	if err != nil {
+		return nil, nil, err
+	}
+	for ent != nil {
+		if ent.Tag != dwarf.TagCompileUnit {
+			return nil, nil, fmt.Errorf("found unexpected tag %v on top level", ent.Tag)
 		}
+		attrName, attrCompDir := ent.Val(dwarf.AttrName), ent.Val(dwarf.AttrCompDir)
+		if attrName == nil {
+			continue
+		}
+		unitName := attrCompDir.(string) + attrName.(string)
+		const languageRust = 28
 
-		var filtered bool
-		for _, r := range ranges1 {
-			if pcFix != nil {
-				r, filtered = pcFix(r)
-				if filtered {
+		language := ent.Val(dwarf.AttrLanguage)
+		if language != nil && language.(int64) == languageRust {
+			fmt.Printf("%s is in Rust\n", unitName)
+
+			lr, err := debugInfo.LineReader(ent)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to query line reader: %w", err)
+			}
+			files := lr.Files()
+
+			var entry dwarf.LineEntry
+			for {
+				if err := lr.Next(&entry); err != nil {
+					if err == io.EOF {
+						break
+					}
+					panic(err)
+				}
+				r := [2]uint64{entry.Address, entry.Address}
+				if pcFix != nil {
+					r, _ = pcFix(r)
+				}
+				fmt.Printf("%x: LINE: %s: %d\n", r[0], entry.File.Name, entry.Line)
+			}
+
+			linkageNameToFileName := map[string]string{}
+			linkageNameToRanges := map[string][]pcRange{}
+			for {
+				ent, err = r.Next()
+				if err != nil {
+					return nil, nil, err
+				} else if ent == nil {
+					break
+				} else if ent.Tag == dwarf.TagCompileUnit {
+					break
+				} else if ent.Tag != dwarf.TagSubprogram {
 					continue
 				}
+
+				linkageName, ok := ent.Val(dwarf.AttrLinkageName).(string)
+				if !ok || linkageName == "" {
+					// TODO: it's an offset!
+					linkageName, ok = ent.Val(dwarf.AttrAbstractOrigin).(string)
+					if !ok {
+						continue
+					}
+					fmt.Printf("abstract origin: %s\n", linkageName)
+				}
+
+				fileIdx, ok := ent.Val(dwarf.AttrDeclFile).(int64)
+				if ok {
+					if int(fileIdx) < len(files) {
+						fileRecord := files[int(fileIdx)]
+						if fileRecord != nil {
+							linkageNameToFileName[linkageName] = fileRecord.Name
+						}
+					}
+				}
+
+				name, _ := ent.Val(dwarf.AttrName).(string)
+				fmt.Printf("subprogram %q from %q\n", name, linkageNameToFileName[linkageName])
+
+				ranges1, err := debugInfo.Ranges(ent)
+				if err != nil {
+					return nil, nil, err
+				}
+				var filtered bool
+				saveRanges := linkageNameToRanges[linkageName]
+				for _, r := range ranges1 {
+					if pcFix != nil {
+						r, filtered = pcFix(r)
+						if filtered {
+							continue
+						}
+					}
+					if module.Name == "" {
+						saveRanges = append(saveRanges, pcRange{r[0], r[1], nil})
+					} else {
+						saveRanges = append(saveRanges, pcRange{r[0] + module.Addr, r[1] + module.Addr, nil})
+					}
+				}
+				linkageNameToRanges[linkageName] = saveRanges
 			}
-			if module.Name == "" {
-				ranges = append(ranges, pcRange{r[0], r[1], unit})
-			} else {
-				ranges = append(ranges, pcRange{r[0] + module.Addr, r[1] + module.Addr, unit})
+
+			mergePerFile := map[string][]pcRange{}
+			for linkageName, fileName := range linkageNameToFileName {
+				unit := getUnit(fileName)
+				allRanges := linkageNameToRanges[linkageName]
+				for _, iterRange := range allRanges {
+					iterRange.unit = unit
+					ranges = append(ranges, iterRange)
+					mergePerFile[fileName] = append(mergePerFile[fileName], iterRange)
+				}
+			}
+			for file, ranges := range mergePerFile {
+				fmt.Printf("%q has %d ranges\n", file, len(ranges))
+				for _, iterRange := range ranges {
+					fmt.Printf("%x -> %x\n", iterRange.start, iterRange.end)
+				}
+			}
+		} else {
+			unit := getUnit(unitName)
+			ranges1, err := debugInfo.Ranges(ent)
+			if err != nil {
+				return nil, nil, err
+			}
+			var filtered bool
+			for _, r := range ranges1 {
+				if pcFix != nil {
+					r, filtered = pcFix(r)
+					if filtered {
+						continue
+					}
+				}
+				if module.Name == "" {
+					ranges = append(ranges, pcRange{r[0], r[1], unit})
+				} else {
+					ranges = append(ranges, pcRange{r[0] + module.Addr, r[1] + module.Addr, unit})
+				}
+			}
+			r.SkipChildren()
+			ent, err = r.Next()
+			if err != nil {
+				return nil, nil, err
 			}
 		}
-		r.SkipChildren()
+	}
+
+	var units []*CompileUnit
+	for _, item := range unitMap {
+		units = append(units, item)
 	}
 	return ranges, units, nil
 }

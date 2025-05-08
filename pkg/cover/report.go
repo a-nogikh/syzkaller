@@ -6,6 +6,7 @@ package cover
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/syzkaller/pkg/cover/backend"
 	"github.com/google/syzkaller/pkg/mgrconfig"
@@ -82,11 +83,19 @@ func (rg *ReportGenerator) prepareFileMap(progs []Prog, force, debug bool) (file
 	if err := rg.symbolizePCs(uniquePCs(progs...)); err != nil {
 		return nil, err
 	}
+
+	derust := func(path string) string {
+		if strings.Contains(path, "/@/") {
+			path, _, _ = strings.Cut(path, "/@/")
+		}
+		return path
+	}
+
 	files := make(fileMap)
 	for _, unit := range rg.Units {
-		files[unit.Name] = &file{
+		files[derust(unit.Name)] = &file{
 			module:   unit.Module.Name,
-			filename: unit.Path,
+			filename: derust(unit.Path),
 			lines:    make(map[int]line),
 			totalPCs: len(unit.PCs),
 		}
@@ -114,9 +123,14 @@ func (rg *ReportGenerator) prepareFileMap(progs []Prog, force, debug bool) (file
 		return nil, coverageCallbackMismatch(debug, len(pcToProgs), unmatchedPCs)
 	}
 	for _, unit := range rg.Units {
-		f := files[unit.Name]
+		fmt.Printf("UNIT %q\n", unit.Name)
+		normalized := derust(unit.Name)
+		f := files[normalized]
 		for _, pc := range unit.PCs {
 			if pcToProgs[pc] != nil {
+				if f == nil {
+					panic("empty files for " + normalized)
+				}
 				f.coveredPCs++
 			}
 		}
@@ -131,7 +145,7 @@ func (rg *ReportGenerator) prepareFileMap(progs []Prog, force, debug bool) (file
 				fun.covered++
 			}
 		}
-		f := files[s.Unit.Name]
+		f := files[derust(s.Unit.Name)]
 		f.functions = append(f.functions, fun)
 	}
 	for _, f := range files {
@@ -218,6 +232,7 @@ func (rg *ReportGenerator) symbolizePCs(PCs []uint64) error {
 	for _, pc := range PCs {
 		sym := rg.findSymbol(pc)
 		if sym == nil || sym.Symbolized || symbolize[sym] {
+			fmt.Printf("PC %x skipped because no symbol is known\n", pc)
 			continue
 		}
 		symbolize[sym] = true
