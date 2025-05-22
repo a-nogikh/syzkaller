@@ -35,7 +35,8 @@ patches:
       kind: Service
       name: web-dashboard-service
     patch: |-
-      - op: replace
+      - op: add
         path: /metadata/annotations
         value:
-          cloud.google.com/neg: '{"exposed_ports": {"80":{"name": "web-dashboard"}}}'
+          cloud.google.com/l4-rbs: "enabled"
+          networking.gke.io/internal-load-balancer-allow-global-access: "true"
