@@ -60,6 +60,7 @@ func initHTTPHandlers() {
 	for ns, nsConfig := range getConfig(context.Background()).Namespaces {
 		http.Handle("/"+ns, handlerWrapper(handleMain))
 		http.Handle("/"+ns+"/fixed", handlerWrapper(handleFixed))
+		http.Handle("/"+ns+"/export", handlerWrapper(handleExport))
 		http.Handle("/"+ns+"/invalid", handlerWrapper(handleInvalid))
 		http.Handle("/"+ns+"/graph/bugs", handlerWrapper(handleKernelHealthGraph))
 		http.Handle("/"+ns+"/graph/lifetimes", handlerWrapper(handleGraphLifetimes))
@@ -524,6 +525,66 @@ func (filter *userBugFilter) Any() bool {
 		return false
 	}
 	return len(filter.Labels) > 0 || filter.OnlyManager != "" || filter.Manager != "" || filter.NoSubsystem
+}
+
+func handleExport(c context.Context, w http.ResponseWriter, r *http.Request) error {
+	hdr, err := commonHeader(c, r, w, "")
+	if err != nil {
+		return err
+	}
+	filter := func(query *db.Query) *db.Query {
+		return query.Filter("Namespace=", hdr.Namespace)
+	}
+	rawBugs, _, err := loadAllBugs(c, filter)
+	if err != nil {
+		return err
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	type PerDay struct {
+		Year  int `json:"year"`
+		Month int `json:"month"`
+		Day   int `json:"day"`
+		Count int `json:"count"`
+	}
+
+	type ExportBug struct {
+		Title      string          `json:"title"`
+		Subsystems map[string]bool `json:"subsystems"`
+		Stats      []PerDay        `json:"stats"`
+	}
+
+	perTitle := map[string]*ExportBug{}
+	for _, bug := range rawBugs {
+		if bug.LastTime.Year() < 2024 {
+			continue
+		}
+		entity := perTitle[bug.Title]
+		if entity == nil {
+			entity = &ExportBug{Title: bug.Title, Subsystems: map[string]bool{}}
+			perTitle[bug.Title] = entity
+		}
+		for _, item := range bug.LabelValues(SubsystemLabel) {
+			entity.Subsystems[item.Value] = true
+		}
+
+		for _, item := range bug.DailyStats {
+			entity.Stats = append(entity.Stats, PerDay{
+				Year:  item.Date / 10000,
+				Month: (item.Date % 10000) / 100,
+				Day:   item.Date % 100,
+				Count: item.CrashCount,
+			})
+		}
+	}
+
+	data, err := json.MarshalIndent(perTitle, "", "\t")
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(data)
+	return err
 }
 
 // handleMain serves main page.
