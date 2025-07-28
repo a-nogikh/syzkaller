@@ -673,8 +673,15 @@ func (serv *HTTPServer) httpPrio(w http.ResponseWriter, r *http.Request) {
 		UIPageHeader: serv.pageHeader(r, "syscall priorities"),
 		Call:         callName,
 	}
+	var enabled map[*prog.Syscall]bool
+	if obj := serv.EnabledSyscalls.Load(); obj != nil {
+		enabled = obj.(map[*prog.Syscall]bool)
+	}
 	for i, p := range prios[call.ID] {
-		data.Prios = append(data.Prios, UIPrio{serv.Cfg.Target.Syscalls[i].Name, p})
+		syscall := serv.Cfg.Target.Syscalls[i]
+		if enabled[syscall] {
+			data.Prios = append(data.Prios, UIPrio{syscall.Name, p})
+		}
 	}
 	sort.Slice(data.Prios, func(i, j int) bool {
 		return data.Prios[i].Prio > data.Prios[j].Prio
