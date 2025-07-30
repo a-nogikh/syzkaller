@@ -10,12 +10,12 @@ import (
 )
 
 func TestLastExecutingEmpty(t *testing.T) {
-	last := MakeLastExecuting(10, 10)
+	last := MakeLastExecuting(10, 10, 0)
 	assert.Empty(t, last.Collect())
 }
 
 func TestLastExecuting(t *testing.T) {
-	last := MakeLastExecuting(21, 3)
+	last := MakeLastExecuting(21, 3, 0)
 	last.Note(1, 0, []byte("prog1"), 1)
 
 	last.Note(2, 1, []byte("prog2"), 2)
@@ -56,7 +56,7 @@ func TestLastExecuting(t *testing.T) {
 }
 
 func TestLastExecutingHanged(t *testing.T) {
-	last := MakeLastExecuting(1, 3)
+	last := MakeLastExecuting(1, 3, 0)
 	last.Note(1, 0, []byte("prog1"), 10)
 	last.Note(2, 0, []byte("prog2"), 20)
 	last.Hanged(2, 0, []byte("prog2"), 25)
@@ -74,5 +74,21 @@ func TestLastExecutingHanged(t *testing.T) {
 		{ID: 7, Proc: 0, Prog: []byte("prog7"), Time: 20},
 		{ID: 8, Proc: 0, Prog: []byte("prog8"), Time: 10},
 		{ID: 9, Proc: 0, Prog: []byte("prog9"), Time: 0},
+	})
+}
+
+func TestLastExecutingEvicted(t *testing.T) {
+	last := MakeLastExecuting(2, 1, 2)
+	last.Note(1, 0, []byte("prog1"), 10)
+	last.Note(2, 1, []byte("prog2"), 20)
+	last.Note(3, 0, []byte("prog3"), 30)
+	last.Note(4, 1, []byte("prog4"), 40)
+	last.Note(5, 0, []byte("prog5"), 50)
+	last.Note(6, 1, []byte("prog6"), 60)
+	assert.Equal(t, last.Collect(), []ExecRecord{
+		{ID: 3, Proc: 0, Prog: []byte("prog3"), Time: 30},
+		{ID: 4, Proc: 1, Prog: []byte("prog4"), Time: 20},
+		{ID: 5, Proc: 0, Prog: []byte("prog5"), Time: 10},
+		{ID: 6, Proc: 1, Prog: []byte("prog6"), Time: 0},
 	})
 }

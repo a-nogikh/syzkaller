@@ -16,10 +16,12 @@ import (
 // LastExecuting keeps the given number of last executed programs
 // for each proc in a VM, and allows to query this set after a crash.
 type LastExecuting struct {
-	count     int
-	procs     []ExecRecord
-	hanged    []ExecRecord // hanged programs, kept forever
-	positions []int
+	procProgs  int
+	procs      []ExecRecord
+	hanged     []ExecRecord // hanged programs, kept forever
+	evicted    []ExecRecord
+	evictedPos int
+	positions  []int
 }
 
 type ExecRecord struct {
@@ -29,26 +31,32 @@ type ExecRecord struct {
 	Time time.Duration
 }
 
-func MakeLastExecuting(procs, count int) *LastExecuting {
+func MakeLastExecuting(procs, procProgs, keepEvicted int) *LastExecuting {
 	return &LastExecuting{
-		count:     count,
-		procs:     make([]ExecRecord, procs*count),
+		procProgs: procProgs,
+		procs:     make([]ExecRecord, procs*procProgs),
 		positions: make([]int, procs),
+		evicted:   make([]ExecRecord, keepEvicted),
 	}
 }
 
 // Note execution of the 'prog' on 'proc' at time 'now'.
 func (last *LastExecuting) Note(id, proc int, progData []byte, now time.Duration) {
 	pos := &last.positions[proc]
-	last.procs[proc*last.count+*pos] = ExecRecord{
+	prev := last.procs[proc*last.procProgs+*pos]
+	last.procs[proc*last.procProgs+*pos] = ExecRecord{
 		ID:   id,
 		Proc: proc,
 		Prog: progData,
 		Time: now,
 	}
 	*pos++
-	if *pos == last.count {
+	if *pos == last.procProgs {
 		*pos = 0
+	}
+	if len(prev.Prog) != 0 && len(last.evicted) > 0 {
+		last.evicted[last.evictedPos] = prev
+		last.evictedPos = (last.evictedPos + 1) % len(last.evicted)
 	}
 }
 
@@ -69,9 +77,10 @@ func (last *LastExecuting) Hanged(id, proc int, progData []byte, now time.Durati
 // ExecRecord.Time is the difference in start executing time between this
 // program and the program that started executing last.
 func (last *LastExecuting) Collect() []ExecRecord {
-	procs := append(last.procs, last.hanged...)
+	procs := append(append(last.procs, last.hanged...), last.evicted...)
 	last.procs = nil // The type must not be used after this.
 	last.hanged = nil
+	last.evicted = nil
 	sort.Slice(procs, func(i, j int) bool {
 		return procs[i].Time < procs[j].Time
 	})
