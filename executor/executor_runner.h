@@ -123,7 +123,7 @@ public:
 			wait_end_ = current_time_ms();
 		// Restart every once in a while to not let too much state accumulate.
 		// Also request if request type differs as it affects program timeout.
-		constexpr uint64 kRestartEvery = 600;
+		constexpr uint64 kRestartEvery = 100;
 		if (state_ == State::Idle && ((corpus_triaged_ && restarting_ == 0 && freshness_ >= kRestartEvery) ||
 					      req_type_ != msg.type ||
 					      exec_env_ != msg.exec_opts->env_flags() || sandbox_arg_ != msg.exec_opts->sandbox_arg()))
