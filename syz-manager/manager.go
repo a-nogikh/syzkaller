@@ -504,12 +504,31 @@ func reportReproError(err error) {
 	log.Errorf("repro failed: %v", err)
 }
 
+func (mgr *Manager) pursueCrash(logs []byte, rep *report.Report) (bool, error) {
+	reproducing := mgr.reproLoop.Reproducing()
+	if reproducing[rep.Title] {
+		// We're already reproducing this crash type.
+		return false, nil
+	}
+	rpcserver.PrependExecLog(rep, logs)
+	crash := &manager.Crash{
+		FromRepro: true,
+		Report:    rep,
+	}
+	log.Logf(0, "new crash found during reproduction: %v", rep.Title)
+	if !mgr.crashStore.Known(rep.Title) || mgr.NeedRepro(crash) {
+		mgr.crashes <- crash
+	}
+	return false, nil
+}
+
 func (mgr *Manager) RunRepro(ctx context.Context, crash *manager.Crash) *manager.ReproResult {
 	res, stats, err := repro.Run(ctx, crash.Output, repro.Environment{
-		Config:   mgr.cfg,
-		Features: mgr.enabledFeatures,
-		Reporter: mgr.reporter,
-		Pool:     mgr.pool,
+		Config:      mgr.cfg,
+		Features:    mgr.enabledFeatures,
+		Reporter:    mgr.reporter,
+		Pool:        mgr.pool,
+		PursueCrash: mgr.pursueCrash,
 	})
 	ret := &manager.ReproResult{
 		Crash: crash,
@@ -693,8 +712,10 @@ func (mgr *Manager) emailCrash(crash *manager.Crash) {
 }
 
 func (mgr *Manager) saveCrash(crash *manager.Crash) bool {
-	if err := mgr.reporter.Symbolize(crash.Report); err != nil {
-		log.Errorf("failed to symbolize report: %v", err)
+	if !crash.FromRepro {
+		if err := mgr.reporter.Symbolize(crash.Report); err != nil {
+			log.Errorf("failed to symbolize report: %v", err)
+		}
 	}
 	if crash.Type == crash_pkg.MemoryLeak {
 		mgr.mu.Lock()

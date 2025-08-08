@@ -86,16 +86,23 @@ func (last *LastExecuting) Collect() []ExecRecord {
 	return procs
 }
 
-func PrependExecuting(rep *report.Report, lastExec []ExecRecord) {
+func PrependExecLog(rep *report.Report, prepend []byte) {
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "last executing test programs:\n\n")
-	for _, exec := range lastExec {
-		fmt.Fprintf(buf, "%v ago: executing program %v (id=%v):\n%s\n", exec.Time, exec.Proc, exec.ID, exec.Prog)
-	}
+	buf.Write(prepend)
 	fmt.Fprintf(buf, "kernel console output (not intermixed with test programs):\n\n")
-	rep.Output = append(buf.Bytes(), rep.Output...)
 	n := len(buf.Bytes())
+	buf.Write(rep.Output)
+	rep.Output = buf.Bytes()
 	rep.StartPos += n
 	rep.EndPos += n
 	rep.SkipPos += n
+}
+
+func PrependExecuting(rep *report.Report, lastExec []ExecRecord) {
+	buf := new(bytes.Buffer)
+	for _, exec := range lastExec {
+		fmt.Fprintf(buf, "%v ago: executing program %v (id=%v):\n%s\n", exec.Time, exec.Proc, exec.ID, exec.Prog)
+	}
+	PrependExecLog(rep, buf.Bytes())
 }

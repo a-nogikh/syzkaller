@@ -72,6 +72,10 @@ func main() {
 			Features: flatrpc.AllFeatures,
 			Reporter: reporter,
 			Pool:     pool,
+			PursueCrash: func(_ []byte, rep *report.Report) (bool, error) {
+				log.Logf(0, "ignore an unrelated crash title %q", rep.Title)
+				return false, nil
+			},
 		})
 		if err != nil {
 			log.Logf(0, "reproduction failed: %v", err)

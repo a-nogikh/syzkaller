@@ -65,6 +65,7 @@ type reproContext struct {
 	timeouts       targets.Timeouts
 	observedTitles map[string]bool
 	fast           bool
+	pursueCrash    PursueCrashCb
 }
 
 // execInterface describes the interfaces needed by pkg/repro.
@@ -72,6 +73,8 @@ type execInterface interface {
 	// Run() will either run a C repro or a syz repro depending on params.
 	Run(ctx context.Context, params instance.ExecParams, logf instance.ExecutorLogger) (*instance.RunResult, error)
 }
+
+type PursueCrashCb func(logs []byte, rep *report.Report) (bool, error)
 
 type Environment struct {
 	Config   *mgrconfig.Config
@@ -82,8 +85,13 @@ type Environment struct {
 	// it skips multiple simpifications and C repro generation.
 	Fast bool
 
+	// If callback returns false, the crash must be ignored.
+	PursueCrash PursueCrashCb
+
 	logf func(string, ...interface{})
 }
+
+// TODO: take an optional report.Report.
 
 func Run(ctx context.Context, log []byte, env Environment) (*Result, *Stats, error) {
 	return runInner(ctx, log, env, &poolWrapper{
@@ -104,11 +112,17 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 	crashStart := len(crashLog)
 	crashTitle, crashType := "", crash.UnknownType
 	var crashExecutor *report.ExecutorInfo
+	observedTitles := map[string]bool{}
 	if rep := env.Reporter.Parse(crashLog); rep != nil {
 		crashStart = rep.StartPos
 		crashTitle = rep.Title
 		crashType = rep.Type
 		crashExecutor = rep.Executor
+
+		observedTitles[crashTitle] = true
+		for _, alt := range rep.AltTitles {
+			observedTitles[alt] = true
+		}
 	}
 	testTimeouts := []time.Duration{
 		max(30*time.Second, 3*cfg.Timeouts.Program), // to catch simpler crashes (i.e. no races and no hangs)
@@ -146,8 +160,9 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 		startOpts:      createStartOptions(cfg, env.Features, crashType),
 		stats:          new(Stats),
 		timeouts:       cfg.Timeouts,
-		observedTitles: map[string]bool{},
+		observedTitles: observedTitles,
 		fast:           env.Fast,
+		pursueCrash:    env.PursueCrash,
 		logf:           env.logf,
 	}
 	return reproCtx.run()
@@ -671,47 +686,88 @@ type verdict struct {
 	Duration time.Duration
 }
 
-func (ctx *reproContext) getVerdict(callback func() (rep *instance.RunResult, err error), strict bool) (
+func (ctx *reproContext) getVerdict(prog []byte, callback func() (rep *instance.RunResult, err error), strict bool) (
 	verdict, error) {
+	getReport := func() (*instance.RunResult, error) {
+		const attempts = 3
+		var err error
+		var result *instance.RunResult
+		for i := 0; i < attempts; i++ {
+			// It's hard to classify all kinds of errors into the one worth repeating
+			// and not. So let's just retry runs for all errors.
+			// If the problem is transient, it will likely go away.
+			// If the problem is permanent, it will just be the same.
+			result, err = callback()
+			if err == nil {
+				return result, nil
+			}
+		}
+		return nil, err
+	}
 	var result *instance.RunResult
-	var err error
-
-	const attempts = 3
-	for i := 0; i < attempts; i++ {
-		// It's hard to classify all kinds of errors into the one worth repeating
-		// and not. So let's just retry runs for all errors.
-		// If the problem is transient, it will likely go away.
-		// If the problem is permanent, it will just be the same.
-		result, err = callback()
-		if err == nil {
+	for try := 0; try < 2; try++ {
+		var err error
+		result, err = getReport()
+		if err != nil {
+			return verdict{}, err
+		}
+		rep := result.Report
+		if rep == nil {
 			break
 		}
-	}
-	if err != nil {
-		return verdict{}, err
-	}
-	rep := result.Report
-	if rep == nil {
-		return verdict{false, result.Duration}, nil
-	}
-	if rep.Suppressed {
-		ctx.reproLogf(2, "suppressed program crash: %v", rep.Title)
-		return verdict{false, result.Duration}, nil
-	}
-	if ctx.crashType == crash.MemoryLeak && rep.Type != crash.MemoryLeak {
-		ctx.reproLogf(2, "not a leak crash: %v", rep.Title)
-		return verdict{false, result.Duration}, nil
-	}
-	if strict && len(ctx.observedTitles) > 0 {
-		if !ctx.observedTitles[rep.Title] {
-			ctx.reproLogf(2, "a never seen crash title: %v, ignore", rep.Title)
-			return verdict{false, result.Duration}, nil
+		if rep.Suppressed {
+			ctx.reproLogf(2, "try %d: suppressed program crash: %v", try, rep.Title)
+			if try > 0 {
+				break
+			}
+			continue
 		}
-	} else {
+		if ctx.crashType == crash.MemoryLeak && rep.Type != crash.MemoryLeak {
+			ctx.reproLogf(2, "try %d: not a leak crash: %v", try, rep.Title)
+			if try > 0 {
+				break
+			}
+			continue
+		}
+		if len(ctx.observedTitles) == 0 {
+			ctx.observedTitles[rep.Title] = true
+		}
+		proceed, known := ctx.isReportObserved(rep)
+		if !strict && !known && ctx.pursueCrash != nil {
+			proceed, err = ctx.pursueCrash(prog, result.Report)
+			if err != nil {
+				return verdict{}, err
+			}
+			// Remember the verdict not to call back every time.
+			ctx.observedTitles[rep.Title] = proceed
+		} else if !known {
+			// Follow all crashes unless specifically told to be strict.
+			proceed = !strict
+		}
+		if !proceed {
+			ctx.reproLogf(2, "try %d: an irrelevant crash: %v, ignore",
+				try, rep.Title)
+			continue
+		}
+		// Once accepted as a crash, it must always be.
 		ctx.observedTitles[rep.Title] = true
+		for _, alt := range rep.AltTitles {
+			ctx.observedTitles[alt] = true
+		}
+		ctx.report = rep
+		return verdict{true, result.Duration}, nil
 	}
-	ctx.report = rep
-	return verdict{true, result.Duration}, nil
+	return verdict{false, result.Duration}, nil
+}
+
+func (ctx *reproContext) isReportObserved(rep *report.Report) (bool, bool) {
+	for _, title := range append([]string{rep.Title}, rep.AltTitles...) {
+		yes, known := ctx.observedTitles[title]
+		if known {
+			return yes, known
+		}
+	}
+	return false, false
 }
 
 var ErrNoVMs = errors.New("all VMs failed to boot")
@@ -746,7 +802,7 @@ func (ctx *reproContext) testProgs(entries []*prog.LogEntry, duration time.Durat
 	}
 	ctx.reproLogf(2, "testing program (duration=%v, %+v): %s", duration, opts, program)
 	ctx.reproLogf(3, "detailed listing:\n%s", pstr)
-	return ctx.getVerdict(func() (*instance.RunResult, error) {
+	return ctx.getVerdict(pstr, func() (*instance.RunResult, error) {
 		return ctx.exec.Run(ctx.ctx, instance.ExecParams{
 			SyzProg:  pstr,
 			Opts:     opts,
@@ -757,7 +813,9 @@ func (ctx *reproContext) testProgs(entries []*prog.LogEntry, duration time.Durat
 
 func (ctx *reproContext) testCProg(p *prog.Prog, duration time.Duration, opts csource.Options,
 	strict bool) (ret verdict, err error) {
-	return ctx.getVerdict(func() (*instance.RunResult, error) {
+	// TODO: is there a cleaner way to express this?
+	// We probably still want to proceed with its syz representation?
+	return ctx.getVerdict(nil, func() (*instance.RunResult, error) {
 		return ctx.exec.Run(ctx.ctx, instance.ExecParams{
 			CProg:    p,
 			Opts:     opts,

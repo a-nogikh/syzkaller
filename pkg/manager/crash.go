@@ -102,6 +102,10 @@ func (cs *CrashStore) HasRepro(title string) bool {
 	return osutil.IsExist(filepath.Join(cs.path(title), reproFileName))
 }
 
+func (cs *CrashStore) Known(title string) bool {
+	return osutil.IsExist(filepath.Join(cs.path(title), "description"))
+}
+
 func (cs *CrashStore) MoreReproAttempts(title string) bool {
 	dir := cs.path(title)
 	for i := 0; i < cs.MaxReproLogs; i++ {

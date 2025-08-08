@@ -28,6 +28,7 @@ type Crash struct {
 	InstanceIndex int
 	FromHub       bool // this crash was created based on a repro from syz-hub
 	FromDashboard bool // .. or from dashboard
+	FromRepro     bool
 	Manual        bool
 	FullRepro     bool // used by the diff fuzzer to do a full scale reproduction
 	*report.Report
