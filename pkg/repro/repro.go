@@ -111,8 +111,8 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 		crashExecutor = rep.Executor
 	}
 	testTimeouts := []time.Duration{
-		max(30*time.Second, 3*cfg.Timeouts.Program), // to catch simpler crashes (i.e. no races and no hangs)
-		max(100*time.Second, 20*cfg.Timeouts.Program),
+		max(60*time.Second, 3*cfg.Timeouts.Program), // to catch simpler crashes (i.e. no races and no hangs)
+		max(120*time.Second, 20*cfg.Timeouts.Program),
 		cfg.Timeouts.NoOutputRunningTime, // to catch "no output", races and hangs
 	}
 	switch {
