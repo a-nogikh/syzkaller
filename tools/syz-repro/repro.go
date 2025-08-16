@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 
 	"github.com/google/syzkaller/pkg/csource"
-	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/mgrconfig"
 	"github.com/google/syzkaller/pkg/osutil"
@@ -69,7 +68,7 @@ func main() {
 
 		res, stats, err := repro.Run(ctx, data, repro.Environment{
 			Config:   cfg,
-			Features: flatrpc.AllFeatures,
+			Features: 0x3f1aef,
 			Reporter: reporter,
 			Pool:     pool,
 		})
