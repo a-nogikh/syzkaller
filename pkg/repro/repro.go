@@ -371,10 +371,27 @@ func (ctx *reproContext) extractProg(entries []*prog.LogEntry) (*Result, error) 
 			continue
 		}
 
-		// Execute all programs and bisect the log to find multiple guilty programs.
-		res, err = ctx.extractProgBisect(entries, timeout)
-		if err != nil {
-			return nil, err
+		perProc := map[int][]*prog.LogEntry{}
+		for _, entry := range entries {
+			perProc[entry.Proc] = append(perProc[entry.Proc], entry)
+		}
+		for id, procEntries := range perProc {
+			ctx.reproLogf(2, "try to bisect progs of proc %d (%d/%d)", id, len(procEntries), len(entries))
+			res, err = ctx.extractProgBisect(procEntries, timeout)
+			if err != nil {
+				return nil, err
+			}
+			if res != nil {
+				break
+			}
+		}
+		if res == nil {
+			ctx.reproLogf(2, "try to bisect all proc progs")
+			// Execute all programs and bisect the log to find multiple guilty programs.
+			res, err = ctx.extractProgBisect(entries, timeout)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if res != nil {
 			ctx.reproLogf(3, "found reproducer with %d syscalls", len(res.Prog.Calls))
