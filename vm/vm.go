@@ -392,7 +392,7 @@ func (mon *monitor) monitorExecution() []*report.Report {
 				if mon.exitCondition&ExitTimeout == 0 {
 					return mon.extractErrors(timeoutCrash)
 				}
-				return nil
+				return mon.extractErrors("")
 			default:
 				// Note: connection lost can race with a kernel oops message.
 				// In such case we want to return the kernel oops.
