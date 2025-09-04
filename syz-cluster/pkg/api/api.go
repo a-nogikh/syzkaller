@@ -251,7 +251,10 @@ const (
 	allCorpusURL = `https://storage.googleapis.com/syzkaller/corpus/ci-upstream-kasan-gce-root-corpus.db`
 )
 
-const kasanTrack = "KASAN"
+const (
+	kasanTrack = "KASAN"
+	kmsanTrack = "KMSAN"
+)
 
 // The list is ordered by decreasing importance.
 var FuzzTargets = []*FuzzTriageTarget{
@@ -298,6 +301,12 @@ var FuzzTargets = []*FuzzTriageTarget{
 			{
 				Track:        kasanTrack,
 				KernelConfig: `upstream-apparmor-kasan.config`,
+				Focus:        FocusNet,
+				CorpusURL:    netCorpusURL,
+			},
+			{
+				Track:        kmsanTrack,
+				KernelConfig: `upstream-kmsan.config`,
 				Focus:        FocusNet,
 				CorpusURL:    netCorpusURL,
 			},
