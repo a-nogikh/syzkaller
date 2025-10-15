@@ -7,7 +7,7 @@ config:
  - CRYPTO_PCRYPT
  - CRYPTO_ECRDSA
  # Removed in "crypto: curve25519 - Remove unused kpp support"
- - CRYPTO_CURVE25519: [v5.6, -linux-next]
+ - CRYPTO_CURVE25519: [v5.6, -v6.18]
  - CRYPTO_CHACHA20POLY1305
  - CRYPTO_AEGIS128
  - CRYPTO_CFB: [-v5.8]
@@ -157,5 +157,6 @@ config:
  - CRYPTO_AES_ARM64_CE_CCM: [arm64]
  - CRYPTO_AES_ARM64_CE_BLK: [arm64]
  - CRYPTO_AES_ARM64_NEON_BLK: [arm64]
- - CRYPTO_POLY1305_NEON: [arm64, -linux-next]
+ - CRYPTO_POLY1305_NEON: [arm64, -v6.18]
+ - CRYPTO_LIB_POLY1305: [arm64, v6.18]
  - CRYPTO_AES_ARM64_BS: [arm64]
