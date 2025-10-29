@@ -22,6 +22,14 @@ func getJSON[Resp any](ctx context.Context, url string) (*Resp, error) {
 }
 
 func postJSON[Req any, Resp any](ctx context.Context, url string, req *Req) (*Resp, error) {
+	httpReq, err := postJSONRequest[Req](ctx, url, req)
+	if err != nil {
+		return nil, err
+	}
+	return finishRequest[Resp](httpReq)
+}
+
+func postJSONRequest[Req any](ctx context.Context, url string, req *Req) (*http.Request, error) {
 	jsonBody, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -31,7 +39,7 @@ func postJSON[Req any, Resp any](ctx context.Context, url string, req *Req) (*Re
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	return finishRequest[Resp](httpReq)
+	return httpReq, nil
 }
 
 func postMultiPartFile[Resp any](ctx context.Context, url string, reader io.Reader) (*Resp, error) {
