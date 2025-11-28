@@ -385,6 +385,7 @@ type uiBug struct {
 	FirstTime      time.Time
 	LastTime       time.Time
 	ReportedTime   time.Time
+	FixTime        time.Time
 	ClosedTime     time.Time
 	ReproLevel     dashapi.ReproLevel
 	ReportingIndex int
@@ -1969,6 +1970,7 @@ func createUIBug(c context.Context, bug *Bug, state *ReportingState, managers []
 		LastTime:       bug.LastTime,
 		ReportedTime:   reported,
 		ClosedTime:     bug.Closed,
+		FixTime:        bug.FixTime,
 		ReproLevel:     bug.ReproLevel,
 		ReportingIndex: reportingIdx,
 		Status:         status,
