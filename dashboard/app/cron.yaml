@@ -39,3 +39,5 @@ cron:
 # Weekly update the kernel-file -> subsystems relationship
 - url: /cron/update_coverdb_subsystems
   schedule: every monday
+- url: /cron/export_bugs
+  schedule: every day 01:00

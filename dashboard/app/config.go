@@ -139,6 +139,9 @@ type Config struct {
 	Coverage *CoverageConfig
 	// Reproducers export path.
 	ReproExportPath string
+	// Bug archive export path (a .jsonl.gz file).
+	// Should be of the form bucket/full_path.
+	BugArchiveExportPath string
 }
 
 // ACLItem is an Access Control List item.
