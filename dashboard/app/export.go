@@ -35,6 +35,16 @@ func handleExportBugs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func handleExportUpstreamBugs(w http.ResponseWriter, r *http.Request) {
+	c := appengine.NewContext(r)
+	err := uploadBugsJSONL(c, "upstream", "syzkaller/bugs/upstream.jsonl.gz")
+	if err != nil {
+		log.Errorf(c, "failed to export %q bugs: %v", "upstream", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
 const (
 	// With 16 threads, it takes 6-7 minutes to export 26k bugs
 	// from the upstream namespace. 32 threads do not accelerate it.
