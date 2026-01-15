@@ -377,6 +377,42 @@ func updateBatch[T any](ctx context.Context, keys []*db.Key, transform func(key 
 	return nil
 }
 
+func listBugsToReport(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
+	if accessLevel(ctx, r) != AccessAdmin {
+		return fmt.Errorf("admin only")
+	}
+	ns := "upstream"
+	var bugs []*Bug
+	_, err := db.NewQuery("Bug").
+		Filter("Namespace=", ns).
+		GetAll(ctx, &bugs)
+	if err != nil {
+		return err
+	}
+	log.Warningf(ctx, "fetched %v bugs for namespce %v", len(bugs), ns)
+	for _, bug := range bugs {
+		if bug.Status != BugStatusOpen {
+			continue
+		}
+		key := bug.keyHash(ctx)
+		_, bugReporting, _, _, err := currentReporting(ctx, bug)
+		if err != nil {
+			return fmt.Errorf("failed to get reporting for %s: %w", key, err)
+		}
+		if bugReporting == nil {
+			continue
+		}
+		if bugReporting.Name != "moderation2" {
+			continue
+		}
+		if !bug.manuallyUpstreamed("internal") {
+			continue
+		}
+		fmt.Fprintf(w, "[%s](%s), opened %s\n", bug.Title, bugLink(key), bug.FirstTime)
+	}
+	return nil
+}
+
 // Prevent warnings about dead code.
 var (
 	_ = dropNamespace

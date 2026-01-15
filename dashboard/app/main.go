@@ -49,6 +49,7 @@ func initHTTPHandlers() {
 	http.Handle("/text", handlerWrapper(handleText))
 	http.Handle("/ai_job", handlerWrapper(handleAIJobPage))
 	http.Handle("/admin", handlerWrapper(handleAdmin))
+	http.Handle("/bugsToReport", handlerWrapper(listBugsToReport))
 	http.Handle("/x/.config", handlerWrapper(handleTextX(textKernelConfig)))
 	http.Handle("/x/log.txt", handlerWrapper(handleTextX(textCrashLog)))
 	http.Handle("/x/report.txt", handlerWrapper(handleTextX(textCrashReport)))
