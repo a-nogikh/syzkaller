@@ -93,6 +93,8 @@ func (serv *HTTPServer) Serve(ctx context.Context) error {
 	handle("/filecover", serv.httpFileCover)
 	handle("/filterpcs", serv.httpFilterPCs)
 	handle("/funccover", serv.httpFuncCover)
+	handle("/full_corpus", serv.httpFullCorpus)
+	handle("/fuzzed_pcs", serv.httpFuzzedPCs)
 	handle("/input", serv.httpInput)
 	handle("/jobs", serv.httpJobs)
 	handle("/metrics", promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}).ServeHTTP)
@@ -909,6 +911,27 @@ func (serv *HTTPServer) httpReport(w http.ResponseWriter, r *http.Request) {
 
 func (serv *HTTPServer) httpRawCover(w http.ResponseWriter, r *http.Request) {
 	serv.httpCoverCover(w, r, DoRawCover)
+}
+
+func (serv *HTTPServer) httpFullCorpus(w http.ResponseWriter, r *http.Request) {
+	items := serv.Corpus.Load().Items()
+	for _, item := range items {
+		for _, cov := range item.Cover {
+			fmt.Fprintf(w, "0x%x ", cov)
+		}
+		fmt.Fprintf(w, "ALL ")
+		for _, cov := range item.AllCover {
+			fmt.Fprintf(w, "0x%x ", cov)
+		}
+		fmt.Fprintf(w, "\n")
+	}
+}
+
+func (serv *HTTPServer) httpFuzzedPCs(w http.ResponseWriter, r *http.Request) {
+	ret := serv.Fuzzer.Load().GetFuzzPCMap()
+	for pc, count := range ret {
+		fmt.Fprintf(w, "0x%x;%d\n", pc, count)
+	}
 }
 
 func (serv *HTTPServer) httpRawCoverFiles(w http.ResponseWriter, r *http.Request) {
