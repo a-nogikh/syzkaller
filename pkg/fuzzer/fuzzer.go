@@ -31,6 +31,7 @@ type Fuzzer struct {
 	mu           sync.Mutex
 	rnd          *rand.Rand
 	target       *prog.Target
+	fuzzPCmap    map[uint64]int
 	hintsLimiter prog.HintsLimiter
 	runningJobs  map[jobIntrospector]struct{}
 
@@ -54,6 +55,7 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
 		Config: cfg,
 		Cover:  newCover(),
 
+		fuzzPCmap:   map[uint64]int{},
 		ctx:         ctx,
 		rnd:         rnd,
 		target:      target,
@@ -70,6 +72,15 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
 		go f.logCurrentStats()
 	}
 	return f
+}
+func (fuzzer *Fuzzer) GetFuzzPCMap() map[uint64]int {
+	fuzzer.mu.Lock()
+	defer fuzzer.mu.Unlock()
+	mm := map[uint64]int{}
+	for pc, val := range fuzzer.fuzzPCmap {
+		mm[pc] = val
+	}
+	return mm
 }
 
 func (fuzzer *Fuzzer) RecommendedCalls() int {
@@ -142,6 +153,16 @@ func (fuzzer *Fuzzer) enqueue(executor queue.Executor, req *queue.Request, flags
 }
 
 func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags ProgFlags, attempt int) bool {
+	if req.Stat == fuzzer.statExecFuzz && res.Info != nil {
+		for _, info := range res.Info.Calls {
+			fuzzer.mu.Lock()
+			for _, pc := range info.Cover {
+				fuzzer.fuzzPCmap[pc] = fuzzer.fuzzPCmap[pc] + 1
+			}
+			fuzzer.mu.Unlock()
+		}
+	}
+
 	// If we are already triaging this exact prog, this is flaky coverage.
 	// Hanged programs are harmful as they consume executor procs.
 	dontTriage := flags&progInTriage > 0 || res.Status == queue.Hanged

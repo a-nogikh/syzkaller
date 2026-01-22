@@ -66,7 +66,7 @@ func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *queue.Request {
 	)
 	return &queue.Request{
 		Prog:     newP,
-		ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
+		ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover),
 		Stat:     fuzzer.statExecFuzz,
 	}
 }
@@ -96,6 +96,7 @@ type triageCall struct {
 	stableSignal    signal.Signal
 	newStableSignal signal.Signal
 	cover           cover.Cover
+	allCover        cover.Cover
 	rawCover        []uint64
 }
 
@@ -213,6 +214,7 @@ func (job *triageJob) handleCall(call int, info *triageCall) {
 		Call:     call,
 		Signal:   info.stableSignal,
 		Cover:    info.cover.Serialize(),
+		AllCover: info.allCover.Serialize(),
 		RawCover: info.rawCover,
 	}
 	job.fuzzer.Config.Corpus.Save(input)
@@ -228,6 +230,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 	} else if job.flags&ProgFromCorpus == 0 {
 		needRuns = deflakeNeedRuns
 	}
+	var allCoverage cover.Cover
 	prevTotalNewSignal := 0
 	for run := 1; ; run++ {
 		totalNewSignal := 0
@@ -286,6 +289,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 		}
 		for i, callInfo := range result.Info.Calls {
 			deflakeCall(i, callInfo)
+			allCoverage.Merge(callInfo.Cover)
 		}
 		deflakeCall(-1, result.Info.Extra)
 	}
@@ -293,6 +297,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 	for call, info := range job.calls {
 		info.stableSignal = info.signals[needRuns-1]
 		info.newStableSignal = info.newSignal.Intersection(info.stableSignal)
+		info.allCover = allCoverage
 		job.info.Logf("call #%d [%s]: |stable signal|=%d, |new stable signal|=%d%s",
 			call, job.p.CallName(call), info.stableSignal.Len(), info.newStableSignal.Len(),
 			signalPreview(info.newStableSignal))
@@ -359,7 +364,7 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
 		for i := 0; i < minimizeAttempts; i++ {
 			result := job.execute(&queue.Request{
 				Prog:            p1,
-				ExecOpts:        setFlags(flatrpc.ExecFlagCollectSignal),
+				ExecOpts:        setFlags(flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover),
 				ReturnAllSignal: []int{call1},
 				Stat:            job.fuzzer.statExecMinimize,
 			}, 0)
@@ -380,6 +385,11 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
 			if info.newStableSignal.Intersection(mergedSignal).Len() == info.newStableSignal.Len() {
 				job.info.Logf("[call #%d] minimization step success (|calls| = %d)",
 					call, len(p1.Calls))
+				lastCoverage := cover.Cover{}
+				for _, call := range result.Info.Calls {
+					lastCoverage.Merge(call.Cover)
+				}
+				info.allCover = lastCoverage
 				return true
 			}
 		}
