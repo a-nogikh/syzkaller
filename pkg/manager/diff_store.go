@@ -16,8 +16,19 @@ import (
 	"github.com/google/syzkaller/pkg/osutil"
 )
 
+type DiffBugStatus string
+
+const (
+	DiffBugStatusPending     DiffBugStatus = "pending"
+	DiffBugStatusReproducing DiffBugStatus = "reproducing"
+	DiffBugStatusVerifying   DiffBugStatus = "verifying"
+	DiffBugStatusCompleted   DiffBugStatus = "completed"
+	DiffBugStatusIgnored     DiffBugStatus = "ignored"
+)
+
 type DiffBug struct {
 	Title   string
+	Status  DiffBugStatus
 	Base    DiffBugInfo
 	Patched DiffBugInfo
 }
@@ -47,6 +58,12 @@ type DiffFuzzerStore struct {
 
 	mu   sync.Mutex
 	bugs map[string]*DiffBug
+}
+
+func (s *DiffFuzzerStore) UpdateStatus(title string, status DiffBugStatus) {
+	s.patch(title, func(obj *DiffBug) {
+		obj.Status = status
+	})
 }
 
 func (s *DiffFuzzerStore) BaseCrashed(title string, report []byte) {
@@ -98,7 +115,7 @@ func (s *DiffFuzzerStore) SaveRepro(result *ReproResult) {
 	log.Logf(0, "%q: saved crash log into %s", title, crashLog)
 
 	s.patch(title, func(obj *DiffBug) {
-		if result.Repro != nil {
+		if result.Repro != nil && result.Repro.Prog != nil {
 			obj.Patched.Repro = s.saveFile(title, reproFileName, result.Repro.Prog.Serialize())
 		}
 		if result.Stats != nil {

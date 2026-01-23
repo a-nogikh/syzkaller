@@ -53,6 +53,7 @@ func (c *Crash) FullTitle() string {
 
 type ReproManagerView interface {
 	RunRepro(ctx context.Context, crash *Crash) *ReproResult
+	// NeedRepro checks if we need to reproduce the crash.
 	NeedRepro(crash *Crash) bool
 	ResizeReproPool(size int)
 }
