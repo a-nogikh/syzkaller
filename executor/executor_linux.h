@@ -366,6 +366,25 @@ static const char* setup_kcov_reset_ioctl()
 	return error;
 }
 
+static void get_last_opt(const char* cmdline, const char* key, char* out, size_t out_len)
+{
+	char key_eq[128];
+	snprintf(key_eq, sizeof(key_eq), "%s=", key);
+	const char* val = NULL;
+	for (const char* p = cmdline; (p = strstr(p, key_eq)); p++) {
+		if (p == cmdline || p[-1] == ' ' || p[-1] == '\t' || p[-1] == '\n')
+			val = p + strlen(key_eq);
+	}
+
+	if (val) {
+		size_t len = strcspn(val, " \t\n");
+		if (len >= out_len)
+			len = out_len - 1;
+		memcpy(out, val, len);
+		out[len] = 0;
+	}
+}
+
 static const char* setup_kdump()
 {
 	if (access("/boot/bzImageKexec", F_OK) != 0)
@@ -383,8 +402,32 @@ static const char* setup_kdump()
 	cmdline[n] = 0;
 	if (strstr(cmdline, "crashkernel=") == NULL)
 		return "crashkernel= is not present in /proc/cmdline";
-	if (system("kexec -p /boot/bzImageKexec --append=\"irqpoll nr_cpus=1 reset_devices\"") != 0)
+
+	// Current default values
+	char root[128] = "/dev/sda1";
+	char console[128] = "ttyS0";
+	get_last_opt(cmdline, "root", root, sizeof(root));
+	get_last_opt(cmdline, "console", console, sizeof(console));
+
+	char cmd[1024];
+	snprintf(cmd, sizeof(cmd),
+		 "kexec -p /boot/bzImageKexec --append=\"earlyprintk=serial net.ifnames=0 ima_policy=tcb no_hash_pointers root=%s console=%s vsyscall=native watchdog_thresh=55 irqpoll nr_cpus=1 reset_devices\"",
+		 root, console);
+
+	if (system(cmd) != 0)
 		return "kexec failed";
+	int s_fd = open("/sys/kernel/kexec_crash_loaded", O_RDONLY);
+	if (s_fd >= 0) {
+		char loaded_status[1];
+		ssize_t sn = read(s_fd, loaded_status, sizeof(loaded_status));
+		close(s_fd);
+		if (sn != 1) {
+			return "failed to read /sys/kernel/kexec_crash_loaded";
+		}
+		if (loaded_status[0] != '1') {
+			return "/sys/kernel/kexec_crash_loaded is not 1";
+		}
+	}
 	return NULL;
 }
 
