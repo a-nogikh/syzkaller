@@ -331,3 +331,15 @@ func crashHash(title string) string {
 func (cs *CrashStore) path(title string) string {
 	return filepath.Join(cs.BaseDir, "crashes", crashHash(title))
 }
+
+func (cs *CrashStore) MemoryDumpPath(title string) (string, error) {
+	dir := cs.path(title)
+	if err := osutil.MkdirAll(dir); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "vmcore"), nil
+}
+
+func (cs *CrashStore) HasMemoryDump(title string) bool {
+	return osutil.IsExist(filepath.Join(cs.path(title), "vmcore"))
+}

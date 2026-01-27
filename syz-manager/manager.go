@@ -32,6 +32,7 @@ import (
 	"github.com/google/syzkaller/pkg/gce"
 	"github.com/google/syzkaller/pkg/ifaceprobe"
 	"github.com/google/syzkaller/pkg/image"
+	"github.com/google/syzkaller/pkg/instance"
 	"github.com/google/syzkaller/pkg/kfuzztest"
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/manager"
@@ -624,6 +625,9 @@ func (mgr *Manager) fuzzerInstance(ctx context.Context, inst *vm.Instance, updIn
 	if rep != nil && rep.Executor != nil {
 		extraExecs = []report.ExecutorInfo{*rep.Executor}
 	}
+	if mgr.cfg.MemoryDump && rep != nil {
+		mgr.extractMemoryDump(inst, rep)
+	}
 	lastExec, machineInfo := serv.ShutdownInstance(inst.Index(), rep != nil, extraExecs...)
 	if rep != nil {
 		rpcserver.PrependExecuting(rep, lastExec)
@@ -976,6 +980,25 @@ func (mgr *Manager) uploadReproAssets(repro *repro.Result) []dashapi.NewAsset {
 		ret = append(ret, asset)
 	})
 	return ret
+}
+
+func (mgr *Manager) extractMemoryDump(inst *vm.Instance, rep *report.Report) {
+	if rep.Type == crash_pkg.Hang || rep.Type == crash_pkg.MemoryLeak || rep.Type == crash_pkg.LostConnection {
+		return
+	}
+	if mgr.crashStore.HasMemoryDump(rep.Title) {
+		return
+	}
+	vmcore, err := mgr.crashStore.MemoryDumpPath(rep.Title)
+	if err != nil {
+		log.Logf(0, "failed to create crash dir: %v", err)
+		return
+	}
+	if err := instance.ExtractMemoryDump(inst, mgr.sysTarget, vmcore); err != nil {
+		log.Logf(0, "VM %v: failed to extract memory dump: %v", inst.Index(), err)
+	} else {
+		log.Logf(0, "VM %v: extracted memory dump to %v", inst.Index(), vmcore)
+	}
 }
 
 func (mgr *Manager) corpusInputHandler(updates <-chan corpus.NewItemEvent) {

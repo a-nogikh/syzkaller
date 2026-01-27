@@ -174,6 +174,7 @@ func (ctx *checkContext) featureToFlags(feat flatrpc.Feature) (flatrpc.ExecEnv, 
 	case flatrpc.FeatureLRWPANEmulation:
 	case flatrpc.FeatureBinFmtMisc:
 	case flatrpc.FeatureSwap:
+	case flatrpc.FeatureMemoryDump:
 	default:
 		panic(fmt.Sprintf("unknown feature %v", flatrpc.EnumNamesFeature[feat]))
 	}

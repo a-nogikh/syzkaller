@@ -321,6 +321,10 @@ func (inst *Instance) Run(ctx context.Context, reporter *report.Reporter, comman
 	return mon.output, reps, nil
 }
 
+func (inst *Instance) RunStream(ctx context.Context, command string) (<-chan []byte, <-chan error, error) {
+	return inst.impl.Run(ctx, command)
+}
+
 func (inst *Instance) Info() ([]byte, error) {
 	if ii, ok := inst.impl.(vmimpl.Infoer); ok {
 		return ii.Info()
