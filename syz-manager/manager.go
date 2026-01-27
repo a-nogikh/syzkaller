@@ -625,8 +625,9 @@ func (mgr *Manager) fuzzerInstance(ctx context.Context, inst *vm.Instance, updIn
 	if rep != nil && rep.Executor != nil {
 		extraExecs = []report.ExecutorInfo{*rep.Executor}
 	}
+	var memoryDump string
 	if mgr.cfg.MemoryDump && rep != nil {
-		mgr.extractMemoryDump(inst, rep)
+		memoryDump = mgr.extractMemoryDump(inst, rep)
 	}
 	lastExec, machineInfo := serv.ShutdownInstance(inst.Index(), rep != nil, extraExecs...)
 	if rep != nil {
@@ -641,6 +642,7 @@ func (mgr *Manager) fuzzerInstance(ctx context.Context, inst *vm.Instance, updIn
 			InstanceIndex: inst.Index(),
 			Report:        rep,
 			TailReports:   reps[1:],
+			MemoryDump:    memoryDump,
 		}
 	}
 	if err != nil {
@@ -707,6 +709,9 @@ func (mgr *Manager) emailCrash(crash *manager.Crash) {
 }
 
 func (mgr *Manager) saveCrash(crash *manager.Crash) bool {
+	if crash.MemoryDump != "" {
+		defer os.Remove(crash.MemoryDump)
+	}
 	if err := mgr.reporter.Symbolize(crash.Report); err != nil {
 		log.Errorf("failed to symbolize report: %v", err)
 	}
@@ -781,7 +786,7 @@ func (mgr *Manager) saveCrash(crash *manager.Crash) bool {
 	}
 	first, err := mgr.crashStore.SaveCrash(crash)
 	if err != nil {
-		log.Logf(0, "failed to save the cash: %v", err)
+		log.Logf(0, "failed to save the crash: %v", err)
 		return false
 	}
 	if first {
@@ -982,23 +987,31 @@ func (mgr *Manager) uploadReproAssets(repro *repro.Result) []dashapi.NewAsset {
 	return ret
 }
 
-func (mgr *Manager) extractMemoryDump(inst *vm.Instance, rep *report.Report) {
+func (mgr *Manager) extractMemoryDump(inst *vm.Instance, rep *report.Report) string {
 	if rep.Type == crash_pkg.Hang || rep.Type == crash_pkg.MemoryLeak || rep.Type == crash_pkg.LostConnection {
-		return
+		return ""
 	}
 	if mgr.crashStore.HasMemoryDump(rep.Title) {
-		return
+		return ""
 	}
-	vmcore, err := mgr.crashStore.MemoryDumpPath(rep.Title)
+
+	// Create a temporary file for the memory dump.
+	f, err := os.CreateTemp(mgr.cfg.Workdir, "vmcore-*")
 	if err != nil {
-		log.Logf(0, "failed to create crash dir: %v", err)
-		return
+		log.Logf(0, "failed to create temp file for memory dump: %v", err)
+		return ""
 	}
-	if err := instance.ExtractMemoryDump(inst, mgr.sysTarget, vmcore); err != nil {
+	f.Close()
+	tmpPath := f.Name()
+
+	if err := instance.ExtractMemoryDump(inst, mgr.sysTarget, tmpPath); err != nil {
 		log.Logf(0, "VM %v: failed to extract memory dump: %v", inst.Index(), err)
-	} else {
-		log.Logf(0, "VM %v: extracted memory dump to %v", inst.Index(), vmcore)
+		os.Remove(tmpPath)
+		return ""
 	}
+
+	log.Logf(0, "VM %v: extracted memory dump to %v", inst.Index(), tmpPath)
+	return tmpPath
 }
 
 func (mgr *Manager) corpusInputHandler(updates <-chan corpus.NewItemEvent) {

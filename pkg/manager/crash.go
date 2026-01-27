@@ -95,6 +95,12 @@ func (cs *CrashStore) SaveCrash(crash *Crash) (bool, error) {
 		return false, fmt.Errorf("report.AddTitleStat: %w", err)
 	}
 
+	if crash.MemoryDump != "" {
+		if err := os.Rename(crash.MemoryDump, filepath.Join(dir, "vmcore")); err != nil {
+			return false, fmt.Errorf("failed to move memory dump: %w", err)
+		}
+	}
+
 	return first, nil
 }
 
