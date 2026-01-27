@@ -383,8 +383,20 @@ static const char* setup_kdump()
 	cmdline[n] = 0;
 	if (strstr(cmdline, "crashkernel=") == NULL)
 		return "crashkernel= is not present in /proc/cmdline";
-	if (system("kexec -p /boot/bzImageKexec --append=\"irqpoll nr_cpus=1 reset_devices\"") != 0)
+	if (system("kexec -p /boot/bzImageKexec --append=\"earlyprintk=serial net.ifnames=0 ima_policy=tcb no_hash_pointers root=/dev/sda1 console=ttyS0 vsyscall=native watchdog_thresh=55 irqpoll nr_cpus=1 reset_devices\"") != 0)
 		return "kexec failed";
+	int s_fd = open("/sys/kernel/kexec_crash_loaded", O_RDONLY);
+	if (s_fd >= 0) {
+		char loaded_status[1];
+		ssize_t sn = read(s_fd, loaded_status, sizeof(loaded_status));
+		close(s_fd);
+		if (sn != 1) {
+			return "failed to read /sys/kernel/kexec_crash_loaded";
+		}
+		if (loaded_status[0] != '1') {
+			return "/sys/kernel/kexec_crash_loaded is not 1";
+		}
+	}
 	return NULL;
 }
 
