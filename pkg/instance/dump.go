@@ -77,5 +77,4 @@ func extractKdumpInner(inst *vm.Instance, path, cmd string) error {
 			return ctx.Err()
 		}
 	}
-	return nil
 }
