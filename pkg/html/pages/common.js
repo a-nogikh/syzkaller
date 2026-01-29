@@ -118,3 +118,24 @@ document.addEventListener("DOMContentLoaded", function() {
 		}
 	})
 })
+
+function displayAICreateJobArgs(select) {
+	if (!select) select = document.querySelector('select[name="ai-job-create"]');
+	if (!select) return;
+
+	var enable = select.options[select.selectedIndex].getAttribute('data-custom-base-commit');
+	var args = document.getElementById('ai-set-base-commit');
+	if (args) {
+		args.style.display = enable ? 'inline' : 'none';
+		if (enable) {
+			var custom = document.getElementById('base_commit_custom');
+			var input = document.getElementById('base_commit_input');
+			if (custom && input)
+				input.style.display = custom.checked ? 'inline' : 'none';
+		}
+	}
+}
+
+window.addEventListener('load', function () {
+	displayAICreateJobArgs(null);
+});
