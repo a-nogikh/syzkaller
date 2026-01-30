@@ -226,5 +226,13 @@ func (inst *instance) waitSnapshotStateChange(state flatrpc.SnapshotState, timeo
 
 func (inst *instance) readSnapshotOutput() []byte {
 	output, _ := inst.consoleReader.ReadAll()
+	for len(output) > 0 {
+		time.Sleep(10 * time.Millisecond)
+		more, _ := inst.consoleReader.ReadAll()
+		if len(more) == 0 {
+			break
+		}
+		output = append(output, more...)
+	}
 	return output
 }
