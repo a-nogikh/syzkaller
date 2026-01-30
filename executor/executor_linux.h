@@ -398,16 +398,15 @@ static const char* setup_kdump()
 	if (system(cmd) != 0)
 		return "kexec failed";
 	int s_fd = open("/sys/kernel/kexec_crash_loaded", O_RDONLY);
+	int s_fd = open("/sys/kernel/kexec_crash_loaded", O_RDONLY);
 	if (s_fd >= 0) {
 		char loaded_status[1];
 		ssize_t sn = read(s_fd, loaded_status, sizeof(loaded_status));
 		close(s_fd);
-		if (sn != 1) {
+		if (sn != 1)
 			return "failed to read /sys/kernel/kexec_crash_loaded";
-		}
-		if (loaded_status[0] != '1') {
+		if (loaded_status[0] != '1')
 			return "/sys/kernel/kexec_crash_loaded is not 1";
-		}
 	}
 	return NULL;
 }
