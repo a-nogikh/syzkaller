@@ -392,6 +392,15 @@ func (cfg *Config) completeFocusAreas() error {
 		}
 		cfg.CovFilter = CovFilterCfg{}
 	}
+
+	for i, area := range cfg.Experimental.FocusAreas {
+		if area.SeedSelection != "" &&
+			area.SeedSelection != SeedSelectionWeighted &&
+			area.SeedSelection != SeedSelectionRandomPC {
+			return fmt.Errorf("focus area #%d: unknown seed selection: %q (supported: %s, %s)",
+				i, area.SeedSelection, SeedSelectionWeighted, SeedSelectionRandomPC)
+		}
+	}
 	return nil
 }
 
