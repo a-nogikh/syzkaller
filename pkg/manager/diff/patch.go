@@ -35,7 +35,7 @@ func PatchFocusAreas(cfg *mgrconfig.Config, gitPatches [][]byte, baseHashes, pat
 				Filter: mgrconfig.CovFilterCfg{
 					Functions: regexps,
 				},
-				SeedSelection: mgrconfig.SeedSelectionRandomPC,
+				SeedSelection: mgrconfig.SeedSelectionWeightedPC,
 				Weight:        6.0,
 			})
 	}
@@ -50,7 +50,7 @@ func PatchFocusAreas(cfg *mgrconfig.Config, gitPatches [][]byte, baseHashes, pat
 				Filter: mgrconfig.CovFilterCfg{
 					Files: direct,
 				},
-				SeedSelection: mgrconfig.SeedSelectionRandomPC,
+				SeedSelection: mgrconfig.SeedSelectionWeightedPC,
 				Weight:        3.0,
 			})
 	}

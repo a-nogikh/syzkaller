@@ -157,10 +157,13 @@ func PrepareCoverageFilters(source *ReportGeneratorWrapper, cfg *mgrconfig.Confi
 			selection = corpus.NewRandomPCSelection
 		case mgrconfig.SeedSelectionWeighted:
 			selection = corpus.NewWeightedSelection
+		case mgrconfig.SeedSelectionWeightedPC:
+			selection = corpus.NewWeightedPCSelection
 		case "":
 		default:
 			panic("unknown seed selection algorithm: " + area.SeedSelection)
 		}
+		log.Logf(0, "focus area %s: %d PCs", len(covPCs))
 		ret.Areas = append(ret.Areas, corpus.FocusArea{
 			Name:              area.Name,
 			CoverPCs:          covPCs,
