@@ -5,6 +5,7 @@ package vmimpl
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"testing"
@@ -67,7 +68,9 @@ func TestMerger(t *testing.T) {
 	}
 
 	var merr MergerError
-	if err := <-merger.Err; err == nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := <-merger.Errors(ctx); err == nil {
 		t.Fatalf("merger did not produce an error on pipe close")
 	} else if !errors.As(err, &merr) || merr.Name != "pipe1" || merr.R != rp1 || merr.Err != io.EOF {
 		t.Fatalf("merger produced wrong error: %v", err)
