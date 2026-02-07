@@ -462,6 +462,14 @@ func (inst *instance) boot() error {
 	inst.qemu = qemu
 	// Qemu has started.
 
+	tmp := inst.fanout.NewReader()
+	file, err := os.Create(fmt.Sprintf("/tmp/console-%d-%s", inst.index, time.Now().Format("20060102_1504")))
+	if err != nil {
+		return err
+	}
+
+	inst.rpipe = TeeReadCloser(inst.rpipe, file)
+
 	// Start output merger.
 	var tee io.Writer
 	if inst.debug {
@@ -676,6 +684,29 @@ func (inst *instance) Copy(hostSrc string) (string, error) {
 		return "", err
 	}
 	return vmDst, nil
+}
+
+func TeeReadCloser(r io.ReadCloser, w io.Writer) io.ReadCloser {
+	return &teeReaderCloser{r, w}
+}
+
+type teeReaderCloser struct {
+	r io.ReadCloser
+	w io.Writer
+}
+
+func (t *teeReaderCloser) Read(p []byte) (n int, err error) {
+	n, err = t.r.Read(p)
+	if n > 0 {
+		if n, err := t.w.Write(p[:n]); err != nil {
+			return n, err
+		}
+	}
+	return
+}
+
+func (t *teeReaderCloser) Close() error {
+	return t.r.Close()
 }
 
 func (inst *instance) Run(ctx context.Context, command string) (

@@ -395,6 +395,8 @@ static const char* setup_kdump()
 		 "kexec -p /boot/bzImageKexec --append=\"earlyprintk=serial net.ifnames=0 ima_policy=tcb no_hash_pointers root=%s console=%s vsyscall=native watchdog_thresh=55 irqpoll nr_cpus=1 reset_devices\"",
 		 root, console);
 
+        fprintf(stderr, "%s\n", cmd);
+
 	if (system(cmd) != 0)
 		return "kexec failed";
 	int s_fd = open("/sys/kernel/kexec_crash_loaded", O_RDONLY);
@@ -407,6 +409,8 @@ static const char* setup_kdump()
 		if (loaded_status[0] != '1')
 			return "/sys/kernel/kexec_crash_loaded is not 1";
 	}
+        fprintf(stderr, "set up!");
+        fflush(stderr);
 	return NULL;
 }
 

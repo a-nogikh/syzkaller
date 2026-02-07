@@ -248,6 +248,8 @@ func (inst *instance) Boot() error {
 		}
 	}()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	select {
 	case ip := <-ipch:
 		if inst.tapdev != "" {
@@ -255,7 +257,7 @@ func (inst *instance) Boot() error {
 		} else {
 			inst.Addr = "localhost"
 		}
-	case <-inst.merger.Err:
+	case <-inst.merger.Errors(ctx):
 		bootOutputStop <- true
 		<-bootOutputStop
 		return vmimpl.BootError{Title: "bhyve exited", Output: bootOutput}

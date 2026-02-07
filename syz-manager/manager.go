@@ -1005,8 +1005,7 @@ func (mgr *Manager) extractMemoryDump(inst *vm.Instance, rep *report.Report) str
 		os.Remove(tmpPath)
 		return ""
 	}
-
-	log.Logf(0, "VM %v: extracted memory dump to %v", inst.Index(), tmpPath)
+	log.Logf(0, "VM %v: extracted memory dump after a crash", inst.Index())
 	return tmpPath
 }
 
