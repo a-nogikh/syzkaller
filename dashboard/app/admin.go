@@ -389,6 +389,7 @@ func listBugsToReport(ctx context.Context, w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		return err
 	}
+	cutOff := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 	log.Warningf(ctx, "fetched %v bugs for namespce %v", len(bugs), ns)
 	for _, bug := range bugs {
 		if bug.Status != BugStatusOpen {
@@ -406,6 +407,9 @@ func listBugsToReport(ctx context.Context, w http.ResponseWriter, r *http.Reques
 			continue
 		}
 		if !bug.manuallyUpstreamed("internal") {
+			continue
+		}
+		if bugReporting.Closed.Before(cutOff) {
 			continue
 		}
 		fmt.Fprintf(w, "[%s](%s), opened %s\n", bug.Title, bugLink(key), bug.FirstTime)
