@@ -391,8 +391,7 @@ func (inst *inst) testInstance() error {
 		return err
 	}
 	opts.Repeat = false
-	out, err := execProg.RunSyzProg(ExecParams{
-		SyzProg:        testProg,
+	out, err := execProg.RunSyzProg(testProg, RunOptions{
 		Duration:       inst.cfg.Timeouts.NoOutputRunningTime,
 		Opts:           opts,
 		ExitConditions: vm.ExitNormal,
@@ -428,10 +427,9 @@ func (inst *inst) testRepro() ([]byte, [][]uint64, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		out, coverage, err = transformError(execProg.RunSyzProg(ExecParams{
-			SyzProg:         inst.reproSyz,
-			Duration:        inst.cfg.Timeouts.NoOutputRunningTime,
+		out, coverage, err = transformError(execProg.RunSyzProg(inst.reproSyz, RunOptions{
 			Opts:            opts,
+			Duration:        inst.cfg.Timeouts.NoOutputRunningTime,
 			CollectCoverage: inst.collectCoverage,
 		}))
 		if err != nil {
@@ -441,8 +439,9 @@ func (inst *inst) testRepro() ([]byte, [][]uint64, error) {
 	if len(inst.reproC) > 0 {
 		// We should test for more than full "no output" timeout, but the problem is that C reproducers
 		// don't print anything, so we will get a false "no output" crash.
-		out, _, err = transformError(execProg.RunCProgRaw(inst.reproC, inst.cfg.Target,
-			inst.cfg.Timeouts.NoOutput/2))
+		out, _, err = transformError(execProg.RunCProgRaw(inst.reproC, inst.cfg.Target, RunOptions{
+			Duration: inst.cfg.Timeouts.NoOutput / 2,
+		}))
 	}
 	return out, coverage, err
 }

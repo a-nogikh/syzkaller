@@ -166,11 +166,7 @@ func (inst *ExecProgInstance) runBinary(bin string, duration time.Duration) (*Ru
 	return inst.runCommand(bin, duration, binExitConditions)
 }
 
-type ExecParams struct {
-	// Only one of these will be used, depending on the function.
-	CProg   *prog.Prog
-	SyzProg []byte
-
+type RunOptions struct {
 	Opts            csource.Options
 	Duration        time.Duration
 	CollectCoverage bool
@@ -179,30 +175,28 @@ type ExecParams struct {
 	ExitConditions vm.ExitCondition
 }
 
-func (inst *ExecProgInstance) RunCProg(params ExecParams) (*RunResult, error) {
-	src, err := csource.Write(params.CProg, params.Opts)
+func (inst *ExecProgInstance) RunCProg(p *prog.Prog, opts RunOptions) (*RunResult, error) {
+	src, err := csource.Write(p, opts.Opts)
 	if err != nil {
 		return nil, err
 	}
 	inst.Logf(2, "testing compiled C program (duration=%v, %+v): %s",
-		params.Duration, params.Opts, params.CProg)
-	return inst.RunCProgRaw(src, params.CProg.Target, params.Duration)
+		opts.Duration, opts.Opts, p)
+	return inst.RunCProgRaw(src, p.Target, opts)
 }
 
-func (inst *ExecProgInstance) RunCProgRaw(src []byte, target *prog.Target,
-	duration time.Duration) (*RunResult, error) {
+func (inst *ExecProgInstance) RunCProgRaw(src []byte, target *prog.Target, opts RunOptions) (*RunResult, error) {
 	bin, err := csource.BuildNoWarn(target, src)
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(bin)
-	return inst.runBinary(bin, duration)
+	return inst.runBinary(bin, opts.Duration)
 }
 
-func (inst *ExecProgInstance) RunSyzProgFile(progFile string, duration time.Duration,
-	opts csource.Options, collectCoverage bool, exitCondition vm.ExitCondition) (*RunResult, error) {
+func (inst *ExecProgInstance) RunSyzProgFile(progFile string, opts RunOptions) (*RunResult, error) {
 	coverFile := ""
-	if collectCoverage {
+	if opts.CollectCoverage {
 		coverDir, err := os.MkdirTemp("", "syz-cover")
 		if err != nil {
 			return nil, err
@@ -215,8 +209,8 @@ func (inst *ExecProgInstance) RunSyzProgFile(progFile string, duration time.Dura
 		return nil, &TestError{Title: fmt.Sprintf("failed to copy prog to VM: %v", err)}
 	}
 	command := ExecprogCmd(inst.execprogBin, inst.executorBin, inst.mgrCfg.TargetOS, inst.mgrCfg.TargetArch,
-		inst.mgrCfg.Type, opts, !inst.OldFlagsCompatMode, inst.mgrCfg.Timeouts.Slowdown, coverFile, vmProgFile)
-	res, err := inst.runCommand(command, duration, exitCondition)
+		inst.mgrCfg.Type, opts.Opts, !inst.OldFlagsCompatMode, inst.mgrCfg.Timeouts.Slowdown, coverFile, vmProgFile)
+	res, err := inst.runCommand(command, opts.Duration, opts.ExitConditions)
 	if err != nil {
 		return nil, err
 	}
@@ -236,19 +230,19 @@ func (inst *ExecProgInstance) RunSyzProgFile(progFile string, duration time.Dura
 	}
 	return res, nil
 }
+}
 
-func (inst *ExecProgInstance) RunSyzProg(params ExecParams) (*RunResult, error) {
-	progFile, err := osutil.WriteTempFile(params.SyzProg)
+func (inst *ExecProgInstance) RunSyzProg(syzProg []byte, opts RunOptions) (*RunResult, error) {
+	progFile, err := osutil.WriteTempFile(syzProg)
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(progFile)
 
-	if params.ExitConditions == 0 {
-		params.ExitConditions = SyzExitConditions
+	if opts.ExitConditions == 0 {
+		opts.ExitConditions = SyzExitConditions
 	}
-	return inst.RunSyzProgFile(progFile, params.Duration, params.Opts,
-		params.CollectCoverage, params.ExitConditions)
+	return inst.RunSyzProgFile(progFile, opts)
 }
 
 func parseCoverageFile(filename string) ([]uint64, error) {
@@ -265,4 +259,5 @@ func parseCoverageFile(filename string) ([]uint64, error) {
 		res = append(res, v)
 	}
 	return res, nil
+}
 }
