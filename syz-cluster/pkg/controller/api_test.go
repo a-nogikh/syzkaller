@@ -406,3 +406,27 @@ func TestAPIUploadTestStep(t *testing.T) {
 	require.Len(t, steps, 1)
 	assert.Equal(t, api.StepResultFailed, steps[0].Result)
 }
+
+func TestAPISubmitJob(t *testing.T) {
+	env, ctx := app.TestEnvironment(t)
+	client := TestServer(t, env)
+	ids := UploadTestSeries(t, ctx, client, testSeries)
+	report := UploadTestSessionReport(t, env, ids.SessionID)
+
+	req := &api.SubmitJobRequest{
+		Type:      api.JobPatchTest,
+		ReportID:  report.ID,
+		Reporter:  "test-reporter",
+		User:      "user@example.com",
+		MessageID: "msg-id-123",
+		PatchData: []byte("patch content"),
+	}
+
+	resp, err := client.SubmitJob(ctx, req)
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.JobID)
+
+	_, err = client.SubmitJob(ctx, req)
+	// Job already exists.
+	assert.Error(t, err)
+}

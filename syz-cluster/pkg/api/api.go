@@ -389,3 +389,22 @@ var FuzzTargets = []*FuzzTriageTarget{
 		},
 	},
 }
+
+type JobType string
+
+const (
+	JobPatchTest JobType = "patch_test"
+)
+
+type SubmitJobRequest struct {
+	Type      JobType `json:"type"`
+	ReportID  string  `json:"report_id"`
+	Reporter  string  `json:"reporter"`
+	User      string  `json:"user"`
+	MessageID string  `json:"message_id"`
+	PatchData []byte  `json:"patch_data"`
+}
+
+type SubmitJobResponse struct {
+	JobID string `json:"job_id"`
+}

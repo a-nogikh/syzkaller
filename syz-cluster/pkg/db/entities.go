@@ -75,6 +75,7 @@ type Session struct {
 	LogURI       string             `spanner:"LogURI"`
 	TriageLogURI string             `spanner:"TriageLogURI"`
 	Tags         []string           `spanner:"Tags"`
+	JobID        spanner.NullString `spanner:"JobID"`
 	// TODO: to accept more specific fuzzing assignment,
 	// add Triager, BaseRepo, BaseCommit, Config fields.
 }
@@ -200,4 +201,19 @@ type BaseFinding struct {
 	Config     string           `spanner:"Config"`
 	Arch       string           `spanner:"Arch"`
 	Title      string           `spanner:"Title"`
+}
+
+const (
+	JobPatchTest = "patch_test"
+)
+
+type Job struct {
+	ID        string    `spanner:"ID"`
+	Type      string    `spanner:"Type"`
+	CreatedAt time.Time `spanner:"CreatedAt"`
+	Reporter  string    `spanner:"Reporter"`
+	User      string    `spanner:"User"`
+	MessageID string    `spanner:"MessageID"`
+	PatchURI  string    `spanner:"PatchURI"`
+	ReportID  string    `spanner:"ReportID"`
 }
