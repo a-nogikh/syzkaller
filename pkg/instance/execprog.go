@@ -109,8 +109,7 @@ func CreateExecProgInstance(vmPool *vm.Pool, vmIndex int, mgrCfg *mgrconfig.Conf
 	return ret, nil
 }
 
-func (inst *ExecProgInstance) runCommand(command string, duration time.Duration,
-	exitCondition vm.ExitCondition) (*RunResult, error) {
+func (inst *ExecProgInstance) runCommand(command string, opts RunOptions) (*RunResult, error) {
 	start := time.Now()
 
 	var prefixOutput []byte
@@ -130,10 +129,10 @@ func (inst *ExecProgInstance) runCommand(command string, duration time.Duration,
 	if inst.BeforeContextLen != 0 {
 		optionalBeforeContext = vm.WithBeforeContext(inst.BeforeContextLen)
 	}
-	ctxTimeout, cancel := context.WithTimeout(context.Background(), duration)
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), opts.Duration)
 	defer cancel()
 	output, reps, err := inst.VMInstance.Run(ctxTimeout, inst.reporter, command,
-		vm.WithExitCondition(exitCondition),
+		vm.WithExitCondition(opts.ExitConditions),
 		optionalBeforeContext,
 	)
 	var rep *report.Report
@@ -158,12 +157,13 @@ func (inst *ExecProgInstance) runCommand(command string, duration time.Duration,
 	}, nil
 }
 
-func (inst *ExecProgInstance) runBinary(bin string, duration time.Duration) (*RunResult, error) {
+func (inst *ExecProgInstance) runBinary(bin string, opts RunOptions) (*RunResult, error) {
 	bin, err := inst.VMInstance.Copy(bin)
 	if err != nil {
 		return nil, &TestError{Title: fmt.Sprintf("failed to copy binary to VM: %v", err)}
 	}
-	return inst.runCommand(bin, duration, binExitConditions)
+	opts.ExitConditions = binExitConditions
+	return inst.runCommand(bin, opts)
 }
 
 type RunOptions struct {
@@ -191,7 +191,7 @@ func (inst *ExecProgInstance) RunCProgRaw(src []byte, target *prog.Target, opts 
 		return nil, err
 	}
 	defer os.Remove(bin)
-	return inst.runBinary(bin, opts.Duration)
+	return inst.runBinary(bin, opts)
 }
 
 func (inst *ExecProgInstance) RunSyzProgFile(progFile string, opts RunOptions) (*RunResult, error) {
@@ -210,7 +210,7 @@ func (inst *ExecProgInstance) RunSyzProgFile(progFile string, opts RunOptions) (
 	}
 	command := ExecprogCmd(inst.execprogBin, inst.executorBin, inst.mgrCfg.TargetOS, inst.mgrCfg.TargetArch,
 		inst.mgrCfg.Type, opts.Opts, !inst.OldFlagsCompatMode, inst.mgrCfg.Timeouts.Slowdown, coverFile, vmProgFile)
-	res, err := inst.runCommand(command, opts.Duration, opts.ExitConditions)
+	res, err := inst.runCommand(command, opts)
 	if err != nil {
 		return nil, err
 	}
