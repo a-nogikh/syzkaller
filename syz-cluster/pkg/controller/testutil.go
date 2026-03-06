@@ -135,6 +135,9 @@ func FakeSeriesWithFindings(t *testing.T, ctx context.Context, env *app.AppEnvir
 func MarkSessionFinished(t *testing.T, env *app.AppEnvironment, sessionID string) {
 	repo := db.NewSessionRepository(env.Spanner)
 	err := repo.Update(context.Background(), sessionID, func(session *db.Session) error {
+		if session.StartedAt.IsNull() {
+			session.SetStartedAt(time.Now())
+		}
 		session.SetFinishedAt(time.Now())
 		return nil
 	})
@@ -154,4 +157,42 @@ func UploadTestSessionReport(t *testing.T, env *app.AppEnvironment,
 	}
 	require.NoError(t, reportRepo.Insert(context.Background(), report))
 	return report
+}
+
+// FakeJobSession finds an unprocessed job session, uploads a fake test and step
+// via the provided client, and marks the session as finished in the DB.
+func FakeJobSession(t *testing.T, env *app.AppEnvironment, client *api.Client) string {
+	ctx := context.Background()
+	sessionRepo := db.NewSessionRepository(env.Spanner)
+	list, _, err := sessionRepo.ListWaiting(ctx, nil, 2)
+	require.NoError(t, err)
+
+	require.Len(t, list, 1, "expected exactly 1 waiting job session")
+	require.True(t, list[0].JobID.Valid, "expected session to correspond to a job")
+	sessionID := list[0].ID
+
+	err = client.UploadSessionTest(ctx, &api.SessionTest{
+		SessionID: sessionID,
+		TestName:  "build",
+		Result:    api.TestPassed,
+	})
+	require.NoError(t, err)
+
+	err = client.UploadSessionTest(ctx, &api.SessionTest{
+		SessionID: sessionID,
+		TestName:  "run repros",
+		Result:    api.TestPassed,
+	})
+	require.NoError(t, err)
+
+	err = client.UploadTestStep(ctx, sessionID, &api.SessionTestStep{
+		TestName: "run repros",
+		Title:    "repro A",
+		Target:   api.StepTargetPatched,
+		Result:   api.StepResultPassed,
+	})
+	require.NoError(t, err)
+
+	MarkSessionFinished(t, env, sessionID)
+	return sessionID
 }

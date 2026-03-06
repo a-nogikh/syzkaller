@@ -190,6 +190,87 @@ syzbot-ci does not support` + " `fix:` " + `command
 	})
 }
 
+func TestSyzTestFlow(t *testing.T) {
+	env, ctx := app.TestEnvironment(t)
+	testSeries := controller.DummySeries()
+	handler, _, emailServer := setupHandlerTest(t, ctx, env, testSeries)
+
+	report, err := handler.PollAndReport(ctx)
+	require.NoError(t, err)
+	receivedEmail := emailServer.email()
+	require.NotNil(t, receivedEmail, "a moderation email must be sent")
+
+	err = handler.IncomingEmail(ctx, &email.Email{
+		Author:    "user@email.com",
+		BugIDs:    []string{report.ID},
+		MessageID: "user-reply-msg-id",
+		Patch:     "--- a/file\n+++ b/file\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+		Commands: []*email.SingleCommand{
+			{
+				Command: email.CmdTest,
+				Str:     "test",
+			},
+		},
+	})
+	require.NoError(t, err)
+	reply := emailServer.email()
+	assert.Nil(t, reply, "syz test should be silent on success")
+
+	controller.FakeJobSession(t, env, handler.apiClient)
+
+	generator := reporter.NewGenerator(env)
+	err = generator.Process(ctx, 1)
+	require.NoError(t, err)
+
+	_, err = handler.PollAndReport(ctx)
+	require.NoError(t, err)
+
+	reportReply := emailServer.email()
+	require.NotNil(t, reportReply, "an email must be sent with the test results")
+	assert.Equal(t, "user-reply-msg-id", reportReply.InReplyTo)
+	assert.Contains(t, string(reportReply.Body), "passed")
+
+	// Some error cases.
+	t.Run("missing patch", func(t *testing.T) {
+		err = handler.IncomingEmail(ctx, &email.Email{
+			Author:    "user@email.com",
+			Subject:   "Command",
+			BugIDs:    []string{report.ID},
+			MessageID: "user-reply-msg-id-2",
+			Commands: []*email.SingleCommand{
+				{
+					Command: email.CmdTest,
+					Str:     "test",
+				},
+			},
+		})
+		require.NoError(t, err)
+		reply = emailServer.email()
+		require.NotNil(t, reply)
+		assert.Contains(t, string(reply.Body), "Please attach the patch to act upon")
+	})
+
+	t.Run("with args", func(t *testing.T) {
+		err = handler.IncomingEmail(ctx, &email.Email{
+			Author:    "user@email.com",
+			Subject:   "Command",
+			BugIDs:    []string{report.ID},
+			MessageID: "user-reply-msg-id-3",
+			Commands: []*email.SingleCommand{
+				{
+					Command: email.CmdTest,
+					Args:    "git://repo.git branch",
+					Str:     "test:",
+				},
+			},
+		})
+		require.NoError(t, err)
+		reply = emailServer.email()
+		require.NotNil(t, reply)
+		assert.Contains(t, string(reply.Body), "does not support `#syz test` with arguments.")
+	})
+}
+
 func setupHandlerTest(t *testing.T, ctx context.Context, env *app.AppEnvironment,
 	series *api.Series) (*Handler, *api.ReporterClient, *fakeSender) {
 	client := controller.TestServer(t, env)
@@ -202,10 +283,11 @@ func setupHandlerTest(t *testing.T, ctx context.Context, env *app.AppEnvironment
 	emailServer := makeFakeSender()
 	reporterClient := reporter.TestServer(t, env)
 	handler := &Handler{
-		reporter:    api.LKMLReporter,
-		apiClient:   reporterClient,
-		emailConfig: testEmailConfig,
-		sender:      emailServer.send,
+		reporter:       api.LKMLReporter,
+		reporterClient: reporterClient,
+		apiClient:      client,
+		emailConfig:    testEmailConfig,
+		sender:         emailServer.send,
 	}
 	return handler, reporterClient, emailServer
 }
