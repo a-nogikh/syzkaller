@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/pkg/csource"
+	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/mgrconfig"
 	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/pkg/report"
@@ -176,7 +177,7 @@ func (inst *ExecProgInstance) extractDump(rep *report.Report,
 		return "", err
 	}
 	if err := ExtractMemoryDump(inst.VMInstance, inst.mgrCfg.SysTarget, dumpPath); err != nil {
-		inst.Logf(1, "failed to extract memory dump: %v", err)
+		log.Errorf("failed to extract memory dump: %v", err)
 		os.Remove(dumpPath)
 		return "", nil
 	}
@@ -261,7 +262,6 @@ func (inst *ExecProgInstance) RunSyzProgFile(progFile string, opts RunOptions) (
 	}
 	return res, nil
 }
-}
 
 func (inst *ExecProgInstance) RunSyzProg(syzProg []byte, opts RunOptions) (*RunResult, error) {
 	progFile, err := osutil.WriteTempFile(syzProg)
@@ -290,5 +290,4 @@ func parseCoverageFile(filename string) ([]uint64, error) {
 		res = append(res, v)
 	}
 	return res, nil
-}
 }
