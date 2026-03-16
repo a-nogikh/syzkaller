@@ -32,6 +32,7 @@ $(warning $(RED)run command via tools/syz-env for best compatibility, see:$(RESE
 $(warning $(RED)https://github.com/google/syzkaller/blob/master/docs/contributing.md#using-syz-env$(RESET))
 endif
 
+ifeq ($(GO_FLAGS),)
 GITREV=$(shell git rev-parse HEAD)
 ifeq ("$(shell git diff --shortstat)", "")
 	REV=$(GITREV)
@@ -39,6 +40,7 @@ else
 	REV=$(GITREV)+
 endif
 GITREVDATE=$(shell git log -n 1 --format="%cd" --date=format:%Y%m%d-%H%M%S)
+endif
 
 # Don't generate symbol table and DWARF debug info.
 # Reduces build time and binary sizes considerably.
@@ -54,6 +56,10 @@ endif
 GOFLAGS := -ldflags="$(GLFLAGS) -X github.com/google/syzkaller/prog.GitRevision=$(REV) -X github.com/google/syzkaller/prog.gitRevisionDate=$(GITREVDATE)" $(GGFLAGS)
 ifneq ("$(GOTAGS)", "")
 	GOFLAGS += " -tags=$(GOTAGS)"
+endif
+
+ifneq ("$(GO_FLAGS)", "")
+	GOFLAGS := $(GO_FLAGS)
 endif
 
 GOHOSTFLAGS ?= $(GOFLAGS)
@@ -158,7 +164,7 @@ descriptions:
 	touch .descriptions
 
 go-flags:
-	@echo "${GOHOSTFLAGS}"
+	@echo '${GOHOSTFLAGS}'
 
 manager: descriptions
 	GOOS=$(HOSTOS) GOARCH=$(HOSTARCH) $(HOSTGO) build $(GOHOSTFLAGS) -o ./bin/syz-manager github.com/google/syzkaller/syz-manager
