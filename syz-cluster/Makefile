@@ -51,7 +51,7 @@ $(eval $(call build_image_rules,./tools/send-test-email,send-test-email))
 BUILD_TARGETS := $(addsuffix -image, $(addprefix build-, $(IMAGES)))
 PUSH_TARGETS := $(addsuffix -image, $(addprefix push-, $(IMAGES)))
 
-.PHONY: all-containers push-all install-dev-config build-go-tests-dev run-go-tests-dev restart-spanner kustomize-dev
+.PHONY: all-containers push-all install-dev-config restart-spanner kustomize-dev
 
 all-containers: $(BUILD_TARGETS)
 
@@ -60,12 +60,7 @@ push-all: $(PUSH_TARGETS)
 install-dev-config:
 	minikube kubectl -- apply -f ./overlays/dev/global-config.yaml
 
-build-go-tests-dev:
-	eval $$(minikube docker-env);\
-	docker build -t go-tests-local -f Dockerfile.go-tests ../
 
-run-go-tests-dev: build-go-tests-dev
-	./run-local.sh go-tests
 
 restart-spanner: build-db-mgmt-image
 	kubectl delete pod -l app=cloud-spanner-emulator 2>/dev/null || true
