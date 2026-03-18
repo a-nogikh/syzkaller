@@ -83,6 +83,14 @@ k8s-config-argo-wait:
 	@kubectl wait --for condition=established --timeout=60s crd/cronworkflows.argoproj.io
 	@kubectl wait --for condition=established --timeout=60s crd/workflows.argoproj.io
 
+k8s-config-local-infra:
+	@kubectl kustomize ./overlays/local/common/ | sed $(SED_EXPRESSIONS) | kubectl apply -f -
+	@$(MAKE) k8s-config-argo-wait
+	@$(MAKE) spanner-emulator-wait
+
+spanner-emulator-wait:
+	@kubectl wait --for=condition=available deployment/cloud-spanner-emulator --timeout=120s
+
 escape_sed_replacement = \
     $(shell printf '%s' '$(subst ','\'',$(1))' | \
     sed -e 's~\\~\\\\~g' \
@@ -109,6 +117,13 @@ k8s-config-gke-staging: ensure-spanner-database-uri-env ensure-blob-storage-env 
 
 migrate-job.yaml:
 	@cat tools/db-mgmt/migrate-job.yaml | sed $(SED_EXPRESSIONS)
+
+migrate:
+	@kubectl apply -f overlays/local/common/global-config-env.yaml
+	@echo "Starting database migration..."
+	@job_name=$$(make -s migrate-job.yaml | kubectl create -o jsonpath='{.metadata.name}' -f -) && \
+	echo "Waiting for job $$job_name to complete..." && \
+	kubectl wait --for=condition=complete "job/$$job_name" --timeout=120s
 
 send-test-email-job.yaml:
 	@cat tools/send-test-email/job.yaml | sed $(SED_EXPRESSIONS)
