@@ -4,11 +4,14 @@
 IMAGE_TAG ?= latest
 IMAGE_PREFIX ?= local/
 SMOKE_TEST ?= 0
+USE_REMOTE_CACHE ?= $(if $(filter-out local/%,$(IMAGE_PREFIX)),1,0)
 SHELL := /bin/bash
 GO_FLAGS ?= $(shell make -s -C .. go-flags 2>/dev/null)
 
 include ../tools/version.mk
 
+comma := ,
+get_cache_flags = $(if $(filter 1,$(USE_REMOTE_CACHE)),--cache-from=type=registry$(comma)ref=$(IMAGE_PREFIX)$(1):cache --cache-to=type=registry$(comma)ref=$(IMAGE_PREFIX)$(1):cache$(comma)mode=max,)
 
 IMAGES := controller web-dashboard reporter-server series-tracker email-reporter triage-action build-action boot-action fuzz-action retest-action db-mgmt send-test-email
 
@@ -25,7 +28,7 @@ define build_image_rules =
 
   build-$(2)-image: build-common-builder
 	  @echo "Building $$(image_name_$(2)) (Dockerfile: $$(dockerfile_$(2)))"
-	  DOCKER_BUILDKIT=1 docker build --build-arg IMAGE_PREFIX=$(IMAGE_PREFIX) --build-arg IMAGE_TAG=$(IMAGE_TAG) --build-arg SMOKE_TEST=$(SMOKE_TEST) -t $$(image_name_$(2)) -f $$(dockerfile_$(2)) ../
+	  DOCKER_BUILDKIT=1 docker build $(call get_cache_flags,$(2)) --build-arg IMAGE_PREFIX=$(IMAGE_PREFIX) --build-arg IMAGE_TAG=$(IMAGE_TAG) --build-arg SMOKE_TEST=$(SMOKE_TEST) -t $$(image_name_$(2)) -f $$(dockerfile_$(2)) ../
 
   push-$(2)-image: build-$(2)-image
 	  @echo "Pushing $$(image_name_$(2))"
@@ -36,7 +39,8 @@ endef
 .PHONY: build-common-builder
 build-common-builder:
 	@echo "Building common builder"
-	DOCKER_BUILDKIT=1 docker build --build-arg REV="$(REV)" --build-arg GITREVDATE="$(GITREVDATE)" -t $(IMAGE_PREFIX)syz-cluster-build:$(IMAGE_TAG) -f ./Dockerfile.builder ../
+	DOCKER_BUILDKIT=1 docker build $(call get_cache_flags,syz-cluster-build) --build-arg REV="$(REV)" --build-arg GITREVDATE="$(GITREVDATE)" -t $(IMAGE_PREFIX)syz-cluster-build:$(IMAGE_TAG) -f ./Dockerfile.builder ../
+
 
 
 $(eval $(call build_image_rules,./controller,controller))
