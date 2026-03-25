@@ -63,6 +63,32 @@
 
       <hr class="my-4">
 
+      <div class="chart-wrapper mb-4" id="jobs-stats">
+        <h2 class="h4"><a href="#jobs-stats" class="text-decoration-none text-reset">Jobs Served Monthly</a></h2>
+        {{if .JobsServed}}
+        <table class="table table-striped table-sm" style="max-width: 600px;">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Jobs Served</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .JobsServed}}
+            <tr>
+              <td>{{.Date.Format "2006-01"}}</td>
+              <td>{{.Count}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else}}
+        <p>No data available yet.</p>
+        {{end}}
+      </div>
+
+      <hr class="my-4">
+
       <div class="chart-wrapper mb-4" id="wait-time">
         <h2 class="h4"><a href="#wait-time" class="text-decoration-none text-reset">Wait Time before Fuzzing (avg hours, weekly)</a></h2>
         <p class="text-muted small">How many hours have passed since the moment the series was published and the moment we started fuzzing it.</p>

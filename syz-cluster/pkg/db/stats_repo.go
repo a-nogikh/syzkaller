@@ -48,7 +48,8 @@ func (repo *StatsRepository) ReportsPerWeek(ctx context.Context) (
   COUNT(*) as Count
 FROM Findings
 JOIN SessionReports ON SessionReports.SessionID = Findings.SessionID
-WHERE SessionReports.Moderation = FALSE AND SessionReports.ReportedAt IS NOT NULL
+JOIN Sessions ON Sessions.ID = Findings.SessionID
+WHERE SessionReports.Moderation = FALSE AND SessionReports.ReportedAt IS NOT NULL AND Sessions.JobID IS NULL
 GROUP BY Date
 ORDER BY Date`,
 	})
@@ -69,7 +70,8 @@ func (repo *StatsRepository) ReportsPerMonth(ctx context.Context) (
   COUNT(Findings.ID) as Findings
 FROM SessionReports
 JOIN Findings ON Findings.SessionID = SessionReports.SessionID
-WHERE SessionReports.Moderation = FALSE AND SessionReports.ReportedAt IS NOT NULL
+JOIN Sessions ON Sessions.ID = SessionReports.SessionID
+WHERE SessionReports.Moderation = FALSE AND SessionReports.ReportedAt IS NOT NULL AND Sessions.JobID IS NULL
 GROUP BY Date
 ORDER BY Date DESC`,
 	})
@@ -82,7 +84,7 @@ func (repo *StatsRepository) FindingsPerWeek(ctx context.Context) (
   TIMESTAMP_TRUNC(Sessions.FinishedAt, WEEK) as Date,
   COUNT(*) as Count
 FROM Findings
-JOIN Sessions ON Sessions.ID = Findings.SessionID AND Sessions.FinishedAt IS NOT NULL
+JOIN Sessions ON Sessions.ID = Findings.SessionID AND Sessions.FinishedAt IS NOT NULL AND Sessions.JobID IS NULL
 GROUP BY Date
 ORDER BY Date`,
 	})
@@ -117,7 +119,7 @@ SELECT
 FROM Sessions
 LEFT JOIN
   SessionTestAggregates AS sta ON Sessions.ID = sta.SessionID
-WHERE Sessions.FinishedAt IS NOT NULL
+WHERE Sessions.FinishedAt IS NOT NULL AND Sessions.JobID IS NULL
 GROUP BY Date
 ORDER BY Date`,
 	})
@@ -142,7 +144,7 @@ func (repo *StatsRepository) DelayPerWeek(ctx context.Context) (
   TIMESTAMP_TRUNC(Sessions.StartedAt, WEEK) as Date,
   AVG(TIMESTAMP_DIFF(Sessions.StartedAt,Sessions.CreatedAt, HOUR)) as AvgDelayHours
 FROM Sessions
-WHERE StartedAt IS NOT NULL
+WHERE StartedAt IS NOT NULL AND JobID IS NULL
 GROUP BY Date
 ORDER BY Date`,
 	})
@@ -193,5 +195,21 @@ JOIN SeriesStats ON SeriesStats.ID = Series.ID
 WHERE SeriesStats.PreventedBugs > 0
 GROUP BY Date
 ORDER BY Date`,
+	})
+}
+
+type JobsPerMonth struct {
+	Date  time.Time `spanner:"Date"`
+	Count int64     `spanner:"Count"`
+}
+
+func (repo *StatsRepository) JobsServedPerMonth(ctx context.Context) ([]*JobsPerMonth, error) {
+	return readEntities[JobsPerMonth](ctx, repo.client.Single(), spanner.Statement{
+		SQL: `SELECT
+  TIMESTAMP_TRUNC(CreatedAt, MONTH, 'UTC') as Date,
+  COUNT(*) as Count
+FROM Jobs
+GROUP BY Date
+ORDER BY Date DESC`,
 	})
 }

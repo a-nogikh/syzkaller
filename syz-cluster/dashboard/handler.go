@@ -323,6 +323,7 @@ func (h *dashboardHandler) statsPage(w http.ResponseWriter, r *http.Request) err
 		Distribution  []*db.StatusPerWeek
 		PreventedBugs []*db.PreventedBugsStats
 		MonthlyStats  MonthlyStats
+		JobsServed    []*db.JobsPerMonth
 	}
 	var data StatsPageData
 	var err error
@@ -356,6 +357,11 @@ func (h *dashboardHandler) statsPage(w http.ResponseWriter, r *http.Request) err
 		return fmt.Errorf("failed to query reports per month: %w", err)
 	}
 	data.MonthlyStats = makeMonthlyStats(reportsPerMonth)
+
+	data.JobsServed, err = h.statsRepo.JobsServedPerMonth(r.Context())
+	if err != nil {
+		return fmt.Errorf("failed to query jobs served per month: %w", err)
+	}
 
 	return h.renderTemplate(w, "graphs.html", data)
 }
