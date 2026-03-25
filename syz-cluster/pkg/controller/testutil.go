@@ -13,6 +13,7 @@ import (
 	"github.com/google/syzkaller/syz-cluster/pkg/api"
 	"github.com/google/syzkaller/syz-cluster/pkg/app"
 	"github.com/google/syzkaller/syz-cluster/pkg/db"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -158,7 +159,7 @@ func UploadTestSessionReport(t *testing.T, env *app.AppEnvironment,
 	sessionID string) *db.SessionReport {
 	reportRepo := db.NewReportRepository(env.Spanner)
 	report := &db.SessionReport{
-		ID:        "report-123",
+		ID:        uuid.NewString(),
 		SessionID: sessionID,
 		Reporter:  "test-reporter",
 	}
