@@ -48,19 +48,22 @@ func (repo *SessionRepository) Start(ctx context.Context, sessionID string) erro
 			if err != nil {
 				return err
 			}
-			series, err := readEntity[Series](ctx, txn, spanner.Statement{
-				SQL:    "SELECT * from `Series` WHERE `ID`=@id",
-				Params: map[string]any{"id": session.SeriesID},
-			})
-			if err != nil {
-				return err
+			if session.JobID.IsNull() {
+				series, err := readEntity[Series](ctx, txn, spanner.Statement{
+					SQL:    "SELECT * from `Series` WHERE `ID`=@id",
+					Params: map[string]any{"id": session.SeriesID},
+				})
+				if err != nil {
+					return err
+				}
+				series.SetLatestSession(session)
+				updateSeries, err := spanner.UpdateStruct("Series", series)
+				if err != nil {
+					return err
+				}
+				return txn.BufferWrite([]*spanner.Mutation{updateSeries, updateSession})
 			}
-			series.SetLatestSession(session)
-			updateSeries, err := spanner.UpdateStruct("Series", series)
-			if err != nil {
-				return err
-			}
-			return txn.BufferWrite([]*spanner.Mutation{updateSeries, updateSession})
+			return txn.BufferWrite([]*spanner.Mutation{updateSession})
 		})
 	return err
 }
