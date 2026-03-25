@@ -905,11 +905,13 @@ func TestApp(t *testing.T) {
 
 	c.globalClient.ReportingPollBugs("test")
 
-	c.globalClient.ReportingUpdate(&dashapi.BugUpdate{
-		ID:         "id",
+	reply, _ := c.globalClient.ReportingUpdate(&dashapi.BugUpdate{
+		ID:         rep.ID,
 		Status:     dashapi.BugStatusOpen,
-		ReproLevel: dashapi.ReproLevelC,
+		ReproLevel: dashapi.ReproLevelNone,
 	})
+	c.expectEQ(reply.Error, false)
+	c.expectEQ(reply.OK, true)
 }
 
 func TestRedirects(t *testing.T) {
