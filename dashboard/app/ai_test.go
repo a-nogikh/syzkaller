@@ -296,6 +296,15 @@ func TestAIJob(t *testing.T) {
 	}))
 }
 
+func TestAIJobNotFound(t *testing.T) {
+	c := NewSpannerCtx(t)
+	defer c.Close()
+
+	_, err := c.GET("/ai_job?id=non-existent-id")
+	require.Error(t, err)
+	expectFailureStatus(t, err, http.StatusNotFound)
+}
+
 func TestAIJobActions(t *testing.T) {
 	c := NewSpannerCtx(t)
 	defer c.Close()

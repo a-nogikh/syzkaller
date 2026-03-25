@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"errors"
+
 	"cloud.google.com/go/spanner"
 	"github.com/google/syzkaller/dashboard/dashapi"
 	"github.com/google/syzkaller/pkg/aflow/trajectory"
@@ -22,6 +24,8 @@ const (
 	Instance = "syzbot"
 	Database = "ai"
 )
+
+var ErrNotFound = errors.New("entity not found")
 
 func init() {
 	// This forces unmarshalling of JSON integers into json.Number rather than float64.
@@ -344,7 +348,10 @@ func selectOne[T any](ctx context.Context, stmt spanner.Statement) (*T, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(all) != 1 {
+	if len(all) == 0 {
+		return nil, ErrNotFound
+	}
+	if len(all) > 1 {
 		return nil, fmt.Errorf("selectOne: got %v of %T", len(all), *new(T))
 	}
 	return all[0], nil

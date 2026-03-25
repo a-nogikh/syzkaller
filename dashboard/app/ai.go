@@ -154,6 +154,9 @@ func handleAIJobsPage(ctx context.Context, w http.ResponseWriter, r *http.Reques
 func handleAIJobPage(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	job, err := aidb.LoadJob(ctx, r.FormValue("id"))
 	if err != nil {
+		if errors.Is(err, aidb.ErrNotFound) {
+			return fmt.Errorf("failed to query the job: %w", ErrClientNotFound)
+		}
 		return err
 	}
 	if jobs, err := filterJobsAccess(ctx, r, []*aidb.Job{job}); err != nil {
