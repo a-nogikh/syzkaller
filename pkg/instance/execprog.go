@@ -47,8 +47,10 @@ type RunResult struct {
 	Report   *report.Report
 	Duration time.Duration
 	Coverage [][]uint64
-	// If not empty, contains path to the file containing a kernel crash dump.
-	CrashDump string
+	// Path to a local file with the memory dump extracted from the VM.
+	// It's populated after a crash if MemoryDump was enabled in RunOptions.
+	// Empty if no dump was extracted.
+	MemoryDump string
 }
 
 const (
@@ -158,8 +160,8 @@ func (inst *ExecProgInstance) runCommand(command string, opts RunOptions) (*RunR
 		Report:   rep,
 		Duration: time.Since(start),
 	}
-	if opts.CrashDump {
-		res.CrashDump, err = inst.extractDump(rep, opts)
+	if opts.MemoryDump {
+		res.MemoryDump, err = inst.extractDump(rep, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -172,7 +174,7 @@ func (inst *ExecProgInstance) extractDump(rep *report.Report,
 	if rep == nil || !rep.Panicked {
 		return "", nil
 	}
-	dumpPath, err := osutil.TempFileIn(opts.CrashDumpDir, "syz-dump-*")
+	dumpPath, err := osutil.TempFileIn(opts.MemoryDumpDir, "syz-dump-*")
 	if err != nil {
 		return "", err
 	}
@@ -201,10 +203,11 @@ type RunOptions struct {
 	// If ExitConditions is empty, RunSyzProg() will assume instance.SyzExitConditions.
 	// RunCProg() always runs with binExitConditions.
 	ExitConditions vm.ExitCondition
-	// If CrashDump is set, the package will attempt to extract a memory dump from the VM.
-	CrashDump bool
-	// If not empty, the crash dump file will be craeted in the given location.
-	CrashDumpDir string
+	// If MemoryDump is set, the package will attempt to extract a memory dump from the VM.
+	MemoryDump bool
+	// If not empty, the memory dump file will be created in the given location.
+	// If empty, the system default temporary directory will be used.
+	MemoryDumpDir string
 }
 
 func (inst *ExecProgInstance) RunCProg(p *prog.Prog, opts RunOptions) (*RunResult, error) {
