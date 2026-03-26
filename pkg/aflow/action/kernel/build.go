@@ -53,7 +53,11 @@ func BuildKernel(buildDir, srcDir, cfg string, cleanup bool) error {
 	const compileCommands = "compile_commands.json"
 	makeArgs = append(makeArgs, "-s", path.Base(image), compileCommands)
 	if _, err := osutil.RunCmd(time.Hour, srcDir, "make", makeArgs...); err != nil {
-		return aflow.FlowError(err)
+		buildErr := build.ExtractRootCause(err, targets.Linux, srcDir)
+		if buildErr == err {
+			return aflow.FlowError(err)
+		}
+		return aflow.FlowError(fmt.Errorf("%w\n\nRoot cause:\n%w", err, buildErr))
 	}
 	if !cleanup {
 		return nil
