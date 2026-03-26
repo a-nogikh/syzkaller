@@ -106,7 +106,7 @@ func Image(params Params) (details ImageDetails, err error) {
 		} // Try to preserve the build error otherwise.
 	}
 	if err != nil {
-		err = extractRootCause(err, params.TargetOS, params.KernelDir)
+		err = ExtractRootCause(err, params.TargetOS, params.KernelDir)
 		return
 	}
 	if key := filepath.Join(params.OutputDir, "key"); osutil.IsExist(key) {
@@ -220,7 +220,7 @@ func compilerIdentity(compiler string) (string, error) {
 	return "", fmt.Errorf("no output from compiler --version")
 }
 
-func extractRootCause(err error, OS, kernelSrc string) error {
+func ExtractRootCause(err error, OS, kernelSrc string) error {
 	if err == nil {
 		return nil
 	}

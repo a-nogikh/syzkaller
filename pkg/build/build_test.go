@@ -75,7 +75,7 @@ func TestExtractRootCause(t *testing.T) {
 			}
 		}
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			got := extractRootCause(err, targetOs, test.src)
+			got := ExtractRootCause(err, targetOs, test.src)
 			if got != nil {
 				assert.Equal(t, expected, got)
 			}
