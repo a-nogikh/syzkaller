@@ -53,6 +53,7 @@ type Job struct {
 	Args         spanner.NullJSON
 	Results      spanner.NullJSON
 	Correct      spanner.NullBool
+	Aborted      bool
 }
 
 type TrajectorySpan struct {

@@ -235,6 +235,7 @@ func NextStaleJob(ctx context.Context, req *dashapi.AIJobPollReq) (*Job, error) 
 
 		// Fail the original job.
 		origJob.Finished = spanner.NullTime{Time: TimeNow(ctx), Valid: true}
+		origJob.Aborted = true
 		if origJob.AgentName.StringVal == req.AgentName {
 			origJob.Error = "Aborted: assigned agent restarted"
 		} else {

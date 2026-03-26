@@ -32,6 +32,7 @@ type uiAIJobsPage struct {
 	Jobs            []*uiAIJob
 	Workflows       []string
 	CurrentWorkflow string
+	ShowAborted     bool
 }
 
 type uiAIJobPage struct {
@@ -116,6 +117,8 @@ func handleAIJobsPage(ctx context.Context, w http.ResponseWriter, r *http.Reques
 	if currentWorkflow == "" {
 		currentWorkflow = workflowAll
 	}
+	showAborted := r.FormValue("show_aborted") != ""
+
 	var uiJobs []*uiAIJob
 	for _, job := range jobs {
 		matched := false
@@ -128,6 +131,9 @@ func handleAIJobsPage(ctx context.Context, w http.ResponseWriter, r *http.Reques
 				!job.Correct.Valid
 		default:
 			matched = job.Workflow == currentWorkflow
+		}
+		if !showAborted && job.Aborted {
+			matched = false
 		}
 		if matched {
 			uiJobs = append(uiJobs, makeUIAIJob(job))
@@ -147,6 +153,7 @@ func handleAIJobsPage(ctx context.Context, w http.ResponseWriter, r *http.Reques
 		Jobs:            uiJobs,
 		Workflows:       workflowNames,
 		CurrentWorkflow: currentWorkflow,
+		ShowAborted:     showAborted,
 	}
 	return serveTemplate(w, "ai_jobs.html", page)
 }
