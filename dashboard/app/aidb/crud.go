@@ -260,12 +260,35 @@ func NextStaleJob(ctx context.Context, req *dashapi.AIJobPollReq) (*Job, error) 
 	return job, err
 }
 
-func LoadNamespaceJobs(ctx context.Context, ns string) ([]*Job, error) {
+type JobFilter struct {
+	Workflow    string
+	ShowAborted bool
+}
+
+func LoadNamespaceJobs(ctx context.Context, ns string, filter *JobFilter) ([]*Job, error) {
+	sql := selectJobs() + "WHERE Namespace = @ns"
+	params := map[string]any{
+		"ns": ns,
+	}
+	if filter == nil {
+		filter = &JobFilter{}
+	}
+	switch filter.Workflow {
+	case "", WorkflowAll:
+		// No filtering by workflow.
+	case WorkflowNeedsModeration:
+		sql += " AND Type = Workflow AND Finished IS NOT NULL AND Error = '' AND Correct IS NULL"
+	default:
+		sql += " AND Workflow = @workflow"
+		params["workflow"] = filter.Workflow
+	}
+	if !filter.ShowAborted {
+		sql += " AND NOT Aborted"
+	}
+	sql += " ORDER BY Created DESC"
 	return selectAll[Job](ctx, spanner.Statement{
-		SQL: selectJobs() + `WHERE Namespace = @ns ORDER BY Created DESC`,
-		Params: map[string]any{
-			"ns": ns,
-		},
+		SQL:    sql,
+		Params: params,
 	})
 }
 

@@ -101,7 +101,13 @@ func handleAIJobsPage(ctx context.Context, w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		return err
 	}
-	jobs, err := aidb.LoadNamespaceJobs(ctx, hdr.Namespace)
+	currentWorkflow := r.FormValue("workflow")
+	showAborted := r.FormValue("show_aborted") != ""
+
+	jobs, err := aidb.LoadNamespaceJobs(ctx, hdr.Namespace, &aidb.JobFilter{
+		Workflow:    currentWorkflow,
+		ShowAborted: showAborted,
+	})
 	if err != nil {
 		return err
 	}
@@ -109,45 +115,23 @@ func handleAIJobsPage(ctx context.Context, w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		return err
 	}
-	const (
-		workflowAll             = "ALL"
-		workflowNeedsModeration = "NEEDS MODERATION"
-	)
-	currentWorkflow := r.FormValue("workflow")
-	if currentWorkflow == "" {
-		currentWorkflow = workflowAll
-	}
-	showAborted := r.FormValue("show_aborted") != ""
 
 	var uiJobs []*uiAIJob
 	for _, job := range jobs {
-		matched := false
-		switch currentWorkflow {
-		case workflowAll:
-			matched = true
-		case workflowNeedsModeration:
-			matched = string(job.Type) == job.Workflow &&
-				job.Finished.Valid && job.Error == "" &&
-				!job.Correct.Valid
-		default:
-			matched = job.Workflow == currentWorkflow
-		}
-		if !showAborted && job.Aborted {
-			matched = false
-		}
-		if matched {
-			uiJobs = append(uiJobs, makeUIAIJob(job))
-		}
+		uiJobs = append(uiJobs, makeUIAIJob(job))
 	}
 	workflows, err := aidb.LoadActiveWorkflows(ctx)
 	if err != nil {
 		return err
 	}
-	workflowNames := []string{workflowAll, workflowNeedsModeration}
+	workflowNames := []string{aidb.WorkflowAll, aidb.WorkflowNeedsModeration}
 	for _, w := range workflows {
 		workflowNames = append(workflowNames, w.Name)
 	}
 	slices.Sort(workflowNames)
+	if currentWorkflow == "" {
+		currentWorkflow = aidb.WorkflowAll
+	}
 	page := &uiAIJobsPage{
 		Header:          hdr,
 		Jobs:            uiJobs,

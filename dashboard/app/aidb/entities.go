@@ -14,6 +14,11 @@ const (
 	ActionJobReview = "JobReview"
 )
 
+const (
+	WorkflowAll             = "ALL"
+	WorkflowNeedsModeration = "NEEDS MODERATION"
+)
+
 type JobReviewDetails struct {
 	Correct bool
 }
