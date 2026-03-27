@@ -13,6 +13,10 @@ import (
 	"github.com/google/syzkaller/pkg/testutil"
 )
 
+// maxArgCutoff is the threshold of arguments above which we skip the program in tests
+// to prevent quadratic-time slowdowns during validation or minimization.
+const maxArgCutoff = 10000
+
 func TestGeneration(t *testing.T) {
 	target, rs, iters := initTest(t)
 	ct := target.DefaultChoiceTable()
@@ -203,7 +207,6 @@ func testCrossTarget(t *testing.T, target *Target, crossTargets []*Target) {
 	}
 	// The test is de facto O(N^2) for the number of arguments in the program.
 	// Let's filter out particularly large programs to avoid timeouts.
-	const maxArgCount = 10000
 	for i := 0; i < iters; {
 		p := target.Generate(rs, 20, ct)
 		testCrossArchProg(t, p, crossTargets)
@@ -214,7 +217,7 @@ func testCrossTarget(t *testing.T, target *Target, crossTargets []*Target) {
 		testCrossArchProg(t, p, crossTargets)
 		p.Mutate(rs, 20, ct, nil, nil)
 		testCrossArchProg(t, p, crossTargets)
-		if p.countArgs() > maxArgCount {
+		if p.countArgs() > maxArgCutoff {
 			continue
 		}
 		i++

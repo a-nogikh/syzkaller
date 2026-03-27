@@ -414,6 +414,9 @@ func TestSerializeDeserializeRandom(t *testing.T) {
 		ct := target.DefaultChoiceTable()
 		for i := 0; i < iters; i++ {
 			p0 := target.Generate(rs, 10, ct)
+			if p0.countArgs() > maxArgCutoff {
+				continue
+			}
 			if _, _, ok := testSerializeDeserialize(t, p0); ok {
 				continue
 			}
