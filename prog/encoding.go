@@ -1166,6 +1166,8 @@ func (p *parser) fixupAutos(prog *Prog) {
 			case *PtrType:
 				a := arg.(*PointerArg)
 				a.Address = s.ma.alloc(nil, a.Res.Size(), a.Res.Type().Alignment())
+			case *CsumType:
+				// Checksums are computed at runtime, no need to fixup.
 			default:
 				panic(fmt.Sprintf("unsupported auto type %T", typ))
 			}

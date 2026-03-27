@@ -272,6 +272,10 @@ func TestDeserialize(t *testing.T) {
 			Err: `wrong type *prog.IntType for AUTO`,
 		},
 		{
+			In:  `test$csum_ipv4(&(0x7f0000000000)={AUTO, 0x0, 0x0})`,
+			Out: `test$csum_ipv4(&(0x7f0000000000)={0x0, 0x0, 0x0})`,
+		},
+		{
 			In:  `test$auto1(AUTO, &AUTO=AUTO, AUTO, 0x0)`,
 			Out: `test$auto1(0x42, &(0x7f0000000040)={0xc, 0x43, 0x0}, 0xc, 0x0)`,
 		},
