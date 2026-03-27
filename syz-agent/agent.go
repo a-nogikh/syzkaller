@@ -277,7 +277,12 @@ func (s *Server) poll(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (s *Server) executeJob(ctx context.Context, req *dashapi.AIJobPollResp) (map[string]any, error) {
+func (s *Server) executeJob(ctx context.Context, req *dashapi.AIJobPollResp) (out map[string]any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic during job execution: %v", r)
+		}
+	}()
 	flow := aflow.Flows[req.Workflow]
 	if flow == nil {
 		return nil, fmt.Errorf("unsupported flow %q", req.Workflow)
