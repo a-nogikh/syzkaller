@@ -26,6 +26,10 @@ const (
 	// of internal kernel functions rather than system behavior, and for this reason
 	// it is more sensible to generate a smaller number of calls instead of long chains.
 	RecommendedCallsKFuzzTest = 5
+
+	// Limits for recursion pruning during program generation.
+	arrayRecursionLimit   = 2
+	pointerRecursionLimit = 3
 )
 
 type randGen struct {
@@ -378,15 +382,37 @@ func (r *randGen) allocVMA(s *state, typ Type, dir Dir, numPages uint64) *Pointe
 	return MakeVmaPointerArg(typ, dir, page*r.target.PageSize, numPages*r.target.PageSize)
 }
 
-func (r *randGen) pruneRecursion(typ Type) (bool, func()) {
-	if r.recDepth[typ] >= 2 {
+func (r *randGen) pruneRecursion(typ Type, limit int) (bool, func()) {
+	lt := leafType(typ)
+	if lt == nil {
+		return true, func() {}
+	}
+	if r.recDepth[lt] >= limit {
 		return false, nil
 	}
-	r.recDepth[typ]++
+	r.recDepth[lt]++
 	return true, func() {
-		r.recDepth[typ]--
-		if r.recDepth[typ] == 0 {
-			delete(r.recDepth, typ)
+		r.recDepth[lt]--
+		if r.recDepth[lt] == 0 {
+			delete(r.recDepth, lt)
+		}
+	}
+}
+
+// leafType unwraps pointers and arrays to find the underlying named struct or union.
+// By tracking the leaf type, we share limits among identical cyclic structures (like
+// linked lists with multiple pointer fields) and prevent exponential tree explosions.
+func leafType(typ Type) Type {
+	for {
+		switch t := typ.(type) {
+		case *PtrType:
+			typ = t.Elem
+		case *ArrayType:
+			typ = t.Elem
+		case *StructType, *UnionType:
+			return t
+		default:
+			return nil
 		}
 	}
 }
@@ -892,15 +918,11 @@ func (a *ProcType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls []*Ca
 }
 
 func (a *ArrayType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls []*Call) {
-	// Allow infinite recursion for arrays.
-	switch a.Elem.(type) {
-	case *StructType, *ArrayType, *UnionType:
-		ok, release := r.pruneRecursion(a.Elem)
-		if !ok {
-			return MakeGroupArg(a, dir, nil), nil
-		}
-		defer release()
+	ok, release := r.pruneRecursion(a.Elem, arrayRecursionLimit)
+	if !ok {
+		return MakeGroupArg(a, dir, nil), nil
 	}
+	defer release()
 	var count uint64
 	switch a.Kind {
 	case ArrayRandLen:
@@ -940,16 +962,13 @@ func (a *UnionType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls []*C
 }
 
 func (a *PtrType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls []*Call) {
-	// Allow infinite recursion for optional pointers.
+	// Restrict infinite recursion even for optional pointers.
 	if a.Optional() {
-		switch a.Elem.(type) {
-		case *StructType, *ArrayType, *UnionType:
-			ok, release := r.pruneRecursion(a.Elem)
-			if !ok {
-				return MakeSpecialPointerArg(a, dir, 0), nil
-			}
-			defer release()
+		ok, release := r.pruneRecursion(a.Elem, pointerRecursionLimit)
+		if !ok {
+			return MakeSpecialPointerArg(a, dir, 0), nil
 		}
+		defer release()
 	}
 	// The resource we are trying to generate may be in the pointer,
 	// so don't try to create an empty special pointer during resource generation.
