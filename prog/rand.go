@@ -34,7 +34,7 @@ type randGen struct {
 	inGenerateResource    bool
 	patchConditionalDepth int
 	genKFuzzTest          bool
-	recDepth              map[string]int
+	recDepth              map[Type]int
 	genDefaultResource    bool
 }
 
@@ -42,7 +42,7 @@ func newRand(target *Target, rs rand.Source) *randGen {
 	return &randGen{
 		Rand:     rand.New(rs),
 		target:   target,
-		recDepth: make(map[string]int),
+		recDepth: make(map[Type]int),
 	}
 }
 
@@ -378,15 +378,15 @@ func (r *randGen) allocVMA(s *state, typ Type, dir Dir, numPages uint64) *Pointe
 	return MakeVmaPointerArg(typ, dir, page*r.target.PageSize, numPages*r.target.PageSize)
 }
 
-func (r *randGen) pruneRecursion(name string) (bool, func()) {
-	if r.recDepth[name] >= 2 {
+func (r *randGen) pruneRecursion(typ Type) (bool, func()) {
+	if r.recDepth[typ] >= 2 {
 		return false, nil
 	}
-	r.recDepth[name]++
+	r.recDepth[typ]++
 	return true, func() {
-		r.recDepth[name]--
-		if r.recDepth[name] == 0 {
-			delete(r.recDepth, name)
+		r.recDepth[typ]--
+		if r.recDepth[typ] == 0 {
+			delete(r.recDepth, typ)
 		}
 	}
 }
@@ -895,7 +895,7 @@ func (a *ArrayType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls []*C
 	// Allow infinite recursion for arrays.
 	switch a.Elem.(type) {
 	case *StructType, *ArrayType, *UnionType:
-		ok, release := r.pruneRecursion(a.Elem.Name())
+		ok, release := r.pruneRecursion(a.Elem)
 		if !ok {
 			return MakeGroupArg(a, dir, nil), nil
 		}
@@ -944,7 +944,7 @@ func (a *PtrType) generate(r *randGen, s *state, dir Dir) (arg Arg, calls []*Cal
 	if a.Optional() {
 		switch a.Elem.(type) {
 		case *StructType, *ArrayType, *UnionType:
-			ok, release := r.pruneRecursion(a.Elem.Name())
+			ok, release := r.pruneRecursion(a.Elem)
 			if !ok {
 				return MakeSpecialPointerArg(a, dir, 0), nil
 			}
