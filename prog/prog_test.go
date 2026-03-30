@@ -500,3 +500,16 @@ func TestSanitizeRandom(t *testing.T) {
 		}
 	})
 }
+
+func TestPtrRecursion(t *testing.T) {
+	target, rs, _ := initRandomTargetTest(t, "test", "64")
+	call := target.SyscallMap["test$recur_ptr"]
+	if call == nil {
+		t.Fatal("call test$recur_ptr not found")
+	}
+	enabled := map[*Syscall]bool{call: true}
+	ct := target.BuildChoiceTable(nil, enabled)
+	for i := 0; i < 100; i++ {
+		target.Generate(rs, 1, ct)
+	}
+}
