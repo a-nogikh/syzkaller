@@ -6,6 +6,7 @@ package main
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/syzkaller/dashboard/app/aidb"
 	"github.com/google/syzkaller/dashboard/dashapi"
@@ -70,15 +71,31 @@ func TestAIExternalReporting(t *testing.T) {
 	resp, err := c.globalClient.AIReportCommand(&dashapi.SendExternalCommandReq{
 		RootExtID: "moderation-msg-id",
 		Upstream:  &dashapi.UpstreamCommand{},
+		Author:    "test-user",
+		Source:    "lore",
 	})
 	require.NoError(t, err)
 	require.Empty(t, resp.Error)
+	uiHistory, err := LoadUIJobReviewHistory(c.ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, []*uiJobReviewHistory{
+		{
+			Date:    c.mockedTime,
+			User:    "test-user",
+			Correct: aiCorrectnessCorrect,
+			Source:  "lore",
+			Stage:   "public",
+		},
+	}, uiHistory)
 
 	// Verify Job.Correct = true.
 	job, err := aidb.LoadJob(c.ctx, jobID)
 	require.NoError(t, err)
 	require.True(t, job.Correct.Valid)
 	require.True(t, job.Correct.Bool)
+
+	t0 := c.mockedTime
+	c.advanceTime(time.Second)
 
 	// "Report" to the public lists.
 	pollResp, err = c.globalClient.AIPollReport(&dashapi.PollExternalReportReq{
@@ -114,9 +131,29 @@ func TestAIExternalReporting(t *testing.T) {
 	resp, err = c.globalClient.AIReportCommand(&dashapi.SendExternalCommandReq{
 		RootExtID: "moderation-msg-id",
 		Reject:    &dashapi.RejectCommand{Reason: "Bad patch"},
+		Author:    "test-user",
+		Source:    "lore",
 	})
 	require.NoError(t, err)
 	require.Empty(t, resp.Error)
+	uiHistory, err = LoadUIJobReviewHistory(c.ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, []*uiJobReviewHistory{
+		{
+			Date:    c.mockedTime,
+			User:    "test-user",
+			Correct: aiCorrectnessIncorrect,
+			Source:  "lore",
+			Stage:   "", // Rejections are not per-stage.
+		},
+		{
+			Date:    t0,
+			User:    "test-user",
+			Correct: aiCorrectnessCorrect,
+			Source:  "lore",
+			Stage:   "public",
+		},
+	}, uiHistory)
 
 	// Verify Job.Correct = false.
 	job, err = aidb.LoadJob(c.ctx, jobID)
