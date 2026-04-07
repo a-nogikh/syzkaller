@@ -10,6 +10,8 @@ import (
 	"github.com/google/syzkaller/pkg/aflow/trajectory"
 )
 
+const AIJobSourceLore = "lore"
+
 type AIJobPollReq struct {
 	AgentName    string
 	CodeRevision string // git commit of the syz-agent server
