@@ -815,3 +815,18 @@ func RunInTransaction(ctx context.Context, f func(ctx context.Context, txn *span
 	_, err = client.ReadWriteTransaction(ctx, f)
 	return err
 }
+
+func SaveJobComment(ctx context.Context, entry *JobComment) error {
+	entry.ID = uuid.NewString()
+	return saveEntity(ctx, "JobComments", entry)
+}
+
+func LoadJobComments(ctx context.Context, jobID string) ([]*JobComment, error) {
+	return selectAll[JobComment](ctx, spanner.Statement{
+		SQL: `SELECT JobComments.* FROM JobComments JOIN JobReporting ` +
+			`ON JobComments.ReportingID = JobReporting.ID ` +
+			`WHERE JobReporting.JobID = @jobID ` +
+			`ORDER BY JobComments.Date ASC`,
+		Params: map[string]any{"jobID": jobID},
+	})
+}
