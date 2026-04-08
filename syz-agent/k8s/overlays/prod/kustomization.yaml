@@ -9,16 +9,23 @@ namePrefix: prod-
 
 resources:
   - ../../common
+  - ../../common/lore-relay
 
 images:
   - name: gcr.io/syzkaller/syz-agent
     newName: ${IMAGE_NAME}
     newTag: ${IMAGE_TAG}
+  - name: gcr.io/syzkaller/lore-relay
+    newName: ${LORE_RELAY_IMAGE_NAME}
+    newTag: ${LORE_RELAY_IMAGE_TAG}
 
 configMapGenerator:
   - name: syz-agent-config
     files:
       - config.json=agent-config.json
+  - name: lore-relay-config
+    files:
+      - lore-relay-config.yaml=lore-relay-config.yaml
 
 patches:
   - target:

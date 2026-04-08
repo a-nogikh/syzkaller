@@ -5,11 +5,18 @@ include ../tools/version.mk
 
 IMAGE_NAME ?= local/syz-agent
 IMAGE_TAG ?= latest
+LORE_RELAY_IMAGE_NAME ?= local/syz-lore-relay
+LORE_RELAY_IMAGE_TAG ?= latest
 
-.PHONY: container k8s-minikube k8s-prod
+.PHONY: all-containers agent-container lore-relay-container k8s-minikube k8s-prod
 
-container:
+agent-container:
 	DOCKER_BUILDKIT=1 docker build --build-arg REV="$(REV)" --build-arg GITREVDATE="$(GITREVDATE)" -t $(IMAGE_NAME):$(IMAGE_TAG) -f ./Dockerfile ../
+
+lore-relay-container:
+	DOCKER_BUILDKIT=1 docker build -t $(LORE_RELAY_IMAGE_NAME):$(LORE_RELAY_IMAGE_TAG) -f ./lore-relay/Dockerfile ../
+
+all-containers: agent-container lore-relay-container
 
 k8s-minikube:
 	@if [ -z "$(GOOGLE_API_KEY)" ]; then echo "GOOGLE_API_KEY is not set" && exit 1; fi

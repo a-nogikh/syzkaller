@@ -55,7 +55,7 @@ func TestMainScenario(t *testing.T) {
 					To:      []string{"intended_to@email"},
 					Cc:      []string{"intended_cc@email"},
 				},
-				Moderation: true,
+				CanUpstream: true,
 			},
 		},
 	}
