@@ -4,12 +4,16 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
+	"cloud.google.com/go/storage"
 	"github.com/google/syzkaller/dashboard/dashapi"
 	db "google.golang.org/appengine/v2/datastore"
 	"google.golang.org/appengine/v2/log"
@@ -419,3 +423,91 @@ var (
 	_ = updateHeadReproLevel
 	_ = updateCrashPriorities
 )
+
+func handleExportBugs(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
+	if accessLevel(ctx, r) != AccessAdmin {
+		return fmt.Errorf("admin only")
+	}
+
+	bucketName := "syzkaller.appspot.com"
+	fileName := "upstream-reports.tar.gz"
+
+	var bugs []*Bug
+	keys, err := db.NewQuery("Bug").
+		Filter("Namespace=", "upstream").
+		GetAll(ctx, &bugs)
+	if err != nil {
+		return fmt.Errorf("failed to fetch bugs: %w", err)
+	}
+
+	storageClient, err := storage.NewClient(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create storage client: %w", err)
+	}
+	defer storageClient.Close()
+
+	bucket := storageClient.Bucket(bucketName)
+	obj := bucket.Object(fileName)
+	gcsWriter := obj.NewWriter(ctx)
+	defer gcsWriter.Close()
+
+	gzWriter := gzip.NewWriter(gcsWriter)
+	defer gzWriter.Close()
+	tarWriter := tar.NewWriter(gzWriter)
+	defer tarWriter.Close()
+
+	for i, bug := range bugs {
+		if bug.Status == BugStatusInvalid {
+			continue
+		}
+		if bug.sanitizeAccess(ctx, AccessPublic) != AccessPublic {
+			continue
+		}
+
+		statusStr := "open"
+		if bug.Status == BugStatusFixed {
+			statusStr = "fixed"
+		}
+
+		var reportText string
+		crashes, _, err := queryCrashesForBug(ctx, keys[i], 1)
+		if err == nil && len(crashes) > 0 {
+			data, _, err := getText(ctx, textCrashReport, crashes[0].Report)
+			if err == nil {
+				reportText = string(data)
+			}
+		}
+
+		info := struct {
+			URL    string `json:"url"`
+			Title  string `json:"title"`
+			Report string `json:"report"`
+			Status string `json:"status"`
+		}{
+			URL:    fmt.Sprintf("%s/bug?id=%s", appURL(ctx), bug.keyHash(ctx)),
+			Title:  bug.Title,
+			Report: reportText,
+			Status: statusStr,
+		}
+
+		data, err := json.MarshalIndent(info, "", "\t")
+		if err != nil {
+			continue
+		}
+
+		header := &tar.Header{
+			Name: bug.keyHash(ctx) + ".json",
+			Size: int64(len(data)),
+			Mode: 0644,
+		}
+
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return fmt.Errorf("failed to write tar header: %w", err)
+		}
+		if _, err := tarWriter.Write(data); err != nil {
+			return fmt.Errorf("failed to write tar data: %w", err)
+		}
+	}
+
+	return nil
+}
