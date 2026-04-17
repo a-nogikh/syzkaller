@@ -25,6 +25,10 @@ It has access to more sources of information than you, use it to answer
 particularly complex questions that require lots of research, and looking
 at lots of data, and have a concrete concise answer.
 
+DO NOT use this tool for simple file reading, searching, or extracting line numbers.
+Use other tools provided to you for those purposes.
+Only use this tool for complex architectural or behavioral reasoning.
+
 Formulate your question as concretly as possible, include concrete
 function/struct/field/variable names, line numbers, etc.
 Formulate what exactly you want to see in the answer and in what form.
