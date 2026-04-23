@@ -36,6 +36,9 @@ typically through the `syz-env` wrapper.
 
 ## Development Conventions
 
+- **Commenting:** Only add code comments when they aid understanding. Do not comment things that are obvious from the code itself.
+- **Code Structure:** Avoid excessive new lines; look at how the other code is structured.
+
 ### State Variable Naming Conventions
 
 To allow actions and workflows to be composed without complex renaming logic, we attach **semantic meaning** to state variable names rather than just using raw types.
@@ -92,3 +95,4 @@ in place from the very first commit.
 
 - Most components have corresponding `_test.go` files.
 - Trajectory spans are essential for debugging and are often validated in tests.
+- Avoid silly mocks; we favor more robust tests that set up the necessary env using the public API of the tested code.

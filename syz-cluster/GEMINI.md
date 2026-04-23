@@ -13,6 +13,8 @@ The system is deployed on a GKE cluster and uses Argo Workflows for orchestratio
 * Actual interaction with the DB should happen inside `pkg/db` repositories.
 * Higher level logic is in `pkg/service`.
 * The end components should have the minimal amount of logic, prefer to create/reuse testable `pkg/` packages if more logic is needed.
+* **Commenting:** Only add code comments when they aid understanding. Do not comment things that are obvious from the code itself.
+* **Code Structure:** Avoid excessive new lines; look at how the other code is structured.
 * Components communicate with each other via API that is defined in `pkg/api`.
 * Spanner is used as a database. Changes are done as migrations, which are defined in `pkg/db/migrations`.
 * Each component has its own:
@@ -22,7 +24,7 @@ The system is deployed on a GKE cluster and uses Argo Workflows for orchestratio
 
 ## Testing approach
 * Each DB repository should have low level tests, for which we use a Spanner emulator. Each test runs with its own temporary DB with already all migrations applied.
-  * Whenever you need a repository object for tests, don't mock it directly, but instead just create one and fill it with test data.
+  * Whenever you need a repository object for tests, avoid silly mocks, but instead just create one and fill it with test data (favor robust tests that use the public API).
 * When writing tests, always verify if there exist helper methods in the package that may let you write them more concisely. For DB tests, check `pkg/db/util_test.go` for useful `dummyTestData` helper methods to easily populate test entities.
 * `controller` API tests are in `pkg/controller/api_test.go`. DO NOT write component tests with Spanner emulators or HTTP requests within `pkg/service`, instead write them in `pkg/controller/api_test.go` and use the defined API.
 * Don't try to build the docker containers and don't try to deploy them to K8S.

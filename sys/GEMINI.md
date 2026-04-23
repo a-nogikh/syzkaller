@@ -57,11 +57,18 @@ At the end, help the user review the results by indicating the locations
 in the Linux kernel source code where the new syscalls and structures
 were found.
 
+## General Coding Style
+
+* **Commenting:** Only add code comments when they aid understanding. Do not comment things that are obvious from the code itself.
+* **Code Structure:** Avoid excessive new lines; look at how the other code is structured.
+
 ## Testing
 
 Then, run `make generate` to verify that the descriptions are correct.
 
 Also, do not forget to run `make format` to ensure that the descriptions
 are formatted correctly.
+
+Avoid silly mocks in tests; we favor more robust tests that set up the necessary env using the public API of the tested code.
 
 Remember that these commands must be run inside of the syzkaller checkout.

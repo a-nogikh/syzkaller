@@ -51,11 +51,12 @@ tests that eventually use `prog.Target` or `targets.Target`.
 -   **Commit Messages:** Strict formatting required.
     -   Format: `dir/path: description` (e.g., `pkg/fuzzer: fix crash in minimization`).
     -   No trailing dot in the summary.
--   **Testing:** New features must have tests. When writing test assertions, prefer using `require.Equal(t, tt.want, got)` from the `github.com/stretchr/testify/require` package instead of manual `if` comparisons or `if err != nil { t.Fatal(err) }`. Use raw string literals where they improve readability (e.g., when verifying multi-line text outputs).
--   **Go Standard Library Utilities:** Prefer using functions from the standard `slices` and `maps` packages introduced in Go 1.21+ (e.g., `slices.Contains`, `slices.Clone`, `slices.DeleteFunc`, `maps.Keys`) instead of handwriting loops or custom utility functions for these operations.
-    -   *Exception:* Be mindful of performance. For example, do not replace a binary search with `slices.Contains` (which is linear $O(N)$) in performance-critical code.
--   **Formatting:** Always run `make format` before committing.
--   **Linting:** Always run the linter (`make lint` or `golangci-lint run ./...`) to fix all problems when a big patch is ready or structural changes are finalized.
+- **Testing:** New features must have tests. When writing test assertions, prefer using `require.Equal(t, tt.want, got)` from the `github.com/stretchr/testify/require` package instead of manual `if` comparisons or `if err != nil { t.Fatal(err) }`. Use raw string literals where they improve readability (e.g., when verifying multi-line text outputs). Avoid silly mocks; favor more robust tests that set up the necessary env using the public API of the tested code.
+- **Go Standard Library Utilities:** Prefer using functions from the standard `slices` and `maps` packages introduced in Go 1.21+ (e.g., `slices.Contains`, `slices.Clone`, `slices.DeleteFunc`, `maps.Keys`) instead of handwriting loops or custom utility functions for these operations.
+    - *Exception:* Be mindful of performance. For example, do not replace a binary search with `slices.Contains` (which is linear $O(N)$) in performance-critical code.
+- **Commenting:** Only add code comments when they aid understanding. Do not comment things that are obvious from the code itself.
+- **Formatting:** Always run `make format` before committing. Avoid excessive new lines; look at how the other code is structured.
+- **Linting:** Always run the linter (`make lint` or `golangci-lint run ./...`) to fix all problems when a big patch is ready or structural changes are finalized.
 -   **Syscall Descriptions:** When modifying `sys/*/*.txt`, `make generate` must be run to update generated code.
 -   **Copyright:** When you add new .go files, make sure to add the copyright header to them (use other .go files for reference and update the year to the current one).
 
@@ -65,3 +66,4 @@ There exist other GEMINI.md files:
 - `sys/GEMINI.md` - consider it when you are asked to write/modify syzlang descriptions.
 - `syz-cluster/GEMINI.md` - consider it when working on the syz-cluster (patch fuzzing) functionality.
 - `pkg/aflow/GEMINI.md` - consider it when working on the aflow (agentic flow) functionality.
+- `dashboard/app/ARCHITECTURE.md` - consider it when working on the dashboard's AI/aflow orchestration.
