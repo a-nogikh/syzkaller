@@ -381,3 +381,35 @@ func TestOutputOverflow(t *testing.T) {
 		nil,
 	)
 }
+
+func TestValidatedLLMOutputs(t *testing.T) {
+	type flowOutputs struct {
+		Result int
+	}
+	type flowResults struct {
+		Result int `jsonschema:"Result"`
+	}
+	testFlow[struct{}, flowOutputs](t, nil,
+		map[string]any{"Result": 43},
+		&LLMAgent{
+			Name:  "smarty",
+			Model: "model",
+			Outputs: ValidatedLLMOutputs[flowResults](func(ctx *Context, args flowResults) error {
+				if args.Result == 42 {
+					return fmt.Errorf("result cannot be 42")
+				}
+				return nil
+			}),
+			TaskType:    FormalReasoningTask,
+			Instruction: "Instructions",
+			Prompt:      "Initial Prompt",
+		},
+		[]any{
+			// First try returns an invalid result.
+			&genai.Part{FunctionCall: &genai.FunctionCall{Name: "set-results", Args: map[string]any{"Result": 42}}},
+			// Second try returns a valid result.
+			&genai.Part{FunctionCall: &genai.FunctionCall{Name: "set-results", Args: map[string]any{"Result": 43}}},
+		},
+		nil,
+	)
+}

@@ -122,8 +122,20 @@ func Tools(tools ...any) []Tool {
 
 // LLMOutputs creates a special tool that can be used by LLM to provide structured outputs.
 func LLMOutputs[Args any]() *llmOutputs {
+	return ValidatedLLMOutputs[Args](nil)
+}
+
+// ValidatedLLMOutputs is like LLMOutputs but allows to validate the outputs before accepting them.
+// If the validate function returns an error, the LLM will receive it as a BadCallError and will be
+// forced to retry.
+func ValidatedLLMOutputs[Args any](validate func(*Context, Args) error) *llmOutputs {
 	return &llmOutputs{
 		tool: NewFuncTool(llmSetResultsTool, func(ctx *Context, state struct{}, args Args) (Args, error) {
+			if validate != nil {
+				if err := validate(ctx, args); err != nil {
+					return args, BadCallError("%s", err.Error())
+				}
+			}
 			return args, nil
 		}, "Use this tool to provide results of the analysis."),
 		provideOutputs: func(ctx *verifyContext, who string, many bool) {
