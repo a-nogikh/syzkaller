@@ -34,7 +34,24 @@ type PatchIterationOutputs struct {
 
 	NewChangeLog string
 	Replies      []CommentReply
+
+	FixesTag   string
+	ReviewTags []PatchTag
 }
+
+type PatchTag struct {
+	Name  string `jsonschema:"The name of the git trailer tag, e.g. 'Reviewed-by', 'Tested-by'."`
+	Value string `jsonschema:"The value of the tag, strictly formatted as 'Name <email>'."`
+}
+
+const (
+	TagReviewedBy    = "Reviewed-by"
+	TagTestedBy      = "Tested-by"
+	TagAckedBy       = "Acked-by"
+	TagSuggestedBy   = "Suggested-by"
+	TagReportedBy    = "Reported-by"
+	TagCoDevelopedBy = "Co-developed-by"
+)
 
 type CommentReply struct {
 	ReplyTo string // ExtID of the original comment.
@@ -47,6 +64,9 @@ type PatchHistoryEntry struct {
 	Description string
 	ChangeLog   string            // What changed in this version compared to the previous one.
 	Comments    []ExternalComment // Comments specifically replying to this version.
+
+	FixesTag   string
+	ReviewTags []PatchTag
 }
 
 type ExternalComment struct {
@@ -66,6 +86,9 @@ type PatchingOutputs struct {
 	PatchDescription string
 	PatchDiff        string
 	Recipients       []Recipient
+
+	FixesTag   string
+	ReviewTags []PatchTag
 }
 
 type Recipient struct {

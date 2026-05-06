@@ -6,6 +6,7 @@ package patching
 import (
 	"encoding/json"
 	"fmt"
+	"net/mail"
 
 	"github.com/google/syzkaller/pkg/aflow"
 	"github.com/google/syzkaller/pkg/aflow/action/crash"
@@ -90,6 +91,17 @@ func createPatchIterationFlow(name string, summaryWindow int) *aflow.Flow {
 						Prompt:        changelogPrompt,
 						SummaryWindow: summaryWindow,
 					},
+					extractLatestTags,
+					&aflow.LLMAgent{
+						Name:          "tag-manager",
+						Model:         aflow.GoodBalancedModel,
+						Outputs:       aflow.ValidatedLLMOutputs[TagManagerOutputs](validateTagManagerOutputs),
+						TaskType:      aflow.FormalReasoningTask,
+						Instruction:   tagManagerInstruction,
+						Prompt:        tagManagerPrompt,
+						SummaryWindow: summaryWindow,
+					},
+					applyTagDiffs,
 					formatPatchDescription,
 					getMaintainers,
 				),
@@ -142,6 +154,108 @@ var extractNewComments = aflow.NewFuncAction("extract-new-comments", func(ctx *a
 		NewComments []ai.ExternalComment
 	}{
 		NewComments: newComments,
+	}, nil
+})
+
+var extractLatestTags = aflow.NewFuncAction("extract-latest-tags", func(ctx *aflow.Context, args struct {
+	PatchHistory []ai.PatchHistoryEntry
+}) (struct {
+	OldFixesTag   string
+	OldReviewTags []ai.PatchTag
+}, error) {
+	if len(args.PatchHistory) == 0 {
+		return struct {
+			OldFixesTag   string
+			OldReviewTags []ai.PatchTag
+		}{}, nil
+	}
+	latest := args.PatchHistory[len(args.PatchHistory)-1]
+	return struct {
+		OldFixesTag   string
+		OldReviewTags []ai.PatchTag
+	}{
+		OldFixesTag:   latest.FixesTag,
+		OldReviewTags: latest.ReviewTags,
+	}, nil
+})
+
+type TagManagerOutputs struct {
+	AddTags    []ai.PatchTag `jsonschema:"List of tags to add based on the new comments."`
+	RemoveTags []ai.PatchTag `jsonschema:"List of tags to remove based on the new comments."`
+}
+
+func validateTagManagerOutputs(ctx *aflow.Context, args TagManagerOutputs) error {
+	validNames := map[string]bool{
+		ai.TagReviewedBy:    true,
+		ai.TagTestedBy:      true,
+		ai.TagAckedBy:       true,
+		ai.TagSuggestedBy:   true,
+		ai.TagReportedBy:    true,
+		ai.TagCoDevelopedBy: true,
+	}
+	for _, tags := range [][]ai.PatchTag{args.AddTags, args.RemoveTags} {
+		for _, t := range tags {
+			if !validNames[t.Name] {
+				return fmt.Errorf(
+					"invalid tag name %q. Must be one of Reviewed-by, Tested-by, Acked-by, Suggested-by, Reported-by, Co-developed-by",
+					t.Name)
+			}
+			addr, err := mail.ParseAddress(t.Value)
+			if err != nil {
+				return fmt.Errorf("invalid tag format %q: must be exactly 'Name <email>' (error: %w)", t.Value, err)
+			}
+			if addr.Name == "" {
+				return fmt.Errorf("invalid tag format %q: missing name, must be exactly 'Name <email>'", t.Value)
+			}
+		}
+	}
+	return nil
+}
+
+var applyTagDiffs = aflow.NewFuncAction("apply-tag-diffs", func(ctx *aflow.Context, args struct {
+	OldFixesTag   string
+	OldReviewTags []ai.PatchTag
+	AddTags       []ai.PatchTag
+	RemoveTags    []ai.PatchTag
+}) (struct {
+	FixesTag   string
+	ReviewTags []ai.PatchTag
+}, error) {
+	res := []ai.PatchTag{}
+	res = append(res, args.OldReviewTags...)
+
+	for _, r := range args.RemoveTags {
+		for i, v := range res {
+			if v.Name == r.Name && v.Value == r.Value {
+				res = append(res[:i], res[i+1:]...)
+				break
+			}
+		}
+	}
+
+	for _, a := range args.AddTags {
+		// ValidatedLLMOutputs already ensured this is parseable.
+		addr, _ := mail.ParseAddress(a.Value)
+		a.Value = addr.String()
+
+		found := false
+		for _, v := range res {
+			if v.Name == a.Name && v.Value == a.Value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			res = append(res, a)
+		}
+	}
+
+	return struct {
+		FixesTag   string
+		ReviewTags []ai.PatchTag
+	}{
+		FixesTag:   args.OldFixesTag,
+		ReviewTags: res,
 	}, nil
 })
 
@@ -394,4 +508,30 @@ Bug title: {{jsonMarshal .ReproducedBugTitle}}
 
 Comment to evaluate:
 {{jsonMarshal .CurrentComment}}
+`
+
+const tagManagerInstruction = `
+You are an expert Linux kernel maintainer. Your task is to update the list of git trailer tags
+(Reviewed-by, Tested-by, Acked-by) for a patch based on human reviewer comments.
+You are given the old list of tags and the new comments.
+
+If a reviewer adds a tag like "Reviewed-by: Name <email>", you should add that to the appropriate list.
+If a reviewer withdraws their tag, or points out a mistake in a tag, you should remove it.
+Do NOT modify the Fixes tag in this step.
+
+Only output exact matches for the names and emails. They must be formatted as "Name <email>".
+Do not invent tags or add tags without explicit statements in the comments.
+If a reviewer implies they are giving a tag (e.g., "Looks good to me" or "Reviewed-by me") but does not provide
+the exact "Name <email>" format, you must ask them directly what exact tag to set
+(e.g., "Could you please provide your exact Reviewed-by tag?").
+`
+
+const tagManagerPrompt = `
+Old Tags:
+{{jsonMarshal .OldReviewTags}}
+
+New Comments:
+{{range $comment := .NewComments}}
+{{jsonMarshal $comment}}
+{{end}}
 `

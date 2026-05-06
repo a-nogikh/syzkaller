@@ -525,6 +525,7 @@ Diff
 func TestFormatPatch(t *testing.T) {
 	type Test struct {
 		description string
+		tags        PatchTags
 		diff        string
 		baseCommit  string
 		tools       []string
@@ -533,6 +534,53 @@ func TestFormatPatch(t *testing.T) {
 		want        string
 	}
 	tests := []Test{
+		{
+			description: "My simple description",
+			tags: PatchTags{
+				FixesTag: "1234567890ab (\"some commit\")",
+				ReviewTags: []ai.PatchTag{
+					{Name: ai.TagReviewedBy, Value: "Reviewer One <one@example.com>"},
+					{Name: ai.TagTestedBy, Value: "Tester <test@test.com>"},
+					{Name: ai.TagAckedBy, Value: "Acker <ack@test.com>"},
+					{Name: ai.TagAckedBy, Value: "Second Acker <ack2@test.com>"},
+				},
+				BaseCommit: "base-commit-hash",
+				Tools:      []string{"tool-b", "tool-a"},
+				Authors:    []string{"Author <author@test.com>"},
+			},
+			diff: `diff --git a/foo b/foo
+--- a/foo
++++ b/foo
+@@ -1 +1 @@
+-a
++b
+`,
+			recipients: []ai.Recipient{
+				{Name: "To One", Email: "to1@example.com", To: true},
+				{Name: "Cc One", Email: "cc1@example.com", To: false},
+			},
+			want: `My simple description
+
+Fixes: 1234567890ab ("some commit")
+Reviewed-by: Reviewer One <one@example.com>
+Tested-by: Tester <test@test.com>
+Acked-by: Acker <ack@test.com>
+Acked-by: Second Acker <ack2@test.com>
+Assisted-by: tool-b tool-a
+Signed-off-by: Author <author@test.com>
+To: "To One" <to1@example.com>
+Cc: "Cc One" <cc1@example.com>
+
+diff --git a/foo b/foo
+--- a/foo
++++ b/foo
+@@ -1 +1 @@
+-a
++b
+
+base-commit: base-commit-hash
+`,
+		},
 		{
 			description: `mm: fix something
 
@@ -612,8 +660,17 @@ base-commit: f5e343a447510a663fbf6215584a9bf8e03bfd5c
 	}
 	for i, test := range tests {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			got := FormatPatch(test.description, test.diff, test.baseCommit,
-				test.tools, test.authors, test.recipients)
+			tags := test.tags
+			if tags.BaseCommit == "" {
+				tags.BaseCommit = test.baseCommit
+			}
+			if len(tags.Tools) == 0 {
+				tags.Tools = test.tools
+			}
+			if len(tags.Authors) == 0 {
+				tags.Authors = test.authors
+			}
+			got := FormatPatch(test.description, tags, test.diff, test.recipients)
 			assert.Equal(t, test.want, got)
 		})
 	}

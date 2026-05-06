@@ -56,7 +56,16 @@ func ParsePatch(message []byte) (diff string) {
 	return
 }
 
-func FormatPatchDescription(description string, tools, authors []string, recipients []ai.Recipient) string {
+type PatchTags struct {
+	FixesTag   string
+	ReviewTags []ai.PatchTag
+
+	BaseCommit string
+	Tools      []string
+	Authors    []string
+}
+
+func FormatPatchDescription(description string, tags PatchTags, recipients []ai.Recipient) string {
 	buf := new(bytes.Buffer)
 	var to, cc []mail.Address
 	for _, recipient := range recipients {
@@ -69,8 +78,10 @@ func FormatPatchDescription(description string, tools, authors []string, recipie
 	}
 	err := patchTemplate.Execute(buf, map[string]any{
 		"description": strings.TrimSpace(description),
-		"assistedBy":  formatAssistedBy(tools),
-		"authors":     authors,
+		"fixesTag":    tags.FixesTag,
+		"reviewTags":  tags.ReviewTags,
+		"assistedBy":  formatAssistedBy(tags.Tools),
+		"authors":     tags.Authors,
 		"to":          to,
 		"cc":          cc,
 	})
@@ -80,16 +91,19 @@ func FormatPatchDescription(description string, tools, authors []string, recipie
 	return buf.String()
 }
 
-func FormatPatch(description, diff, baseCommit string, tools, authors []string,
-	recipients []ai.Recipient) string {
-	return FormatPatchDescription(description, tools, authors, recipients) +
-		fmt.Sprintf("%v\nbase-commit: %v\n", diff, baseCommit)
+func FormatPatch(description string, tags PatchTags, diff string, recipients []ai.Recipient) string {
+	return FormatPatchDescription(description, tags, recipients) +
+		fmt.Sprintf("%v\nbase-commit: %v\n", diff, tags.BaseCommit)
 }
 
 // Note: the patches we generate should comply to:
 // https://docs.kernel.org/process/coding-assistants.html
 var patchTemplate = template.Must(template.New("").Parse(`{{.description}}
-{{if .assistedBy}}
+{{if .fixesTag}}
+Fixes: {{.fixesTag}}{{end}}
+{{- range $tag := .reviewTags}}
+{{$tag.Name}}: {{$tag.Value}}{{end}}
+{{- if .assistedBy}}
 Assisted-by: {{.assistedBy}}{{end}}
 {{- range $addr := .authors}}
 Signed-off-by: {{$addr}}{{end}}

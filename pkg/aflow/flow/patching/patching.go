@@ -47,6 +47,7 @@ func createPatchingFlow(name string, summaryWindow int) *aflow.Flow {
 		Name: name,
 		Root: aflow.Pipeline(
 			baseCommitPicker,
+			initEmptyTags,
 			actionsyzlang.CreateSimplifiedCRepro,
 			kernel.Checkout,
 			kernel.Build,
@@ -81,6 +82,16 @@ func createPatchingFlow(name string, summaryWindow int) *aflow.Flow {
 		),
 	}
 }
+
+var initEmptyTags = aflow.NewFuncAction("init-empty-tags", func(ctx *aflow.Context, args struct{}) (struct {
+	FixesTag   string
+	ReviewTags []ai.PatchTag
+}, error) {
+	return struct {
+		FixesTag   string
+		ReviewTags []ai.PatchTag
+	}{}, nil
+})
 
 func init() {
 	aflow.Register[Inputs, ai.PatchingOutputs](
