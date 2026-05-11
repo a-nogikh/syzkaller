@@ -317,9 +317,11 @@ The crash is:
 
 {{.ReproducedCrashReport}}
 
+{{if .BugExplanation}}
 The explanation of the root cause is:
 
 {{.BugExplanation}}
+{{end}}
 
 The patch that fixes the bug is:
 
@@ -362,22 +364,27 @@ type formatFixesResult struct {
 	Fixes ai.FixesTag
 }
 
+func queryFixesTag(ctx *aflow.Context, hash string) (ai.FixesTag, error) {
+	var fix ai.FixesTag
+	err := kernel.UseLinuxRepo(ctx, func(kernelRepoDir string, repo vcs.Repo) error {
+		commit, err := repo.Commit(hash)
+		if err != nil {
+			return fmt.Errorf("failed to get commit %q: %w", hash, err)
+		}
+		fix = ai.FixesTag{
+			Hash:  commit.Hash,
+			Title: commit.Title,
+		}
+		return nil
+	})
+	return fix, err
+}
+
 var formatFixes = aflow.NewFuncAction("format-fixes",
 	func(ctx *aflow.Context, args fixesFinderArgs) (formatFixesResult, error) {
-		var fix ai.FixesTag
 		if args.FixesHash == "" {
 			return formatFixesResult{}, nil
 		}
-		err := kernel.UseLinuxRepo(ctx, func(kernelRepoDir string, repo vcs.Repo) error {
-			commit, err := repo.Commit(args.FixesHash)
-			if err != nil {
-				return fmt.Errorf("failed to get commit %q: %w", args.FixesHash, err)
-			}
-			fix = ai.FixesTag{
-				Hash:  commit.Hash,
-				Title: commit.Title,
-			}
-			return nil
-		})
+		fix, err := queryFixesTag(ctx, args.FixesHash)
 		return formatFixesResult{Fixes: fix}, err
 	})
