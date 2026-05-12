@@ -61,11 +61,20 @@ func handleUpstreamCommand(ctx context.Context, req *dashapi.SendExternalCommand
 	return &dashapi.SendExternalCommandResp{}, nil
 }
 
+func formatUpstreamedBy(name, email string) string {
+	if name != "" {
+		return fmt.Sprintf("%s <%s>", name, email)
+	}
+	return email
+}
+
 func processUpstreamSubcommand(ctx context.Context, job *aidb.Job,
 	currentReporting *aidb.JobReporting, req *dashapi.SendExternalCommandReq) error {
 	if err := checkJobUpstreamable(job); err != nil {
 		return err
 	}
+
+	signedOffBy := formatUpstreamedBy(req.AuthorName, req.Author)
 
 	nsCfg := getNsConfig(ctx, job.Namespace)
 	if nsCfg.AI == nil || len(nsCfg.AI.Stages) == 0 {
@@ -74,6 +83,7 @@ func processUpstreamSubcommand(ctx context.Context, job *aidb.Job,
 			CommandSource: string(req.Source),
 			CommandExtID:  req.MessageExtID,
 			User:          req.Author,
+			SignedOffBy:   signedOffBy,
 		})
 	}
 
@@ -100,6 +110,7 @@ func processUpstreamSubcommand(ctx context.Context, job *aidb.Job,
 		CommandSource: string(req.Source),
 		CommandExtID:  req.MessageExtID,
 		User:          req.Author,
+		SignedOffBy:   signedOffBy,
 		Reason:        "",
 	})
 }
@@ -314,16 +325,17 @@ func makeNewReportResult(ctx context.Context, job *aidb.Job, res *ai.PatchingOut
 	}
 
 	return &dashapi.NewReportResult{
-		Subject:    subject,
-		Body:       body,
-		GitDiff:    res.PatchDiff,
-		BaseCommit: res.KernelCommit,
-		BaseTree:   res.KernelRepo,
-		Version:    version,
-		To:         to,
-		Cc:         cc,
-		Tools:      slices.Collect(maps.Keys(models)),
-		Fixes:      res.Fixes,
+		Subject:     subject,
+		Body:        body,
+		GitDiff:     res.PatchDiff,
+		BaseCommit:  res.KernelCommit,
+		BaseTree:    res.KernelRepo,
+		Version:     version,
+		To:          to,
+		Cc:          cc,
+		Tools:       slices.Collect(maps.Keys(models)),
+		SignedOffBy: res.SignedOffBy,
+		Fixes:       res.Fixes,
 	}, nil
 }
 
@@ -333,6 +345,16 @@ func makeIterationReportResult(ctx context.Context, job *aidb.Job, version int,
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to cast job results: %w", err)
 	}
+
+	signedOffBy := res.SignedOffBy
+	if len(signedOffBy) == 0 && job.ParentReportingID.Valid {
+		if reporting, err := aidb.LoadJobReporting(ctx, job.ParentReportingID.StringVal); err == nil && reporting != nil {
+			if latestPatch := findLatestPatch(ctx, reporting.JobID); latestPatch != nil {
+				signedOffBy = latestPatch.SignedOffBy
+			}
+		}
+	}
+
 	var patchResult *dashapi.NewReportResult
 	var replies []*dashapi.ReplyResult
 
@@ -345,6 +367,7 @@ func makeIterationReportResult(ctx context.Context, job *aidb.Job, version int,
 			PatchDiff:        res.PatchDiff,
 			Recipients:       res.Recipients,
 			Fixes:            res.Fixes,
+			SignedOffBy:      signedOffBy,
 		}, version)
 		if err != nil {
 			return nil, nil, err

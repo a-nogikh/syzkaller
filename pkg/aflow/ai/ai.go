@@ -32,6 +32,7 @@ type PatchIterationOutputs struct {
 	PatchDiff        string
 	Recipients       []Recipient
 	Fixes            FixesTag
+	SignedOffBy      []string
 
 	NewChangeLog string
 	Replies      []CommentReply
@@ -46,6 +47,7 @@ type PatchHistoryEntry struct {
 	Version     int
 	Diff        string
 	Description string
+	SignedOffBy []string          // Authors who have signed off on this version.
 	ChangeLog   string            // What changed in this version compared to the previous one.
 	Comments    []ExternalComment // Comments specifically replying to this version.
 }
@@ -68,6 +70,7 @@ type PatchingOutputs struct {
 	PatchDiff        string
 	Recipients       []Recipient
 	Fixes            FixesTag
+	SignedOffBy      []string
 }
 
 type FixesTag struct {

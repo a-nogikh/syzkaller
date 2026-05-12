@@ -56,11 +56,11 @@ func RenderBody(cfg *Config, res *dashapi.ReportPollResult) (string, error) {
 				recipients = append(recipients, ai.Recipient{Email: cc, To: false})
 			}
 		}
-		// TODO: Figure out what Authors we want to use here.
 		res.Patch.Body = strings.TrimSpace(email.FormatPatchDescription(
 			res.Patch.Body, email.PatchTemplateData{
 				Fixes:      res.Patch.Fixes,
 				Tools:      res.Patch.Tools,
+				Authors:    res.Patch.SignedOffBy,
 				Recipients: recipients,
 				Links:      res.Patch.Links,
 				ReportedBy: res.Patch.ReportedBy,

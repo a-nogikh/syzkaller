@@ -1360,7 +1360,7 @@ func buildPatchHistory(ctx context.Context, job *aidb.Job) ([]ai.PatchHistoryEnt
 		return nil, nil
 	}
 
-	parentDiff, parentDesc := findLatestPatch(ctx, reporting.JobID)
+	latestPatch := findLatestPatch(ctx, reporting.JobID)
 
 	comments, err := aidb.LoadJobCommentsByReporting(ctx, reportingID)
 	if err != nil {
@@ -1411,28 +1411,42 @@ func buildPatchHistory(ctx context.Context, job *aidb.Job) ([]ai.PatchHistoryEnt
 			New:       isTarget,
 		})
 	}
-	return []ai.PatchHistoryEntry{
-		{
-			Version:     int(reporting.Version.Int64),
-			Diff:        parentDiff,
-			Description: parentDesc,
-			Comments:    commentsInfo,
-		},
-	}, nil
+
+	entry := ai.PatchHistoryEntry{
+		Version:  int(reporting.Version.Int64),
+		Comments: commentsInfo,
+	}
+	if latestPatch != nil {
+		entry.Diff = latestPatch.PatchDiff
+		entry.Description = latestPatch.PatchDescription
+		entry.SignedOffBy = latestPatch.SignedOffBy
+	}
+
+	return []ai.PatchHistoryEntry{entry}, nil
 }
 
-func findLatestPatch(ctx context.Context, jobID string) (diff, desc string) {
+func findLatestPatch(ctx context.Context, jobID string) *ai.PatchingOutputs {
 	j, err := aidb.LoadJob(ctx, jobID)
 	if err != nil || j == nil {
-		return "", ""
+		return nil
 	}
-	if j.Results.Valid {
-		if m, ok := j.Results.Value.(map[string]any); ok {
-			diff, _ = m["PatchDiff"].(string)
-			desc, _ = m["PatchDescription"].(string)
+	if !j.Results.Valid {
+		return nil
+	}
+	if m, ok := j.Results.Value.(map[string]any); ok {
+		var res ai.PatchingOutputs
+		res.PatchDiff, _ = m["PatchDiff"].(string)
+		res.PatchDescription, _ = m["PatchDescription"].(string)
+		if s, ok := m["SignedOffBy"].([]any); ok {
+			for _, v := range s {
+				if str, ok := v.(string); ok {
+					res.SignedOffBy = append(res.SignedOffBy, str)
+				}
+			}
 		}
+		return &res
 	}
-	return diff, desc
+	return nil
 }
 
 type patchIterationNode struct {

@@ -576,13 +576,25 @@ func UpstreamReportCommand(ctx context.Context, args UpstreamReportArgs) error {
 		if args.Reason != "" {
 			journal.Details = spanner.NullJSON{Value: map[string]string{"reason": args.Reason}, Valid: true}
 		}
+		var results map[string]any
+		if job.Results.Valid && job.Results.Value != nil {
+			if m, ok := job.Results.Value.(map[string]any); ok {
+				results = m
+			}
+		}
+		if results == nil {
+			results = make(map[string]any)
+		}
+
+		appendUnique(results, "SignedOffBy", args.SignedOffBy)
+
 		journalMut, err := spanner.InsertStruct("Journal", journal)
 		if err != nil {
 			return err
 		}
 		jobMut := spanner.Update("Jobs",
-			[]string{"ID", "Correct"},
-			[]any{args.Job.ID, spanner.NullBool{Bool: true, Valid: true}})
+			[]string{"ID", "Correct", "Results"},
+			[]any{args.Job.ID, spanner.NullBool{Bool: true, Valid: true}, spanner.NullJSON{Value: results, Valid: true}})
 		var mutations []*spanner.Mutation
 		mutations = append(mutations, jobMut, journalMut)
 
@@ -1064,6 +1076,7 @@ type UpstreamReportArgs struct {
 	CommandExtID  string
 	Reason        string
 	User          string
+	SignedOffBy   string
 }
 
 type RejectReportArgs struct {
@@ -1248,4 +1261,22 @@ func extractBaseCommitArgs(job *Job, argsMap map[string]any) {
 			argsMap["BaseFixes"] = fixes
 		}
 	}
+}
+
+func appendUnique(results map[string]any, key, val string) {
+	if val == "" {
+		return
+	}
+	var arr []any
+	if existing, ok := results[key]; ok {
+		if a, ok := existing.([]any); ok {
+			arr = a
+		}
+	}
+	for _, s := range arr {
+		if s == val {
+			return
+		}
+	}
+	results[key] = append(arr, val)
 }

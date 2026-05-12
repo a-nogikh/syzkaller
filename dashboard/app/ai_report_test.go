@@ -118,12 +118,13 @@ func TestAIExternalReporting(t *testing.T) {
 	require.NotNil(t, pollResp.Result)
 	require.False(t, pollResp.Result.CanUpstream)
 	require.Equal(t, &dashapi.NewReportResult{
-		Subject:    "Test Subject",
-		Body:       "Test Body",
-		Version:    1,
-		GitDiff:    "diff",
-		BaseCommit: "commit",
-		BaseTree:   "repo",
+		Subject:     "Test Subject",
+		Body:        "Test Body",
+		Version:     1,
+		GitDiff:     "diff",
+		SignedOffBy: []string{"test-user"},
+		BaseCommit:  "commit",
+		BaseTree:    "repo",
 		Links: []string{
 			appURL(c.ctx) + "/bug?extid=" + extID,
 			appURL(c.ctx) + "/ai_job?id=" + jobID,
