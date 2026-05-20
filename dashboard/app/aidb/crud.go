@@ -705,6 +705,41 @@ func RejectReportCommand(ctx context.Context, args RejectReportArgs) error {
 	return nil
 }
 
+func UnrejectReportCommand(ctx context.Context, args UnrejectReportArgs) error {
+	client, err := dbClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+		journal := &Journal{
+			ID:          uuid.NewString(),
+			JobID:       toNullString(args.Job.ID),
+			Date:        TimeNow(ctx),
+			User:        args.User,
+			Action:      ActionUnreject,
+			Source:      toNullString(args.CommandSource),
+			SourceExtID: toNullString(args.CommandExtID),
+		}
+		journalMut, err := spanner.InsertStruct("Journal", journal)
+		if err != nil {
+			return err
+		}
+
+		jobMut := spanner.Update("Jobs",
+			[]string{"ID", "Correct"},
+			[]any{args.Job.ID, spanner.NullBool{Valid: false}})
+		return txn.BufferWrite([]*spanner.Mutation{jobMut, journalMut})
+	})
+	if err != nil {
+		if spanner.ErrCode(err) == codes.AlreadyExists {
+			return nil // Idempotent no-op.
+		}
+		return err
+	}
+	return nil
+}
+
 type LogCommandErrorArgs struct {
 	JobID         string
 	ReportingID   string
@@ -1178,6 +1213,13 @@ type RejectReportArgs struct {
 	CommandExtID  string
 	User          string
 	Reason        string
+}
+
+type UnrejectReportArgs struct {
+	Job           *Job
+	CommandSource string
+	CommandExtID  string
+	User          string
 }
 
 func LoadJobReportingByExtID(ctx context.Context, extID string) (*JobReporting, error) {

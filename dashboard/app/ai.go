@@ -858,6 +858,8 @@ func makeUIJobReviewHistory(history []*aidb.Journal, reportings []*aidb.JobRepor
 			val = aiCorrectnessCorrect
 		case aidb.ActionReject:
 			val = aiCorrectnessIncorrect
+		case aidb.ActionUnreject:
+			val = aiCorrectnessUnset
 		case aidb.ActionJobReview:
 			// ActionJobReview is obsolete, we only keep it because there are entities in the DB.
 			if h.Details.Valid {
@@ -869,8 +871,6 @@ func makeUIJobReviewHistory(history []*aidb.Journal, reportings []*aidb.JobRepor
 					}
 				}
 			}
-		default:
-			val = "?"
 		}
 		res = append(res, &uiJobReviewHistory{
 			Date:    h.Date,

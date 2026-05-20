@@ -38,6 +38,8 @@ func apiAIReportCommand(ctx context.Context, req *dashapi.SendExternalCommandReq
 		resp, err = handleUpstreamCommand(ctx, req)
 	} else if req.Reject != nil {
 		resp, err = handleRejectCommand(ctx, req)
+	} else if req.Unreject != nil {
+		resp, err = handleUnrejectCommand(ctx, req)
 	} else if req.Comment != nil {
 		resp, err = handleCommentCommand(ctx, req)
 	} else {
@@ -467,8 +469,28 @@ func lookupJobByExtReq(ctx context.Context, req *dashapi.SendExternalCommandReq)
 	return reporting, job, nil
 }
 
-func handleCommentCommand(ctx context.Context, req *dashapi.SendExternalCommandReq,
-) (*dashapi.SendExternalCommandResp, error) {
+func handleUnrejectCommand(ctx context.Context,
+	req *dashapi.SendExternalCommandReq) (*dashapi.SendExternalCommandResp, error) {
+	_, job, err := lookupJobByExtReq(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	err = aidb.UnrejectReportCommand(ctx, aidb.UnrejectReportArgs{
+		Job:           job,
+		CommandSource: string(req.Source),
+		CommandExtID:  req.MessageExtID,
+		User:          req.Author,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &dashapi.SendExternalCommandResp{}, nil
+}
+
+func handleCommentCommand(ctx context.Context,
+	req *dashapi.SendExternalCommandReq) (*dashapi.SendExternalCommandResp, error) {
 	reporting, job, err := lookupJobByExtReq(ctx, req)
 	if err != nil {
 		return nil, err
