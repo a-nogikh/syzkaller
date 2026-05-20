@@ -53,8 +53,8 @@ func apiAIReportCommand(ctx context.Context, req *dashapi.SendExternalCommandReq
 	return resp, nil
 }
 
-func handleUpstreamCommand(ctx context.Context, req *dashapi.SendExternalCommandReq,
-) (*dashapi.SendExternalCommandResp, error) {
+func handleUpstreamCommand(ctx context.Context,
+	req *dashapi.SendExternalCommandReq) (*dashapi.SendExternalCommandResp, error) {
 	reporting, job, err := lookupJobByExtReq(ctx, req)
 	if err != nil {
 		return nil, err
