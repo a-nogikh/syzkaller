@@ -47,7 +47,7 @@ func BuildKernel(buildDir, srcDir, cfg, targetOS, targetArch string, cleanup boo
 	configScript := filepath.Join(srcDir, "scripts", "config")
 	configArgs := []string{"--set-str", "INITRAMFS_SOURCE", ""}
 	if targetArch == targets.AMD64 {
-		configArgs = append(configArgs, "-d", "X86_X32_ABI")
+		configArgs = append(configArgs, "-d", "X86_X32_ABI", "-e", "KERNEL_GZIP", "-d", "KERNEL_LZ4")
 	}
 	if _, err := osutil.RunCmd(time.Hour, buildDir, configScript, configArgs...); err != nil {
 		return err
