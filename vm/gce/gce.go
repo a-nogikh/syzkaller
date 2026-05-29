@@ -281,7 +281,7 @@ func (inst *instance) Close() error {
 	close(inst.closed)
 	var err error
 	if !inst.preempted {
-		err = inst.GCE.DeleteInstance(inst.name, inst.zone, true)
+		// err = inst.GCE.DeleteInstance(inst.name, inst.zone, true)
 	}
 	if inst.consolew != nil {
 		err2 := inst.consolew.Close()

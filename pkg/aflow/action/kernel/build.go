@@ -58,7 +58,7 @@ func BuildKernel(buildDir, srcDir, cfg, targetOS, targetArch string, cleanup boo
 		if match := cmdlineRe.FindStringSubmatch(cfg); len(match) > 1 {
 			cmdline = match[1] + " " + cmdline
 		}
-		configArgs = append(configArgs, "--set-str", "CMDLINE", cmdline)
+		configArgs = append(configArgs, "--set-str", "CMDLINE", cmdline, "-e", "CMDLINE_OVERRIDE", "-e", "CMDLINE_FORCE")
 	}
 	if _, err := osutil.RunCmd(time.Hour, buildDir, configScript, configArgs...); err != nil {
 		return err
@@ -102,7 +102,7 @@ func BuildKernel(buildDir, srcDir, cfg, targetOS, targetArch string, cleanup boo
 }
 
 func buildKernel(ctx *aflow.Context, args buildArgs) (buildResult, error) {
-	desc := fmt.Sprintf("kernel commit %v, kernel config hash %v",
+	desc := fmt.Sprintf("kernel commit %v, kernel config hash %v, v2",
 		args.KernelCommit, hash.String(args.KernelConfig))
 	dir, err := ctx.Cache("build", desc, func(dir string) error {
 		return BuildKernel(dir, args.KernelSrc, args.KernelConfig, args.TargetOS, args.TargetArch, true)
