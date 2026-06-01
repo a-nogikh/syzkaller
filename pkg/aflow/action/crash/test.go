@@ -66,7 +66,7 @@ func testPatch(ctx *aflow.Context, args testArgs) (testResult, error) {
 		return res, err
 	}
 	desc := fmt.Sprintf("kernel commit %v, kernel config hash %v, image hash %v,"+
-		" vm %v, vm config hash %v, C repro hash %v, patch hash %v, version 1",
+		" vm %v, vm config hash %v, C repro hash %v, patch hash %v, version 2",
 		args.KernelCommit, hash.String(args.KernelConfig), hash.String(imageData),
 		args.Type, hash.String(args.VM), hash.String(args.ReproC), hash.String(diff))
 	type Cached struct {
