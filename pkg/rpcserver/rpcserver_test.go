@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/google/syzkaller/pkg/csource"
+	"github.com/google/syzkaller/pkg/execbackend"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/mgrconfig"
@@ -38,7 +39,7 @@ func getTestDefaultCfg() mgrconfig.Config {
 func TestNew(t *testing.T) {
 	defaultCfg := getTestDefaultCfg()
 
-	nilServer := func(s Server) {
+	nilBackend := func(s execbackend.Server) {
 		assert.Nil(t, s)
 	}
 
@@ -46,7 +47,7 @@ func TestNew(t *testing.T) {
 		name              string
 		modifyCfg         func() *mgrconfig.Config
 		debug             bool
-		expectedServCheck func(Server)
+		expectedServCheck func(execbackend.Server)
 		expectsErr        bool
 		expectedErr       error
 	}{
@@ -57,7 +58,7 @@ func TestNew(t *testing.T) {
 				cfg.Sandbox = "unknown"
 				return &cfg
 			},
-			expectedServCheck: nilServer,
+			expectedServCheck: nilBackend,
 			expectsErr:        true,
 		},
 		{
@@ -70,7 +71,7 @@ func TestNew(t *testing.T) {
 				}
 				return &cfg
 			},
-			expectedServCheck: func(srv Server) {
+			expectedServCheck: func(srv execbackend.Server) {
 				s := srv.(*server)
 				assert.Equal(t, s.cfg.Config.Features,
 					flatrpc.AllFeatures&(^flatrpc.FeatureExtraCoverage)&(^flatrpc.FeatureMemoryDump))
@@ -84,7 +85,7 @@ func TestNew(t *testing.T) {
 				cfg.MemoryDump = true
 				return &cfg
 			},
-			expectedServCheck: func(srv Server) {
+			expectedServCheck: func(srv execbackend.Server) {
 				s := srv.(*server)
 				assert.Equal(t, s.cfg.Config.Features, flatrpc.AllFeatures&(^flatrpc.FeatureExtraCoverage))
 				assert.Nil(t, s.serv)

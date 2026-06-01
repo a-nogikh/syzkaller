@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/cover/backend"
+	"github.com/google/syzkaller/pkg/execbackend"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/log"
@@ -50,6 +51,8 @@ type Config struct {
 	DebugTimeouts bool
 	Procs         int
 	Slowdown      int
+	ExecutorBin   string
+	Timeouts      targets.Timeouts
 	pcBase        uint64
 	localModules  []*vminfo.KernelModule
 
@@ -67,20 +70,8 @@ type RemoteConfig struct {
 type Manager interface {
 	MaxSignal() signal.Signal
 	BugFrames() (leaks []string, races []string)
-	MachineChecked(features flatrpc.Feature, syscalls map[*prog.Syscall]bool) (queue.Source, error)
+	MachineChecked(features flatrpc.Feature, syscalls map[*prog.Syscall]bool) error
 	CoverageFilter(modules []*vminfo.KernelModule) ([]uint64, error)
-}
-
-type Server interface {
-	Listen() error
-	Close() error
-	Port() int
-	TriagedCorpus()
-	Serve(context.Context) error
-	CreateInstance(id int, injectExec chan<- bool, updInfo dispatcher.UpdateInfo) chan error
-	ShutdownInstance(id int, crashed bool, extraExecs ...report.ExecutorInfo) ([]ExecRecord, []byte)
-	StopFuzzing(id int)
-	DistributeSignalDelta(plus signal.Signal)
 }
 
 type server struct {
@@ -97,6 +88,7 @@ type server struct {
 	checkFailures    int
 	onHandshake      chan *handshakeResult
 	baseSource       *queue.DynamicSourceCtl
+	enabledFeatures  flatrpc.Feature
 	setupFeatures    flatrpc.Feature
 	canonicalModules *cover.Canonicalizer
 	coverFilter      []uint64
@@ -145,7 +137,7 @@ func NewNamedStats(name string) Stats {
 	}
 }
 
-func New(cfg *RemoteConfig) (Server, error) {
+func New(cfg *RemoteConfig) (execbackend.Server, error) {
 	var pcBase uint64
 	if cfg.KernelObj != "" {
 		var err error
@@ -186,8 +178,11 @@ func New(cfg *RemoteConfig) (Server, error) {
 		// gVisor/Starnix are not Linux, so filtering against Linux ranges won't work.
 		FilterSignal:      cfg.Type != targets.GVisor && cfg.Type != targets.Starnix,
 		PrintMachineCheck: true,
+		DebugTimeouts:     cfg.Debug,
 		Procs:             cfg.Procs,
 		Slowdown:          cfg.Timeouts.Slowdown,
+		ExecutorBin:       cfg.ExecutorBin,
+		Timeouts:          cfg.Timeouts,
 		pcBase:            pcBase,
 		localModules:      cfg.LocalModules,
 	}, cfg.Manager), nil
@@ -229,12 +224,13 @@ func (serv *server) Close() error {
 	return serv.serv.Close()
 }
 
-func (serv *server) Listen() error {
+func (serv *server) Setup() error {
 	s, err := flatrpc.Listen(serv.cfg.RPC)
 	if err != nil {
 		return err
 	}
 	serv.serv = s
+	log.Logf(0, "serving rpc on tcp://%v", serv.Port())
 	return nil
 }
 
@@ -478,12 +474,12 @@ func (serv *server) runCheck(ctx context.Context, info *handshakeResult) error {
 		return checkErr
 	}
 	enabledFeatures := features.Enabled()
+	serv.enabledFeatures = enabledFeatures
 	serv.setupFeatures = features.NeedSetup()
-	newSource, err := serv.mgr.MachineChecked(enabledFeatures, enabledCalls)
+	err := serv.mgr.MachineChecked(enabledFeatures, enabledCalls)
 	if err != nil {
 		return err
 	}
-	serv.baseSource.Store(newSource)
 	serv.checkDone.Store(true)
 	return nil
 }
@@ -596,6 +592,14 @@ func (serv *server) DistributeSignalDelta(plus signal.Signal) {
 	serv.foreachRunnerAsync(func(runner *Runner) {
 		runner.SendSignalUpdate(plusRaw)
 	})
+}
+
+func (serv *server) SetSource(source queue.Source) {
+	serv.baseSource.Store(source)
+}
+
+func (serv *server) Features() flatrpc.Feature {
+	return serv.enabledFeatures
 }
 
 func (serv *server) TriagedCorpus() {

@@ -1,62 +1,122 @@
-// Copyright 2024 syzkaller project authors. All rights reserved.
+// Copyright 2026 syzkaller project authors. All rights reserved.
 // Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 
-package main
+package snapshotserver
 
 import (
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	flatbuffers "github.com/google/flatbuffers/go"
+	"github.com/google/syzkaller/pkg/execbackend"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
-	"github.com/google/syzkaller/pkg/log"
-	"github.com/google/syzkaller/pkg/manager"
+	"github.com/google/syzkaller/pkg/report"
+	"github.com/google/syzkaller/pkg/rpcserver"
 	"github.com/google/syzkaller/vm"
 	"github.com/google/syzkaller/vm/dispatcher"
 )
 
-func (mgr *Manager) snapshotInstance(ctx context.Context, inst *vm.Instance, updInfo dispatcher.UpdateInfo) {
-	mgr.servStats.StatNumFuzzing.Add(1)
-	defer mgr.servStats.StatNumFuzzing.Add(-1)
+type Config struct {
+	ExecutorBin      string
+	UseCoverEdges    bool
+	Kernel64Bit      bool
+	Slowdown         int
+	SyscallTimeoutMs int
+	ProgramTimeoutMs int
+	Features         flatrpc.Feature
+	SandboxArg       int64
+	Stats            rpcserver.Stats
+}
+
+type snapshotServer struct {
+	execbackend.Server
+	cfg      Config
+	source   *queue.DynamicSourceCtl
+	dist     *queue.Distributor
+	bootDone chan struct{}
+	bootOnce sync.Once
+}
+
+func New(base execbackend.Server, cfg Config) execbackend.Server {
+	source := queue.DynamicSource(queue.Plain())
+	return &snapshotServer{
+		Server:   base,
+		cfg:      cfg,
+		source:   source,
+		dist:     queue.Distribute(queue.Retry(source)),
+		bootDone: make(chan struct{}),
+	}
+}
+
+func (serv *snapshotServer) SetSource(source queue.Source) {
+	serv.source.Store(source)
+	serv.bootOnce.Do(func() {
+		close(serv.bootDone)
+	})
+	serv.Server.SetSource(source)
+}
+
+func (serv *snapshotServer) RunRequests(ctx context.Context, inst *vm.Instance,
+	reporter *report.Reporter, injectExec chan bool, updInfo dispatcher.UpdateInfo) (
+	[]*report.Report, error) {
+	select {
+	case <-serv.bootDone:
+		// Machine check has already completed. Proceed to snapshot mode.
+	default:
+		// Machine check has not completed yet. We must boot the VM normally using the base RPC server
+		// so that it connects, exchanges capabilities, and triggers MachineChecked.
+		bootCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			select {
+			case <-bootCtx.Done():
+			case <-serv.bootDone:
+				cancel()
+			}
+		}()
+		reps, err := serv.Server.RunRequests(bootCtx, inst, reporter, injectExec, updInfo)
+		if errors.Is(err, context.Canceled) {
+			err = nil
+		}
+		return reps, err
+	}
 
 	updInfo(func(info *dispatcher.Info) {
 		info.Status = "snapshot fuzzing"
 	})
 
-	err := mgr.snapshotLoop(ctx, inst)
+	executorBin, err := inst.Copy(serv.cfg.ExecutorBin)
 	if err != nil {
-		log.Error(err)
+		return nil, err
 	}
-}
 
-func (mgr *Manager) snapshotLoop(ctx context.Context, inst *vm.Instance) error {
-	executor, err := inst.Copy(mgr.cfg.ExecutorBin)
-	if err != nil {
-		return err
-	}
 	// All network connections (including ssh) will break once we start restoring snapshots.
 	// So we start a background process and log to /dev/kmsg.
-	cmd := fmt.Sprintf("nohup %v exec snapshot 1>/dev/null 2>/dev/kmsg </dev/null &", executor)
+	cmd := fmt.Sprintf("nohup %v exec snapshot 1>/dev/null 2>/dev/kmsg </dev/null &", executorBin)
 	ctxTimeout, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
-	if _, _, err := inst.Run(ctxTimeout, mgr.reporter, cmd); err != nil {
-		return err
+	if _, _, err := inst.Run(ctxTimeout, reporter, cmd); err != nil {
+		return nil, err
 	}
 
 	builder := flatbuffers.NewBuilder(0)
 	var envFlags flatrpc.ExecEnv
+
 	for first := true; ctx.Err() == nil; first = false {
-		mgr.servStats.StatExecs.Add(1)
-		req := mgr.snapshotSource.Next(inst.Index())
+		if serv.cfg.Stats.StatExecs != nil {
+			serv.cfg.Stats.StatExecs.Add(1)
+		}
+		req := serv.dist.Next(inst.Index())
 		if first {
 			envFlags = req.ExecOpts.EnvFlags
-			if err := mgr.snapshotSetup(inst, builder, envFlags); err != nil {
+			if err := serv.snapshotSetup(inst, builder, envFlags); err != nil {
 				req.Done(&queue.Result{Status: queue.Crashed})
-				return err
+				return nil, err
 			}
 		}
 		if envFlags != req.ExecOpts.EnvFlags {
@@ -64,44 +124,46 @@ func (mgr *Manager) snapshotLoop(ctx context.Context, inst *vm.Instance) error {
 				envFlags, req.ExecOpts.EnvFlags))
 		}
 
-		res, output, err := mgr.snapshotRun(inst, builder, req)
+		res, output, err := serv.snapshotRun(inst, builder, req)
 		if err != nil {
 			req.Done(&queue.Result{Status: queue.Crashed})
-			return err
+			return nil, err
 		}
 
-		if mgr.reporter.ContainsCrash(output) {
+		if reporter.ContainsCrash(output) {
 			res.Status = queue.Crashed
-			rep := mgr.reporter.Parse(output)
+			rep := reporter.Parse(output)
 			buf := new(bytes.Buffer)
 			fmt.Fprintf(buf, "program:\n%s\n", req.Prog.Serialize())
 			buf.Write(rep.Output)
 			rep.Output = buf.Bytes()
-			mgr.crashes <- &manager.Crash{Report: rep}
+
+			req.Done(res)
+			return []*report.Report{rep}, nil
 		}
 
 		req.Done(res)
 	}
-	return nil
+	return nil, nil
 }
 
-func (mgr *Manager) snapshotSetup(inst *vm.Instance, builder *flatbuffers.Builder, env flatrpc.ExecEnv) error {
+func (serv *snapshotServer) snapshotSetup(inst *vm.Instance, builder *flatbuffers.Builder, env flatrpc.ExecEnv) error {
 	msg := flatrpc.SnapshotHandshakeT{
-		CoverEdges:       mgr.cfg.Experimental.CoverEdges,
-		Kernel64Bit:      mgr.cfg.SysTarget.PtrSize == 8,
-		Slowdown:         int32(mgr.cfg.Timeouts.Slowdown),
-		SyscallTimeoutMs: int32(mgr.cfg.Timeouts.Syscall / time.Millisecond),
-		ProgramTimeoutMs: int32(mgr.cfg.Timeouts.Program / time.Millisecond),
-		Features:         mgr.enabledFeatures,
+		CoverEdges:       serv.cfg.UseCoverEdges,
+		Kernel64Bit:      serv.cfg.Kernel64Bit,
+		Slowdown:         int32(serv.cfg.Slowdown),
+		SyscallTimeoutMs: int32(serv.cfg.SyscallTimeoutMs),
+		ProgramTimeoutMs: int32(serv.cfg.ProgramTimeoutMs),
+		Features:         serv.Server.Features(),
 		EnvFlags:         env,
-		SandboxArg:       mgr.cfg.SandboxArg,
+		SandboxArg:       serv.cfg.SandboxArg,
 	}
 	builder.Reset()
 	builder.Finish(msg.Pack(builder))
 	return inst.SetupSnapshot(builder.FinishedBytes())
 }
 
-func (mgr *Manager) snapshotRun(inst *vm.Instance, builder *flatbuffers.Builder, req *queue.Request) (
+func (serv *snapshotServer) snapshotRun(inst *vm.Instance, builder *flatbuffers.Builder, req *queue.Request) (
 	*queue.Result, []byte, error) {
 	progData, err := req.Prog.SerializeForExec()
 	if err != nil {
@@ -174,8 +236,6 @@ func parseExecResult(data []byte) *flatrpc.ExecResult {
 	}
 	raw, err := flatrpc.Parse[*flatrpc.ExecutorMessageRaw](data[flatbuffers.SizeUint32:])
 	if err != nil {
-		// Don't consider result parsing error as an infrastructure error,
-		// it's just the test program corrupted memory.
 		return &flatrpc.ExecResult{
 			Error: err.Error(),
 		}

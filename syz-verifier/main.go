@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/pkg/report"
 	"github.com/google/syzkaller/pkg/rpcserver"
+	"github.com/google/syzkaller/pkg/snapshotserver"
 	"github.com/google/syzkaller/pkg/tool"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/vm"
@@ -53,6 +55,21 @@ func Setup(name string, cfg *mgrconfig.Config, debug bool) (*Kernel, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rpc server for %q: %w", name, err)
+	}
+
+	if cfg.Snapshot {
+		snapCfg := snapshotserver.Config{
+			ExecutorBin:      cfg.ExecutorBin,
+			UseCoverEdges:    cfg.Experimental.CoverEdges,
+			Kernel64Bit:      cfg.SysTarget.PtrSize == 8,
+			Slowdown:         cfg.Timeouts.Slowdown,
+			SyscallTimeoutMs: int(cfg.Timeouts.Syscall / time.Millisecond),
+			ProgramTimeoutMs: int(cfg.Timeouts.Program / time.Millisecond),
+			Features:         flatrpc.Feature(0), // Will be set during MachineChecked.
+			SandboxArg:       cfg.SandboxArg,
+			Stats:            kernel.servStats,
+		}
+		kernel.serv = snapshotserver.New(kernel.serv, snapCfg)
 	}
 
 	vmPool, err := vm.Create(cfg, debug)
