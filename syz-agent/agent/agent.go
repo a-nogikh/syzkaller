@@ -317,7 +317,7 @@ func (s *Server) executeJob(ctx context.Context, req *dashapi.AIJobPollResp) (ou
 			Span:      span,
 		})
 	}
-	return flow.Execute(ctx, s.cfg.Model, s.workdir, inputs, s.cache, onEvent)
+	return flow.Execute(ctx, s.cfg.Model, s.workdir, inputs, s.cache, nil, onEvent)
 }
 
 func (s *Server) modelOverQuota(flow *aflow.Flow) bool {

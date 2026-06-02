@@ -58,6 +58,10 @@ var kernelBackports = []vcs.BackportCommit{
 }
 
 func checkout(ctx *aflow.Context, args checkoutArgs) (checkoutResult, error) {
+	if ctx.Env != nil && ctx.Env.KernelSrcDir != "" {
+		return checkoutResult{KernelSrc: ctx.Env.KernelSrcDir}, nil
+	}
+
 	var res checkoutResult
 	var cacheKey strings.Builder
 	cacheKey.WriteString(args.KernelCommit)
@@ -119,6 +123,11 @@ func checkout(ctx *aflow.Context, args checkoutArgs) (checkoutResult, error) {
 }
 
 func checkoutScratch(ctx *aflow.Context, args checkoutScratchArgs) (checkoutScratchResult, error) {
+	if ctx.Env != nil && ctx.Env.KernelSrcDir != "" {
+		return checkoutScratchResult{}, fmt.Errorf("workflow requires a mutable scratch checkout, "+
+			"but the execution environment provided an external kernel source (%s)", ctx.Env.KernelSrcDir)
+	}
+
 	dir, err := ctx.TempDir()
 	if err != nil {
 		return checkoutScratchResult{}, err
@@ -157,7 +166,14 @@ var repoMu sync.Mutex
 func UseLinuxRepo(ctx *aflow.Context, fn func(string, vcs.Repo) error) error {
 	repoMu.Lock()
 	defer repoMu.Unlock()
-	kernelRepoDir := filepath.Join(ctx.Workdir, "repo", targets.Linux)
+
+	var kernelRepoDir string
+	if ctx.Env != nil && ctx.Env.KernelSrcDir != "" {
+		kernelRepoDir = ctx.Env.KernelSrcDir
+	} else {
+		kernelRepoDir = filepath.Join(ctx.Workdir, "repo", targets.Linux)
+	}
+
 	repo, err := vcs.NewRepo(targets.Linux, "", kernelRepoDir)
 	if err != nil {
 		return err

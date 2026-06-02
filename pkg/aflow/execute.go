@@ -28,7 +28,7 @@ import (
 // it can be shared across parallel executions in the same process, and preferably
 // preserved across process restarts for caching purposes.
 func (flow *Flow) Execute(ctx context.Context, model, workdir string, inputs map[string]any,
-	cache *Cache, onEvent onEvent) (map[string]any, error) {
+	cache *Cache, env *EnvConfig, onEvent onEvent) (map[string]any, error) {
 	convertedInputs, err := flow.checkInputs(inputs)
 	if err != nil {
 		return nil, fmt.Errorf("flow inputs are missing: %w", err)
@@ -39,6 +39,7 @@ func (flow *Flow) Execute(ctx context.Context, model, workdir string, inputs map
 	c := &Context{
 		Context:  ctx,
 		Workdir:  osutil.Abs(workdir),
+		Env:      env,
 		llmModel: model,
 		cache:    cache,
 		state:    inputs,
@@ -294,9 +295,14 @@ func loadModelList(ctx context.Context) (*genai.Client, map[string]*modelInfo, s
 		"or GOOGLE_CLOUD_PROJECT/GOOGLE_VERTEX_API_KEY (Vertex AI)")
 }
 
+type EnvConfig struct {
+	KernelSrcDir string
+}
+
 type Context struct {
 	Context     context.Context
 	Workdir     string
+	Env         *EnvConfig
 	llmModel    string
 	cache       *Cache
 	cachedDirs  []string

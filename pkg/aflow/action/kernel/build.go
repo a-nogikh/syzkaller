@@ -103,6 +103,11 @@ func BuildKernel(buildDir, srcDir, cfg, targetOS, targetArch string, cleanup boo
 }
 
 func buildKernel(ctx *aflow.Context, args buildArgs) (buildResult, error) {
+	if ctx.Env != nil && ctx.Env.KernelSrcDir != "" {
+		return buildResult{}, fmt.Errorf("workflow requires kernel compilation, but the execution "+
+			"environment provided an external kernel source (%s) and does not support builds", ctx.Env.KernelSrcDir)
+	}
+
 	desc := fmt.Sprintf("kernel commit %v, kernel config hash %v",
 		args.KernelCommit, hash.String(args.KernelConfig))
 	dir, err := ctx.Cache("build", desc, func(dir string) error {

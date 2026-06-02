@@ -130,7 +130,7 @@ func run(ctx context.Context, args RunArgs) error {
 		return nil
 	}
 
-	_, err = flow.Execute(ctx, args.Model, args.Workdir, inputs, cache, onEventFunc)
+	_, err = flow.Execute(ctx, args.Model, args.Workdir, inputs, cache, nil, onEventFunc)
 	return err
 }
 
