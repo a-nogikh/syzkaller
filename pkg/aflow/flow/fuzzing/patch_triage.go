@@ -5,6 +5,7 @@ package fuzzing
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/syzkaller/pkg/aflow"
@@ -32,6 +33,12 @@ func init() {
 						func(ctx *aflow.Context, state struct{}, args ai.PatchTriageResult) (ai.PatchTriageResult, error) {
 							if args.Reasoning == "" {
 								return args, aflow.BadCallError("reasoning must be provided")
+							}
+							if !args.WorthFuzzing && len(args.FocusSymbols) > 0 {
+								return args, aflow.BadCallError("FocusSymbols must be empty if WorthFuzzing is false")
+							}
+							for i, cfg := range args.EnableConfigs {
+								args.EnableConfigs[i] = strings.TrimPrefix(cfg, "CONFIG_")
 							}
 							return args, nil
 						},
@@ -81,4 +88,13 @@ Return WorthFuzzing=false if the patch only contains:
 even when utilizing software-emulated hardware (e.g., usb gadget, mac80211_hwsim).
 
 If it modifies reachable core kernel logic, drivers, or architectures, use your code search
-tools to verify the code can be executed, then return WorthFuzzing=true.`
+tools to verify the code can be executed, then return WorthFuzzing=true.
+
+When returning WorthFuzzing=true, you MUST ALSO:
+1. Extract any specific kernel functions that should be heavily fuzzed into FocusSymbols.
+   Avoid listing generic hot-path functions to prevent skewed test distributions.
+2. Identify any specific CONFIG_ options required to properly test this new/modified feature.
+   Go and look into the Kconfig files and check for ifdefs around the code, do not make assumptions.
+   Do not list too generic configs (we already have them enabled). Only list those that
+   specifically cover the modified code. List them in the EnableConfigs output array,
+   and DO NOT add a 'CONFIG_' prefix (e.g., return "NET_IPV4" instead of "CONFIG_NET_IPV4").`
