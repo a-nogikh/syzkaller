@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,20 +38,26 @@ func main() {
 		flagAutoUpdate = flag.Bool("autoupdate", false, "auto-update the binary")
 		flagSyzkaller  = flag.String("syzkaller", "", "path to syzkaller checkout (bypasses updater)")
 		flagName       = flag.String("name", "", "agent name (must be unique!)")
+		flagSuffix     = flag.String("suffix", "", "suffix to append to workflow names")
+		flagWorkflows  = flag.String("workflows", "", "comma-separated list of workflows to serve (overrides config)")
 	)
 	defer tool.Init()()
 	log.SetName("syz-agent")
 	if err := run(*flagConfig, *flagExitOnUpgrade, *flagAutoUpdate,
-		*flagSyzkaller, *flagName); err != nil {
+		*flagSyzkaller, *flagName, *flagSuffix, *flagWorkflows); err != nil {
 		log.Fatal(err)
 	}
 }
 
 const workdir = "workdir"
 
-func run(configFile string, exitOnUpgrade, autoUpdate bool, syzkallerDir, name string) error {
+func run(configFile string, exitOnUpgrade, autoUpdate bool, syzkallerDir, name, suffix, workflows string) error {
 	cfg, err := loadConfig(configFile)
 	if err != nil {
+		return err
+	}
+	cfg.Suffix = suffix
+	if err := cfg.ValidateAndSetWorkflows(workflows); err != nil {
 		return err
 	}
 	if name == "" {
@@ -218,9 +225,13 @@ func (s *Server) poll(ctx context.Context) (bool, error) {
 			s.modelOverQuota(flow) {
 			continue
 		}
+		name := flow.Name
+		if s.cfg.Suffix != "" {
+			name = name + "-" + s.cfg.Suffix
+		}
 		req.Workflows = append(req.Workflows, dashapi.AIWorkflow{
 			Type: flow.Type,
-			Name: flow.Name,
+			Name: name,
 		})
 	}
 	if len(req.Workflows) == 0 {
@@ -287,7 +298,11 @@ func (s *Server) executeJob(ctx context.Context, req *dashapi.AIJobPollResp) (ou
 			err = fmt.Errorf("panic during job execution: %v", r)
 		}
 	}()
-	flow := aflow.Flows[req.Workflow]
+	workflowName := req.Workflow
+	if s.cfg.Suffix != "" {
+		workflowName = strings.TrimSuffix(workflowName, "-"+s.cfg.Suffix)
+	}
+	flow := aflow.Flows[workflowName]
 	if flow == nil {
 		return nil, fmt.Errorf("unsupported flow %q", req.Workflow)
 	}

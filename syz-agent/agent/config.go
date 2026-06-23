@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/google/syzkaller/pkg/aflow"
 	"github.com/google/syzkaller/pkg/config"
 	"github.com/google/syzkaller/pkg/gcpsecret"
 	"github.com/google/syzkaller/pkg/mgrconfig"
@@ -43,6 +45,19 @@ type Config struct {
 	Workflows       []string                 `json:"workflows"`
 	GeminiAPIKey    string                   `json:"gemini_api_key"`
 	CloudProject    string                   `json:"cloud_project"`
+	Suffix          string                   `json:"-"` // Passed via CLI flag.
+}
+
+func (cfg *Config) ValidateAndSetWorkflows(workflows string) error {
+	if workflows != "" {
+		cfg.Workflows = strings.Split(workflows, ",")
+	}
+	for _, w := range cfg.Workflows {
+		if aflow.Flows[w] == nil {
+			return fmt.Errorf("unknown workflow %q specified in config/flags", w)
+		}
+	}
+	return nil
 }
 
 func loadConfig(configFile string) (*Config, error) {
