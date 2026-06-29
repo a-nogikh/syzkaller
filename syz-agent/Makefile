@@ -39,6 +39,15 @@ k8s-prod-agent:
 		-e "s~\$${IMAGE_TAG}~$(IMAGE_TAG)~g" \
 		-e "s~\$${GIT_COOKIE_DAEMON}~'$(GIT_COOKIE_DAEMON)'~g"
 
+k8s-exp-agent:
+	@if [ -z "$(EXP_NAME)" ]; then echo "EXP_NAME is not set" && exit 1; fi
+	@$(KUSTOMIZE) ./k8s/overlays/exp-agent/ | sed \
+		-e "s~\$${EXP_NAME}~$(EXP_NAME)~g" \
+		-e "s~\$${IMAGE_NAME}~$(IMAGE_NAME)~g" \
+		-e "s~\$${IMAGE_TAG}~$(IMAGE_TAG)~g" \
+		-e "s~\$${GIT_COOKIE_DAEMON}~'$(GIT_COOKIE_DAEMON)'~g" \
+		-e "s~\$${WORKFLOWS}~$(WORKFLOWS)~g"
+
 k8s-prod-lore:
 	@$(KUSTOMIZE) ./k8s/overlays/prod-lore/ | sed \
 		-e "s~\$${LORE_RELAY_IMAGE_NAME}~$(LORE_RELAY_IMAGE_NAME)~g" \
