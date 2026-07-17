@@ -62,6 +62,7 @@ func init() {
 				"AckedBy":    []string{},
 				"TestedBy":   []string{},
 				"ReportedBy": []string{},
+				"StyleItems": []string{},
 			},
 			Root: aflow.Pipeline(
 				baseCommitPicker,
@@ -366,6 +367,7 @@ func patchGenerationLoop(beforeEach aflow.Action, instruction, prompt string, ex
 				Prompt:      prompt,
 				Tools:       aflow.Tools(common.CodeAccessTools, codeeditor.Tool, patchdiff.Tool, extraTools),
 			},
+			formatPatchFlow(),
 			crash.TestPatch, // -> PatchDiff or TestError
 		)...),
 	}

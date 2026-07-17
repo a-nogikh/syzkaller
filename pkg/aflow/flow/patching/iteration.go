@@ -55,6 +55,7 @@ type PatchIterationInputs struct {
 
 type verdictAgentOutputs struct {
 	CodeItems         []string `jsonschema:"Clean list of changes explicitly requested for the code itself."`
+	StyleItems        []string `jsonschema:"Clean list of changes requested to code formatting."`
 	DescriptionItems  []string `jsonschema:"Clean list of changes requested to the commit description/changelog."`
 	FixesItems        []string `jsonschema:"Clean list of comments suggesting Fixes tag is incorrect or needs update."`
 	UpdateFixesReason string   `jsonschema:"Explanation of why Fixes tag needs update, and any hints by reviewers."`
@@ -62,7 +63,8 @@ type verdictAgentOutputs struct {
 }
 
 func validateVerdictOutputs(ctx *aflow.Context, state struct{}, args verdictAgentOutputs) (verdictAgentOutputs, error) {
-	hasItems := len(args.CodeItems) > 0 || len(args.DescriptionItems) > 0 || len(args.FixesItems) > 0
+	hasItems := len(args.CodeItems) > 0 || len(args.StyleItems) > 0 ||
+		len(args.DescriptionItems) > 0 || len(args.FixesItems) > 0
 	hasResend := args.ResendReason != ""
 	if hasItems && hasResend {
 		return args, aflow.BadCallError("cannot provide both Items arrays and a ResendReason; " +
@@ -125,7 +127,7 @@ func init() {
 					Do: aflow.Pipeline(
 						kernel.CheckoutScratch,
 						&aflow.If{
-							Condition: "CodeItems",
+							Condition: "NeedCodeOrStyleChanges",
 							Do: patchGenerationLoop(
 								applyGitPatch, patchIterationInstruction, patchIterationPrompt, viewPatchHistoryTool),
 							Else: aflow.Pipeline(applyGitPatch, forwardPatchDiff),
@@ -223,17 +225,21 @@ var viewPatchHistoryTool = aflow.NewFuncTool("view-patch-history", func(ctx *afl
 
 var extractTriageResults = aflow.NewFuncAction("extract-triage-results", func(ctx *aflow.Context, args struct {
 	CodeItems        []string
+	StyleItems       []string
 	DescriptionItems []string
 	FixesItems       []string
 	ResendReason     string
 }) (struct {
-	NeedNewVersion bool
+	NeedNewVersion         bool
+	NeedCodeOrStyleChanges bool
 }, error) {
 	return struct {
-		NeedNewVersion bool
+		NeedNewVersion         bool
+		NeedCodeOrStyleChanges bool
 	}{
-		NeedNewVersion: len(args.CodeItems) > 0 || len(args.DescriptionItems) > 0 ||
+		NeedNewVersion: len(args.CodeItems) > 0 || len(args.StyleItems) > 0 || len(args.DescriptionItems) > 0 ||
 			len(args.FixesItems) > 0 || args.ResendReason != "",
+		NeedCodeOrStyleChanges: len(args.CodeItems) > 0 || len(args.StyleItems) > 0 || args.ResendReason != "",
 	}, nil
 })
 
@@ -391,10 +397,12 @@ A previous version of a patch (v{{.PreviousPatchVersion}}) was generated to fix 
 
 {{.PreviousPatchDiff}}
 
+{{if .CodeItems}}
 The triage agent has extracted the following required changes from the reviewers' emails:
 
 {{range $item := .CodeItems}}
 - {{$item}}
+{{end}}
 {{end}}
 
 IMPORTANT: The current version of the patch (v{{.PreviousPatchVersion}}, shown above) is CURRENTLY APPLIED
@@ -434,10 +442,12 @@ Your task is to determine if a new version of the patch needs to be generated ba
 You must also distill the messy email feedback into clean lists of requirements for downstream agents.
 CRITICAL: You must extract actionable items ONLY from the new comments provided in the current iteration.
 Do not extract items from previous historical comments.
-Separate the actionable items into three strictly divided categories:
-1. CodeActionItems: Changes requested to the C/header source code.
-2. DescriptionActionItems: Changes requested to the commit description or changelog.
-3. FixesActionItems: Feedback regarding the Fixes tag.
+Separate the actionable items into four strictly divided categories:
+1. CodeActionItems: Changes requested to the C/header source code logic or structure.
+2. StyleActionItems: Changes requested to the code formatting or style
+   (e.g., indentation, alignment, naming conventions).
+3. DescriptionActionItems: Changes requested to the commit description or changelog.
+4. FixesActionItems: Feedback regarding the Fixes tag.
 Watch out for citations (lines starting with >) which often contain previous messages or context, not new requirements.
 Note: You shouldn't fully debug the issue right now. Just do a cautious check if the V+1 patch is necessary.
 

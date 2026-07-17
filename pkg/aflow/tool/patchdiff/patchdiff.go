@@ -44,10 +44,7 @@ func patchDiff(ctx *aflow.Context, state state, args args) (result, error) {
 		gitArgs = append(gitArgs, "--", args.File)
 	}
 
-	cmd := osutil.Command("git", gitArgs...)
-	cmd.Dir = state.KernelScratchSrc
-
-	output, err := osutil.Run(1*time.Minute, cmd)
+	output, err := Diff(state.KernelScratchSrc, gitArgs[1:]...)
 	if err != nil {
 		if verr, ok := errors.AsType[*osutil.VerboseError](err); ok {
 			if bytes.Contains(verr.Output, []byte("outside repository")) {
@@ -61,4 +58,14 @@ func patchDiff(ctx *aflow.Context, state state, args args) (result, error) {
 	}
 
 	return result{Output: string(output)}, nil
+}
+
+func Diff(repo string, args ...string) ([]byte, error) {
+	gitArgs := append([]string{"diff"}, args...)
+	cmd := osutil.Command("git", gitArgs...)
+	cmd.Dir = repo
+	if err := osutil.Sandbox(cmd, true, false); err != nil {
+		return nil, err
+	}
+	return osutil.Run(time.Minute, cmd)
 }
