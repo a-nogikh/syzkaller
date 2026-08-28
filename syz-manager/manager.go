@@ -56,11 +56,13 @@ import (
 )
 
 var (
-	flagConfig = flag.String("config", "", "configuration file")
-	flagDebug  = flag.Bool("debug", false, "dump all VM output to console")
-	flagBench  = flag.String("bench", "", "write execution statistics into this file periodically")
-	flagMode   = flag.String("mode", ModeFuzzing.Name, modesDescription())
-	flagTests  = flag.String("tests", "", "prefix to match test file names (for -mode run-tests)")
+	flagConfig        = flag.String("config", "", "configuration file")
+	flagDebug         = flag.Bool("debug", false, "dump all VM output to console")
+	flagBench         = flag.String("bench", "", "write execution statistics into this file periodically")
+	flagMode          = flag.String("mode", ModeFuzzing.Name, modesDescription())
+	flagTests         = flag.String("tests", "", "prefix to match test file names (for -mode run-tests)")
+	flagSourceWorkdir = flag.String("source-workdir", "",
+		"source workdir to read crashes from in repro-exp mode (read-only)")
 )
 
 type Manager struct {
@@ -113,6 +115,7 @@ type Manager struct {
 	fsckChecker  image.FsckChecker
 
 	reproLoop *manager.ReproLoop
+	reproExp  *manager.ReproExp
 
 	Stats
 }
@@ -179,6 +182,19 @@ var (
 			return nil
 		},
 	}
+	ModeReproExp = &Mode{
+		Name: "repro-exp",
+		Description: `run reproduction experiment on existing crashes in source workdir
+	Preprocesses crash logs with various parameters (different program counts per proc,
+	sliding window) and runs pkg/repro jobs in parallel sharing the VM pool.
+	Results are displayed on the web dashboard and saved in workdir.`,
+		CheckConfig: func(cfg *mgrconfig.Config) error {
+			if *flagSourceWorkdir == "" {
+				return fmt.Errorf("-source-workdir is required in repro-exp mode")
+			}
+			return nil
+		},
+	}
 
 	modes = []*Mode{
 		ModeFuzzing,
@@ -187,6 +203,7 @@ var (
 		ModeCorpusRun,
 		ModeRunTests,
 		ModeIfaceProbe,
+		ModeReproExp,
 	}
 )
 
@@ -233,7 +250,7 @@ func main() {
 	}
 	var mode *Mode
 	for _, m := range modes {
-		if *flagMode == m.Name {
+		if *flagMode == m.Name || (*flagMode == "repro-experiment" && m == ModeReproExp) {
 			mode = m
 			break
 		}
@@ -366,14 +383,25 @@ func RunManager(mode *Mode, cfg *mgrconfig.Config) {
 	mgr.reproLoop = manager.NewReproLoop(mgr, reproVMs, mgr.cfg.DashboardOnlyRepro)
 	mgr.http.ReproLoop = mgr.reproLoop
 	mgr.http.TogglePause = mgr.pool.TogglePause
-
 	if mgr.cfg.HTTP != "" {
+		log.Logf(0, "dashboard is accessible at http://%v", mgr.cfg.HTTP)
 		go func() {
 			err := mgr.http.Serve(ctx)
 			if err != nil {
 				log.Fatalf("failed to serve HTTP: %v", err)
 			}
 		}()
+	}
+
+	if mgr.mode == ModeReproExp {
+		absSourceWorkdir, err := filepath.Abs(*flagSourceWorkdir)
+		if err != nil {
+			log.Fatalf("invalid -source-workdir: %v", err)
+		}
+		mgr.reproExp = manager.NewReproExp(mgr.cfg, absSourceWorkdir, mgr.reporter, mgr.pool)
+		mgr.http.ReproExp = mgr.reproExp
+		mgr.http.SourceWorkdir = absSourceWorkdir
+		mgr.crashStore.BaseDir = absSourceWorkdir
 	}
 	go mgr.trackUsedFiles()
 	go mgr.processFuzzingResults(ctx)
@@ -1239,6 +1267,10 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
 			mgr.exit("interface probe")
 		}()
 		mgr.serv.SetSource(exec)
+		return nil
+	case ModeReproExp:
+		mgr.reproExp.Start(vm.ShutdownCtx(), features)
+		mgr.serv.SetSource(queue.Plain())
 		return nil
 	}
 	panic(fmt.Sprintf("unexpected mode %q", mgr.mode.Name))

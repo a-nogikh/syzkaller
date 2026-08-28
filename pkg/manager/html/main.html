@@ -32,6 +32,53 @@ Use of this source code is governed by Apache 2 LICENSE that can be found in the
 </div>
 {{end}}
 
+{{if .ReproExp}}
+<table class="list_table">
+	<caption class="bug_list_caption">Reproduction Experiment Results:</caption>
+	<thead>
+	<tr>
+		<th>Bug</th>
+		{{range $col := .ReproExp.Columns}}
+		<th style="text-align:center;">{{$col}}</th>
+		{{end}}
+	</tr>
+	</thead>
+	<tbody>
+	{{range $row := .ReproExp.Rows}}
+	<tr>
+		<td class="title"><a href="/crash?id={{$row.ID}}">{{$row.Title}}</a></td>
+		{{range $cell := $row.Cells}}
+		<td class="result" style="text-align:center;">
+			{{if $cell.LogPath}}
+				<a href="/file?name={{$cell.LogPath}}" title="{{$cell.Tooltip}}"><span style="{{$cell.Style}}">{{$cell.Status}}</span></a>
+				{{if $cell.TruncatedLog}}
+				<a href="/file?name={{$cell.TruncatedLog}}" title="truncated input log" style="font-size: 0.85em; color: #555; text-decoration: none;">[in]</a>
+				{{end}}
+			{{else if $cell.TruncatedLog}}
+				<span title="{{$cell.Tooltip}}" style="{{$cell.Style}}">{{$cell.Status}}</span>
+				<a href="/file?name={{$cell.TruncatedLog}}" title="truncated input log" style="font-size: 0.85em; color: #555; text-decoration: none;">[in]</a>
+			{{else}}
+				<span title="{{$cell.Tooltip}}" style="{{$cell.Style}}">{{$cell.Status}}</span>
+			{{end}}
+		</td>
+		{{end}}
+	</tr>
+	{{end}}
+	</tbody>
+	<tfoot>
+	<tr style="font-weight: bold; background: #e0ebf5;">
+		<td>Success Rate</td>
+		{{range $stat := .ReproExp.Stats}}
+		<td style="text-align:center;">
+			{{$stat.Text}}
+			{{if $stat.Breakdown}}<br><small style="color: #555; font-weight: normal;">({{$stat.Breakdown}})</small>{{end}}
+		</td>
+		{{end}}
+	</tr>
+	</tfoot>
+</table>
+{{end}}
+
 {{if .Crashes}}
 <table class="list_table">
 	<caption>Crashes:</caption>

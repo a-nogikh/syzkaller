@@ -52,14 +52,16 @@ type CoverageInfo struct {
 
 type HTTPServer struct {
 	// To be set before calling Serve.
-	Cfg         *mgrconfig.Config
-	StartTime   time.Time
-	CrashStore  *CrashStore
-	DiffStore   *DiffFuzzerStore
-	ReproLoop   *ReproLoop
-	Pool        *vm.Dispatcher
-	Pools       map[string]*vm.Dispatcher
-	TogglePause func(paused bool)
+	Cfg           *mgrconfig.Config
+	StartTime     time.Time
+	CrashStore    *CrashStore
+	DiffStore     *DiffFuzzerStore
+	ReproExp      *ReproExp
+	SourceWorkdir string
+	ReproLoop     *ReproLoop
+	Pool          *vm.Dispatcher
+	Pools         map[string]*vm.Dispatcher
+	TogglePause   func(paused bool)
 
 	// Can be set dynamically after calling Serve.
 	Corpus          atomic.Pointer[corpus.Corpus]
@@ -211,6 +213,9 @@ func (serv *HTTPServer) httpMain(w http.ResponseWriter, r *http.Request) {
 
 	if serv.DiffStore != nil {
 		data.PatchedOnly, data.AffectsBoth, data.InProgress = serv.collectDiffCrashes()
+	}
+	if serv.ReproExp != nil {
+		data.ReproExp = serv.ReproExp.UI()
 	}
 	executeTemplate(w, mainTemplate, data)
 }
@@ -822,11 +827,16 @@ func (serv *HTTPServer) httpPrio(w http.ResponseWriter, r *http.Request) {
 
 func (serv *HTTPServer) httpFile(w http.ResponseWriter, r *http.Request) {
 	file := filepath.Clean(r.FormValue("name"))
-	if !strings.HasPrefix(file, "crashes/") && !strings.HasPrefix(file, "corpus/") {
+	if !strings.HasPrefix(file, "crashes/") && !strings.HasPrefix(file, "corpus/") &&
+		!strings.HasPrefix(file, "repro-exp/") {
 		http.Error(w, "oh, oh, oh!", http.StatusInternalServerError)
 		return
 	}
-	absPath := filepath.Join(serv.Cfg.Workdir, file)
+	baseDir := serv.Cfg.Workdir
+	if strings.HasPrefix(file, "crashes/") && serv.SourceWorkdir != "" {
+		baseDir = serv.SourceWorkdir
+	}
+	absPath := filepath.Join(baseDir, file)
 	if r.FormValue("raw") != "" {
 		http.ServeFile(w, r, absPath)
 		return
@@ -1128,6 +1138,7 @@ type UISummaryData struct {
 	PatchedOnly         *UIDiffTable
 	AffectsBoth         *UIDiffTable
 	InProgress          *UIDiffTable
+	ReproExp            *UIReproExpTable
 	Log                 string
 	ShowCore            bool
 	FilterSubsystems    []string

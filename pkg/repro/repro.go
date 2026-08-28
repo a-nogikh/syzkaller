@@ -57,6 +57,7 @@ type reproContext struct {
 	logf           func(string, ...any)
 	target         *targets.Target
 	crashTitle     string
+	crashAltTitles []string
 	crashType      crash.Type
 	crashStart     int
 	crashExecutor  *report.ExecutorInfo
@@ -69,6 +70,7 @@ type reproContext struct {
 	observedTitles map[string]crash.Type
 	fast           bool
 	slidingWindow  bool
+	exactCrash     bool
 }
 
 // execInterface describes the interfaces needed by pkg/repro.
@@ -88,6 +90,7 @@ type Environment struct {
 	// it skips multiple simpifications and C repro generation.
 	Fast          bool
 	SlidingWindow bool
+	ExactCrash    bool
 
 	logf func(string, ...any)
 }
@@ -111,11 +114,13 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 	crashStart := len(crashLog)
 	crashTitle, crashType := "", crash.UnknownType
 	var crashExecutor *report.ExecutorInfo
+	var crashAltTitles []string
 	if rep := env.Reporter.Parse(crashLog); rep != nil {
 		crashStart = rep.StartPos
 		crashTitle = rep.Title
 		crashType = rep.Type
 		crashExecutor = rep.Executor
+		crashAltTitles = rep.AltTitles
 	}
 	testTimeouts := []time.Duration{
 		max(30*time.Second, 3*cfg.Timeouts.Program), // to catch simpler crashes (i.e. no races and no hangs)
@@ -140,13 +145,14 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 		testTimeouts = []time.Duration{30 * time.Second, 5 * time.Minute}
 	}
 	reproCtx := &reproContext{
-		ctx:           ctx,
-		exec:          exec,
-		target:        cfg.SysTarget,
-		crashTitle:    crashTitle,
-		crashType:     crashType,
-		crashStart:    crashStart,
-		crashExecutor: crashExecutor,
+		ctx:            ctx,
+		exec:           exec,
+		target:         cfg.SysTarget,
+		crashTitle:     crashTitle,
+		crashAltTitles: crashAltTitles,
+		crashType:      crashType,
+		crashStart:     crashStart,
+		crashExecutor:  crashExecutor,
 
 		entries:        entries,
 		testTimeouts:   testTimeouts,
@@ -156,7 +162,16 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 		observedTitles: map[string]crash.Type{},
 		fast:           env.Fast,
 		slidingWindow:  env.SlidingWindow,
+		exactCrash:     env.ExactCrash,
 		logf:           env.logf,
+	}
+	if env.ExactCrash {
+		if crashTitle != "" {
+			reproCtx.observedTitles[crashTitle] = crashType
+		}
+		for _, alt := range crashAltTitles {
+			reproCtx.observedTitles[alt] = crashType
+		}
 	}
 
 	return reproCtx.run()
@@ -480,10 +495,39 @@ func (ctx *reproContext) isExpectedCrash(ret verdict) bool {
 	if !ret.Crashed || ctx.report == nil {
 		return false
 	}
-	if ctx.crashTitle != "" && ctx.crashTitle != "no output/lost connection" && ctx.report.Title != ctx.crashTitle {
-		return false
+	if ctx.crashTitle == "" || ctx.crashTitle == "no output/lost connection" {
+		return true
 	}
-	return true
+	return TitlesIntersect(ctx.crashTitle, ctx.crashAltTitles, ctx.report.Title, ctx.report.AltTitles)
+}
+
+func TitlesIntersect(title1 string, alt1 []string, title2 string, alt2 []string) bool {
+	all1 := make([]string, 0, 1+len(alt1))
+	if title1 != "" {
+		all1 = append(all1, title1)
+	}
+	for _, alt := range alt1 {
+		if alt != "" {
+			all1 = append(all1, alt)
+		}
+	}
+
+	all2 := make([]string, 0, 1+len(alt2))
+	if title2 != "" {
+		all2 = append(all2, title2)
+	}
+	for _, alt := range alt2 {
+		if alt != "" {
+			all2 = append(all2, alt)
+		}
+	}
+
+	for _, t1 := range all1 {
+		if slices.Contains(all2, t1) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ctx *reproContext) extractSlidingWindow(entries []*prog.LogEntry,
@@ -519,14 +563,14 @@ func (ctx *reproContext) findCrashingSubslice(entries []*prog.LogEntry, duration
 				i+1, len(subslices), len(subslice))
 			return subslice, nil
 		}
-		if subRet.Crashed {
+		if !ctx.exactCrash && subRet.Crashed {
 			if fallbackSubslice == nil || (!isHighPrioReport(fallbackReport.Type) && isHighPrioReport(ctx.report.Type)) {
 				fallbackSubslice = subslice
 				fallbackReport = ctx.report
 			}
 		}
 	}
-	if fallbackSubslice != nil {
+	if fallbackSubslice != nil && !ctx.exactCrash {
 		ctx.reproLogf(3, "sliding window: no subslice reproduced expected crash; proceeding with observed crash")
 		ctx.report = fallbackReport
 		return fallbackSubslice, nil
@@ -812,7 +856,16 @@ func (ctx *reproContext) getVerdict(callback func() (rep *instance.RunResult, er
 		ctx.reproLogf(2, "not a leak crash: %v", rep.Title)
 		return verdict{false, result.Duration}, nil
 	}
-	if _, ok := ctx.observedTitles[rep.Title]; ok {
+	if ctx.exactCrash {
+		if !TitlesIntersect(ctx.crashTitle, ctx.crashAltTitles, rep.Title, rep.AltTitles) {
+			ctx.reproLogf(2, "crash title %q does not match target crash %q, ignore", rep.Title, ctx.crashTitle)
+			return verdict{false, result.Duration}, nil
+		}
+		ctx.observedTitles[rep.Title] = rep.Type
+		for _, alt := range rep.AltTitles {
+			ctx.observedTitles[alt] = rep.Type
+		}
+	} else if _, ok := ctx.observedTitles[rep.Title]; ok {
 		// Already established title, always permit.
 	} else if !isHighPrioReport(rep.Type) && ctx.observedHighPrioCrash() {
 		ctx.reproLogf(2, "ignore low priority crash: %v", rep.Title)

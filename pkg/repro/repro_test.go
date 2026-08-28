@@ -539,8 +539,181 @@ func TestSlidingWindowReplay(t *testing.T) {
 		require.Equal(t, "pause()\nalarm(0xa)\n", string(res.Prog.Serialize()))
 	})
 
+	t.Run("with sliding window and exact crash does not fall back to unrelated crash", func(t *testing.T) {
+		exec := &testExecInterface{
+			run: func(p []byte) (*instance.RunResult, error) {
+				str := string(p)
+				blockSize := strings.Count(str, "executing program")
+				if blockSize <= 80 && strings.Contains(str, "pause()") && strings.Contains(str, "alarm(0xa)") {
+					return fakeCrashResult("panic: other bug"), nil
+				}
+				return fakeCrashResult(""), nil
+			},
+		}
+		env := Environment{
+			Config:        mgrConfig,
+			Features:      flatrpc.AllFeatures,
+			Fast:          true,
+			Reporter:      reporter,
+			SlidingWindow: true,
+			ExactCrash:    true,
+			logf:          t.Logf,
+		}
+		res, _, err := runInner(context.Background(), []byte(panicLog), env, exec)
+		require.NoError(t, err)
+		require.Nil(t, res)
+	})
+
 	t.Run("with sliding window no crash skips bisection", func(t *testing.T) {
 		res := runTest(t, true, "")
 		require.Nil(t, res)
+	})
+}
+
+func TestTitlesIntersect(t *testing.T) {
+	tests := []struct {
+		name string
+		t1   string
+		alt1 []string
+		t2   string
+		alt2 []string
+		want bool
+	}{
+		{
+			name: "exact title match",
+			t1:   "BUG: test panic",
+			t2:   "BUG: test panic",
+			want: true,
+		},
+		{
+			name: "alt1 matches t2",
+			t1:   "BUG: other",
+			alt1: []string{"BUG: test panic"},
+			t2:   "BUG: test panic",
+			want: true,
+		},
+		{
+			name: "t1 matches alt2",
+			t1:   "BUG: test panic",
+			t2:   "BUG: other",
+			alt2: []string{"BUG: test panic"},
+			want: true,
+		},
+		{
+			name: "alt1 matches alt2",
+			t1:   "BUG: foo",
+			alt1: []string{"BUG: shared"},
+			t2:   "BUG: bar",
+			alt2: []string{"BUG: shared"},
+			want: true,
+		},
+		{
+			name: "no match",
+			t1:   "BUG: test panic",
+			alt1: []string{"BUG: alt1"},
+			t2:   "BUG: other panic",
+			alt2: []string{"BUG: alt2"},
+			want: false,
+		},
+		{
+			name: "both empty",
+			t1:   "",
+			t2:   "",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TitlesIntersect(tt.t1, tt.alt1, tt.t2, tt.alt2)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestExactCrashOption(t *testing.T) {
+	mgrConfig := &mgrconfig.Config{
+		Derived: mgrconfig.Derived{
+			TargetOS:     targets.Linux,
+			TargetVMArch: targets.AMD64,
+			SysTarget:    targets.Get(targets.Linux, targets.AMD64),
+		},
+		Sandbox: "namespace",
+	}
+	var err error
+	mgrConfig.Target, err = prog.GetTarget(targets.Linux, targets.AMD64)
+	require.NoError(t, err)
+	reporter, err := report.NewReporter(mgrConfig)
+	require.NoError(t, err)
+
+	panicLog := testReproLog + "\npanic: target bug\n"
+
+	t.Run("exact crash rejects unrelated crash", func(t *testing.T) {
+		exec := &testExecInterface{
+			run: func(p []byte) (*instance.RunResult, error) {
+				if strings.Contains(string(p), "pause()") {
+					return fakeCrashResult("panic: unrelated bug"), nil
+				}
+				return fakeCrashResult(""), nil
+			},
+		}
+		env := Environment{
+			Config:     mgrConfig,
+			Features:   flatrpc.AllFeatures,
+			Fast:       true,
+			Reporter:   reporter,
+			ExactCrash: true,
+			logf:       t.Logf,
+		}
+		res, _, err := runInner(context.Background(), []byte(panicLog), env, exec)
+		require.NoError(t, err)
+		require.Nil(t, res)
+	})
+
+	t.Run("exact crash accepts target crash", func(t *testing.T) {
+		exec := &testExecInterface{
+			run: func(p []byte) (*instance.RunResult, error) {
+				if strings.Contains(string(p), "pause()") && strings.Contains(string(p), "alarm(0xa)") {
+					return fakeCrashResult("panic: target bug"), nil
+				}
+				return fakeCrashResult(""), nil
+			},
+		}
+		env := Environment{
+			Config:     mgrConfig,
+			Features:   flatrpc.AllFeatures,
+			Fast:       true,
+			Reporter:   reporter,
+			ExactCrash: true,
+			logf:       t.Logf,
+		}
+		res, _, err := runInner(context.Background(), []byte(panicLog), env, exec)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		require.Equal(t, "pause()\nalarm(0xa)\n", string(res.Prog.Serialize()))
+	})
+
+	t.Run("exact crash accepts crash with matching AltTitles", func(t *testing.T) {
+		exec := &testExecInterface{
+			run: func(p []byte) (*instance.RunResult, error) {
+				if strings.Contains(string(p), "pause()") && strings.Contains(string(p), "alarm(0xa)") {
+					ret := fakeCrashResult("panic: different title")
+					ret.Report.AltTitles = []string{"panic: target bug"}
+					return ret, nil
+				}
+				return fakeCrashResult(""), nil
+			},
+		}
+		env := Environment{
+			Config:     mgrConfig,
+			Features:   flatrpc.AllFeatures,
+			Fast:       true,
+			Reporter:   reporter,
+			ExactCrash: true,
+			logf:       t.Logf,
+		}
+		res, _, err := runInner(context.Background(), []byte(panicLog), env, exec)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		require.Equal(t, "pause()\nalarm(0xa)\n", string(res.Prog.Serialize()))
 	})
 }
