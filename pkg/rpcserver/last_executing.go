@@ -14,10 +14,16 @@ import (
 	"github.com/google/syzkaller/prog"
 )
 
+const (
+	DefaultLastExecPerProc  = 50
+	DefaultLastExecTotalCap = 500
+)
+
 // LastExecuting keeps the given number of last executed programs
 // for each proc in a VM, and allows to query this set after a crash.
 type LastExecuting struct {
 	count     int
+	totalCap  int
 	procs     []ExecRecord
 	hanged    []ExecRecord // hanged programs, kept forever
 	positions []int
@@ -30,9 +36,10 @@ type ExecRecord struct {
 	Time time.Duration
 }
 
-func MakeLastExecuting(procs, count int) *LastExecuting {
+func MakeLastExecuting(procs, count, totalCap int) *LastExecuting {
 	return &LastExecuting{
 		count:     count,
+		totalCap:  totalCap,
 		procs:     make([]ExecRecord, procs*count),
 		positions: make([]int, procs),
 	}
@@ -83,6 +90,9 @@ func (last *LastExecuting) Collect() []ExecRecord {
 			break
 		}
 		procs[i].Time = max - proc.Time
+	}
+	if last.totalCap > 0 && len(procs) > last.totalCap {
+		procs = procs[len(procs)-last.totalCap:]
 	}
 	return procs
 }

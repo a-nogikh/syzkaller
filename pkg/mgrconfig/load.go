@@ -99,7 +99,7 @@ func DefaultValues() *Config {
 		Reproduce:      true,
 		Sandbox:        "none",
 		RPC:            ":0",
-		MaxCrashLogs:   100,
+		MaxCrashLogs:   3,
 		Procs:          6,
 		PreserveCorpus: true,
 		RunFsck:        true,

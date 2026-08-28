@@ -5,17 +5,18 @@ package rpcserver
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestLastExecutingEmpty(t *testing.T) {
-	last := MakeLastExecuting(10, 10)
+	last := MakeLastExecuting(10, 10, 0)
 	assert.Empty(t, last.Collect())
 }
 
 func TestLastExecuting(t *testing.T) {
-	last := MakeLastExecuting(21, 3)
+	last := MakeLastExecuting(21, 3, 0)
 	last.Note(1, 0, []byte("prog1"), 1)
 
 	last.Note(2, 1, []byte("prog2"), 2)
@@ -56,7 +57,7 @@ func TestLastExecuting(t *testing.T) {
 }
 
 func TestLastExecutingHanged(t *testing.T) {
-	last := MakeLastExecuting(1, 3)
+	last := MakeLastExecuting(1, 3, 0)
 	last.Note(1, 0, []byte("prog1"), 10)
 	last.Note(2, 0, []byte("prog2"), 20)
 	last.Hanged(2, 0, []byte("prog2"), 25)
@@ -75,4 +76,22 @@ func TestLastExecutingHanged(t *testing.T) {
 		{ID: 8, Proc: 0, Prog: []byte("prog8"), Time: 10},
 		{ID: 9, Proc: 0, Prog: []byte("prog9"), Time: 0},
 	})
+}
+
+func TestLastExecutingTotalCap(t *testing.T) {
+	// 3 procs, up to 10 progs per proc, capped at 5 total.
+	last := MakeLastExecuting(3, 10, 5)
+	for i := 1; i <= 10; i++ {
+		last.Note(i, i%3, []byte("prog"), time.Duration(i*10))
+	}
+	records := last.Collect()
+	assert.Len(t, records, 5)
+	var gotIDs []int
+	for _, rec := range records {
+		gotIDs = append(gotIDs, rec.ID)
+	}
+	assert.Equal(t, []int{6, 7, 8, 9, 10}, gotIDs)
+	assert.Equal(t, time.Duration(0), records[4].Time)
+	assert.Equal(t, time.Duration(10), records[3].Time)
+	assert.Equal(t, time.Duration(40), records[0].Time)
 }

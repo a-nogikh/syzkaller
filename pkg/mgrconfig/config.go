@@ -116,7 +116,7 @@ type Config struct {
 	// but to not oversubscribe CPU and memory too severe to not cause OOMs and false hangs/stalls.
 	Procs int `json:"procs"`
 
-	// Maximum number of logs to store per crash (default: 100).
+	// Maximum number of logs to store per crash (default: 3).
 	MaxCrashLogs int `json:"max_crash_logs"`
 
 	// Type of sandbox to use during fuzzing:
