@@ -411,3 +411,136 @@ alarm(0xa)
 	require.NotNil(t, result)
 	require.Equal(t, "pause()\nalarm(0xa)\n", string(result.Prog.Serialize()))
 }
+
+func TestCreateSlidingSubslices(t *testing.T) {
+	makeEntries := func(n int) []*prog.LogEntry {
+		entries := make([]*prog.LogEntry, n)
+		for i := range entries {
+			entries[i] = &prog.LogEntry{Proc: i}
+		}
+		return entries
+	}
+
+	// Logs smaller than minSlidingEntries (80) must return nil.
+	require.Nil(t, createSlidingSubslices(makeEntries(50)))
+
+	// For a 300-entry log, verify sliding window properties.
+	subslices := createSlidingSubslices(makeEntries(300))
+	require.Len(t, subslices, 10)
+	require.Equal(t, 299, subslices[0][len(subslices[0])-1].Proc) // newest entry first
+	require.Equal(t, 0, subslices[len(subslices)-1][0].Proc)      // oldest entry last
+	for i, sub := range subslices {
+		require.GreaterOrEqual(t, len(sub), minWindowSize)
+		if i > 0 {
+			// Adjacent subslices must overlap.
+			prevStart := subslices[i-1][0].Proc
+			currEnd := sub[len(sub)-1].Proc
+			require.GreaterOrEqual(t, currEnd, prevStart)
+		}
+	}
+}
+
+func TestSlidingWindowReplay(t *testing.T) {
+	// Construct a log with 300 programs.
+	// Only crash if the size of the executed block is <= 80 programs
+	// and a particular bad program (at position 256) is in that block.
+	const (
+		totalProgs = 300
+		badIndex   = 256
+	)
+	var b strings.Builder
+	for i := range totalProgs {
+		if i == badIndex {
+			b.WriteString("2015/12/21 12:18:00 executing program 1:\npause()\nalarm(0xa)\n")
+		} else {
+			fmt.Fprintf(&b, "2015/12/21 12:18:%02d executing program 1:\ngetpid()\n", i%60)
+		}
+	}
+	panicLog := b.String() + "\npanic: target bug\n"
+	require.Equal(t, totalProgs, strings.Count(panicLog, "executing program"))
+
+	mgrConfig := &mgrconfig.Config{
+		Derived: mgrconfig.Derived{
+			TargetOS:     targets.Linux,
+			TargetVMArch: targets.AMD64,
+			SysTarget:    targets.Get(targets.Linux, targets.AMD64),
+		},
+		Sandbox: "namespace",
+	}
+	var err error
+	mgrConfig.Target, err = prog.GetTarget(targets.Linux, targets.AMD64)
+	require.NoError(t, err)
+	reporter, err := report.NewReporter(mgrConfig)
+	require.NoError(t, err)
+
+	runTest := func(t *testing.T, sliding bool, crashTitle string) *Result {
+		exec := &testExecInterface{
+			run: func(p []byte) (*instance.RunResult, error) {
+				str := string(p)
+				blockSize := strings.Count(str, "executing program")
+				if crashTitle != "" && blockSize <= 80 &&
+					strings.Contains(str, "pause()") && strings.Contains(str, "alarm(0xa)") {
+					return fakeCrashResult(crashTitle), nil
+				}
+				return fakeCrashResult(""), nil
+			},
+		}
+		env := Environment{
+			Config:        mgrConfig,
+			Features:      flatrpc.AllFeatures,
+			Fast:          true,
+			Reporter:      reporter,
+			SlidingWindow: sliding,
+			logf:          t.Logf,
+		}
+		res, _, err := runInner(context.Background(), []byte(panicLog), env, exec)
+		require.NoError(t, err)
+		return res
+	}
+
+	t.Run("without sliding window whole log fails to crash", func(t *testing.T) {
+		res := runTest(t, false, "panic: target bug")
+		require.Nil(t, res)
+	})
+
+	t.Run("full replay unexpected crash proceeds without sliding window", func(t *testing.T) {
+		exec := &testExecInterface{
+			run: func(p []byte) (*instance.RunResult, error) {
+				str := string(p)
+				if strings.Contains(str, "pause()") && strings.Contains(str, "alarm(0xa)") {
+					return fakeCrashResult("panic: other bug"), nil
+				}
+				return fakeCrashResult(""), nil
+			},
+		}
+		env := Environment{
+			Config:        mgrConfig,
+			Features:      flatrpc.AllFeatures,
+			Fast:          true,
+			Reporter:      reporter,
+			SlidingWindow: false,
+			logf:          t.Logf,
+		}
+		res, _, err := runInner(context.Background(), []byte(panicLog), env, exec)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		require.Equal(t, "pause()\nalarm(0xa)\n", string(res.Prog.Serialize()))
+	})
+
+	t.Run("with sliding window reproduces expected crash", func(t *testing.T) {
+		res := runTest(t, true, "panic: target bug")
+		require.NotNil(t, res)
+		require.Equal(t, "pause()\nalarm(0xa)\n", string(res.Prog.Serialize()))
+	})
+
+	t.Run("with sliding window falls back to observed crash", func(t *testing.T) {
+		res := runTest(t, true, "panic: other bug")
+		require.NotNil(t, res)
+		require.Equal(t, "pause()\nalarm(0xa)\n", string(res.Prog.Serialize()))
+	})
+
+	t.Run("with sliding window no crash skips bisection", func(t *testing.T) {
+		res := runTest(t, true, "")
+		require.Nil(t, res)
+	})
+}

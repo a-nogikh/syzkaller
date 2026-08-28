@@ -21,13 +21,14 @@ import (
 )
 
 var (
-	flagConfig = flag.String("config", "", "manager configuration file (manager.cfg)")
-	flagCount  = flag.Int("count", 0, "number of VMs to use (overrides config count param)")
-	flagDebug  = flag.Bool("debug", false, "print debug output")
-	flagOutput = flag.String("output", filepath.Join(".", "repro.txt"), "output syz repro file (repro.txt)")
-	flagCRepro = flag.String("crepro", filepath.Join(".", "repro.c"), "output c file (repro.c)")
-	flagTitle  = flag.String("title", "", "where to save the title of the reproduced bug")
-	flagStrace = flag.String("strace", "", "output strace log (strace_bin must be set)")
+	flagConfig        = flag.String("config", "", "manager configuration file (manager.cfg)")
+	flagCount         = flag.Int("count", 0, "number of VMs to use (overrides config count param)")
+	flagDebug         = flag.Bool("debug", false, "print debug output")
+	flagOutput        = flag.String("output", filepath.Join(".", "repro.txt"), "output syz repro file (repro.txt)")
+	flagCRepro        = flag.String("crepro", filepath.Join(".", "repro.c"), "output c file (repro.c)")
+	flagTitle         = flag.String("title", "", "where to save the title of the reproduced bug")
+	flagStrace        = flag.String("strace", "", "output strace log (strace_bin must be set)")
+	flagSlidingWindow = flag.Bool("sliding-window", false, "enable sliding window log replay")
 )
 
 func main() {
@@ -68,10 +69,11 @@ func main() {
 		defer done()
 
 		res, stats, err := repro.Run(ctx, data, repro.Environment{
-			Config:   cfg,
-			Features: flatrpc.AllFeatures,
-			Reporter: reporter,
-			Pool:     pool,
+			Config:        cfg,
+			Features:      flatrpc.AllFeatures,
+			Reporter:      reporter,
+			Pool:          pool,
+			SlidingWindow: *flagSlidingWindow,
 		})
 		if err != nil {
 			log.Logf(0, "reproduction failed: %v", err)

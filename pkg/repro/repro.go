@@ -68,6 +68,7 @@ type reproContext struct {
 	timeouts       targets.Timeouts
 	observedTitles map[string]crash.Type
 	fast           bool
+	slidingWindow  bool
 }
 
 // execInterface describes the interfaces needed by pkg/repro.
@@ -85,7 +86,8 @@ type Environment struct {
 	Pool     *vm.Dispatcher
 	// The Fast repro mode restricts the repro log bisection,
 	// it skips multiple simpifications and C repro generation.
-	Fast bool
+	Fast          bool
+	SlidingWindow bool
 
 	logf func(string, ...any)
 }
@@ -153,6 +155,7 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 		timeouts:       cfg.Timeouts,
 		observedTitles: map[string]crash.Type{},
 		fast:           env.Fast,
+		slidingWindow:  env.SlidingWindow,
 		logf:           env.logf,
 	}
 
@@ -419,6 +422,11 @@ func (ctx *reproContext) extractProgSingle(entries []*prog.LogEntry, duration ti
 	return nil, nil
 }
 
+const (
+	minWindowSize     = 40
+	minSlidingEntries = 2 * minWindowSize
+)
+
 func (ctx *reproContext) extractProgBisect(entries []*prog.LogEntry, baseDuration time.Duration) (*Result, error) {
 	ctx.reproLogf(3, "bisect: bisecting %d programs with base timeout %s", len(entries), baseDuration)
 
@@ -429,12 +437,20 @@ func (ctx *reproContext) extractProgBisect(entries []*prog.LogEntry, baseDuratio
 
 	// First check if replaying the log may crash the kernel at all.
 	ret, err := ctx.testProgs(entries, duration(len(entries)), opts, false)
-	if !ret.Crashed {
-		ctx.reproLogf(3, "replaying the whole log did not cause a kernel crash")
-		return nil, nil
-	}
 	if err != nil {
 		return nil, err
+	}
+
+	if !ctx.slidingWindow || len(entries) < minSlidingEntries {
+		if !ret.Crashed {
+			ctx.reproLogf(3, "replaying the whole log did not cause a kernel crash")
+			return nil, nil
+		}
+	} else if !ctx.isExpectedCrash(ret) {
+		entries, err = ctx.extractSlidingWindow(entries, duration, opts)
+		if err != nil || len(entries) == 0 {
+			return nil, err
+		}
 	}
 
 	// Bisect the log to find multiple guilty programs.
@@ -458,6 +474,90 @@ func (ctx *reproContext) extractProgBisect(entries []*prog.LogEntry, baseDuratio
 	// Concatenate all programs into one.
 	dur := duration(len(entries)) * 3 / 2
 	return ctx.concatenateProgs(entries, dur)
+}
+
+func (ctx *reproContext) isExpectedCrash(ret verdict) bool {
+	if !ret.Crashed || ctx.report == nil {
+		return false
+	}
+	if ctx.crashTitle != "" && ctx.crashTitle != "no output/lost connection" && ctx.report.Title != ctx.crashTitle {
+		return false
+	}
+	return true
+}
+
+func (ctx *reproContext) extractSlidingWindow(entries []*prog.LogEntry,
+	duration func(int) time.Duration, opts csource.Options) ([]*prog.LogEntry, error) {
+	ctx.reproLogf(3, "replaying the whole log did not cause expected crash; trying sliding window subslices")
+	subslice, err := ctx.findCrashingSubslice(entries, duration, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(subslice) == 0 {
+		ctx.reproLogf(3, "sliding window: no subslice reproduced any crash; skipping bisection")
+		return nil, nil
+	}
+	return subslice, nil
+}
+
+func (ctx *reproContext) findCrashingSubslice(entries []*prog.LogEntry, duration func(int) time.Duration,
+	opts csource.Options) ([]*prog.LogEntry, error) {
+	subslices := createSlidingSubslices(entries)
+	if len(subslices) < 2 {
+		return nil, nil
+	}
+	var fallbackSubslice []*prog.LogEntry
+	var fallbackReport *report.Report
+	for i, subslice := range subslices {
+		ctx.reproLogf(3, "sliding window: testing subslice %d/%d (len=%d)", i+1, len(subslices), len(subslice))
+		subRet, subErr := ctx.testProgs(subslice, duration(len(subslice)), opts, false)
+		if subErr != nil {
+			return nil, subErr
+		}
+		if ctx.isExpectedCrash(subRet) {
+			ctx.reproLogf(3, "sliding window: subslice %d/%d (len=%d) reproduced the crash",
+				i+1, len(subslices), len(subslice))
+			return subslice, nil
+		}
+		if subRet.Crashed {
+			if fallbackSubslice == nil || (!isHighPrioReport(fallbackReport.Type) && isHighPrioReport(ctx.report.Type)) {
+				fallbackSubslice = subslice
+				fallbackReport = ctx.report
+			}
+		}
+	}
+	if fallbackSubslice != nil {
+		ctx.reproLogf(3, "sliding window: no subslice reproduced expected crash; proceeding with observed crash")
+		ctx.report = fallbackReport
+		return fallbackSubslice, nil
+	}
+	ctx.reproLogf(3, "sliding window: no subslice reproduced any crash")
+	return nil, nil
+}
+
+// createSlidingSubslices splits entries into 2..10 overlapping windows covering all entries,
+// ordered from newest (end of log) to oldest (start of log).
+func createSlidingSubslices(entries []*prog.LogEntry) [][]*prog.LogEntry {
+	n := len(entries)
+	if n < minSlidingEntries {
+		return nil
+	}
+	k := min(10, max(2, n/30))
+	step := max(1, n/(k+1))
+	window := min(n, max(minWindowSize, 2*step))
+	var subslices [][]*prog.LogEntry
+	for i := range k {
+		end := n - i*step
+		start := max(0, end-window)
+		if i == k-1 {
+			start = 0
+		}
+		if end <= start {
+			continue
+		}
+		subslices = append(subslices, entries[start:end])
+	}
+	return subslices
 }
 
 // The bisected progs may exceed the prog.MaxCalls limit.
