@@ -28,6 +28,8 @@ import (
 	"github.com/google/syzkaller/vm/vmimpl"
 )
 
+const lostConnectionTitle = "no output/lost connection"
+
 type Result struct {
 	Prog     *prog.Prog
 	Duration time.Duration
@@ -122,28 +124,10 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 		crashExecutor = rep.Executor
 		crashAltTitles = rep.AltTitles
 	}
-	testTimeouts := []time.Duration{
-		max(30*time.Second, 3*cfg.Timeouts.Program), // to catch simpler crashes (i.e. no races and no hangs)
-		max(100*time.Second, 20*cfg.Timeouts.Program),
-		cfg.Timeouts.NoOutputRunningTime, // to catch "no output", races and hangs
+	if crashTitle == "" {
+		crashTitle = lostConnectionTitle
 	}
-	switch {
-	case crashTitle == "":
-		crashTitle = "no output/lost connection"
-		// Lost connection can be detected faster,
-		// but theoretically if it's caused by a race it may need the largest timeout.
-		// No output can only be reproduced with the max timeout.
-		// As a compromise we use the smallest and the largest timeouts.
-		testTimeouts = []time.Duration{testTimeouts[0], testTimeouts[2]}
-	case crashType == crash.MemoryLeak:
-		// Memory leaks can't be detected quickly because of expensive setup and scanning.
-		testTimeouts = testTimeouts[1:]
-	case crashType == crash.Hang:
-		testTimeouts = testTimeouts[2:]
-	}
-	if env.Fast {
-		testTimeouts = []time.Duration{30 * time.Second, 5 * time.Minute}
-	}
+	testTimeouts := determineTestTimeouts(cfg.Timeouts, crashTitle, crashType, env.Fast)
 	reproCtx := &reproContext{
 		ctx:            ctx,
 		exec:           exec,
@@ -202,6 +186,29 @@ func (ctx *reproContext) run() (*Result, *Stats, error) {
 		res.Report = ctx.report
 	}
 	return res, ctx.stats, nil
+}
+
+func determineTestTimeouts(timeouts targets.Timeouts, crashTitle string,
+	crashType crash.Type, fast bool) []time.Duration {
+	programTimeout := max(30*time.Second, 3*timeouts.Program)
+	hungTaskTimeout := max(180*time.Second, 20*timeouts.Program)
+
+	var testTimeouts []time.Duration
+	switch {
+	case crashTitle == "" || crashTitle == lostConnectionTitle:
+		testTimeouts = []time.Duration{programTimeout, timeouts.NoOutputRunningTime}
+	case crashType == crash.Hang:
+		testTimeouts = []time.Duration{hungTaskTimeout}
+	case crashType == crash.MemoryLeak:
+		testTimeouts = []time.Duration{max(100*time.Second, 10*timeouts.Program)}
+	default:
+		// BUG, WARNING, KASAN, GPF, Lockdep: reproduce quickly (<30s).
+		testTimeouts = []time.Duration{programTimeout}
+	}
+	if fast {
+		testTimeouts = []time.Duration{programTimeout, 5 * time.Minute}
+	}
+	return testTimeouts
 }
 
 func createStartOptions(cfg *mgrconfig.Config, features flatrpc.Feature,
@@ -425,7 +432,7 @@ func (ctx *reproContext) extractProgSingle(entries []*prog.LogEntry, duration ti
 		if ret.Crashed {
 			res := &Result{
 				Prog:     ent.P,
-				Duration: max(duration, ret.Duration*3/2),
+				Duration: min(duration, max(2*ctx.timeouts.Program, ret.Duration*2)),
 				Opts:     opts,
 			}
 			ctx.reproLogf(3, "single: successfully extracted reproducer")
@@ -495,7 +502,7 @@ func (ctx *reproContext) isExpectedCrash(ret verdict) bool {
 	if !ret.Crashed || ctx.report == nil {
 		return false
 	}
-	if ctx.crashTitle == "" || ctx.crashTitle == "no output/lost connection" {
+	if ctx.crashTitle == "" || ctx.crashTitle == lostConnectionTitle {
 		return true
 	}
 	return TitlesIntersect(ctx.crashTitle, ctx.crashAltTitles, ctx.report.Title, ctx.report.AltTitles)
@@ -665,7 +672,7 @@ func (ctx *reproContext) concatenateProgs(entries []*prog.LogEntry, dur time.Dur
 	}
 	res := &Result{
 		Prog:     p,
-		Duration: min(dur, ret.Duration*2),
+		Duration: min(dur, max(2*ctx.timeouts.Program, ret.Duration*2)),
 		Opts:     ctx.startOpts,
 	}
 	ctx.reproLogf(3, "bisect: concatenation succeeded")
