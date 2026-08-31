@@ -196,6 +196,7 @@ type Context struct {
 	onEvent        onEvent
 	spanSeq        int
 	spanNesting    int
+	currentSpan    *trajectory.Span
 	runnerMu       sync.Mutex
 	runnerManager  *RunnerManager
 	runnerEg       *errgroup.Group
@@ -205,6 +206,17 @@ type Context struct {
 	consumedTokens int64
 	blobs          syzspec.BlobStore
 	stubContext
+}
+
+// RecordArtifact associates a named artifact with the current active span.
+func (ctx *Context) RecordArtifact(typ trajectory.ArtifactType, data string) {
+	if data == "" {
+		return
+	}
+	if ctx.currentSpan.Artifacts == nil {
+		ctx.currentSpan.Artifacts = make(map[trajectory.ArtifactType]string)
+	}
+	ctx.currentSpan.Artifacts[typ] = data
 }
 
 type stubContext struct {
@@ -334,6 +346,8 @@ func (ctx *Context) startSpan(span *trajectory.Span) error {
 	span.Nesting = ctx.spanNesting
 	ctx.spanNesting++
 	span.Started = ctx.timeNow()
+	span.Parent = ctx.currentSpan
+	ctx.currentSpan = span
 	return ctx.onEvent(span)
 }
 
@@ -342,6 +356,7 @@ func (ctx *Context) finishSpan(span *trajectory.Span, spanErr error) error {
 	if ctx.spanNesting < 0 {
 		panic("unbalanced spans")
 	}
+	ctx.currentSpan = span.Parent
 	span.Finished = ctx.timeNow()
 	if spanErr != nil {
 		span.Error = spanErr.Error()

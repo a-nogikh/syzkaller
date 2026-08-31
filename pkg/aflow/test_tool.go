@@ -7,7 +7,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/syzkaller/pkg/aflow/trajectory"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,13 +38,25 @@ func TestTool(t *testing.T, tool Tool, initState, initArgs, wantResults any, wan
 	_ = tool.declaration()
 	tctx := &testToolContext{
 		// We don't init all fields, init more, if necessary.
-		ctx: Context{state: state},
+		ctx: Context{
+			state:   state,
+			onEvent: func(*trajectory.Span) error { return nil },
+			stubContext: stubContext{
+				timeNow: time.Now,
+			},
+		},
 	}
 	for _, opt := range opts {
 		opt(tctx)
 	}
 	defer tctx.ctx.Close()
+	span := &trajectory.Span{
+		Type: trajectory.SpanTool,
+		Name: tool.declaration().Name,
+	}
+	require.NoError(t, tctx.ctx.startSpan(span))
 	gotResults, err := tool.execute(&tctx.ctx, args)
+	_ = tctx.ctx.finishSpan(span, nil)
 	gotError := ""
 	if err != nil {
 		gotError = err.Error()

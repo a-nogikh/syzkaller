@@ -5,7 +5,9 @@ package aflow
 
 import (
 	"testing"
+	"time"
 
+	"github.com/google/syzkaller/pkg/aflow/trajectory"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,8 +16,18 @@ func NewTestContext(t *testing.T) *Context {
 	cache, err := NewCache(t.TempDir(), 10000000)
 	require.NoError(t, err)
 
-	return &Context{
+	ctx := &Context{
 		Context: t.Context(),
 		cache:   cache,
+		onEvent: func(*trajectory.Span) error { return nil },
+		stubContext: stubContext{
+			timeNow: time.Now,
+		},
 	}
+	span := &trajectory.Span{
+		Type: trajectory.SpanTool,
+		Name: "test",
+	}
+	require.NoError(t, ctx.startSpan(span))
+	return ctx
 }

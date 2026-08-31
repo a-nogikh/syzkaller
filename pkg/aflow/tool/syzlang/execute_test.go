@@ -34,7 +34,7 @@ func TestExecuteSeed_DeserializeErrors(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &aflow.Context{}
+			ctx := aflow.NewTestContext(t)
 			state := reproduceState{
 				TargetOS:   "linux",
 				TargetArch: "amd64",
@@ -61,7 +61,7 @@ func TestExecuteSeed_BlobPlaceholder(t *testing.T) {
 		b64,
 	)
 
-	ctx := &aflow.Context{}
+	ctx := aflow.NewTestContext(t)
 	programWithPlaceholder := ctx.ReplaceBlobs(input)
 	require.Contains(t, programWithPlaceholder, "$BLOB_")
 
@@ -86,7 +86,7 @@ func TestExecuteSeed_BlobPlaceholderError(t *testing.T) {
 	b64 := image.EncodeB64(compressed)
 
 	input := fmt.Sprintf(`syz_mount_image$btrfs(invalid_arg, &AUTO="$%s")`, b64)
-	ctx := &aflow.Context{}
+	ctx := aflow.NewTestContext(t)
 	programWithPlaceholder := ctx.ReplaceBlobs(input)
 	require.Contains(t, programWithPlaceholder, "$BLOB_")
 
@@ -135,7 +135,7 @@ func TestExecuteSeed(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := executeSeed(&aflow.Context{}, state, ExecuteSeedArgs{
+			_, err := executeSeed(aflow.NewTestContext(t), state, ExecuteSeedArgs{
 				ReproSyz: tc.program,
 			})
 			if tc.wantError != "" {

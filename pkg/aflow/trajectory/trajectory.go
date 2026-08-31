@@ -14,6 +14,7 @@ import (
 // Span describes one step in an aflow workflow execution.
 // Spans can be finished/unfinished (Finished field), and nested (Nesting field).
 type Span struct {
+	Parent *Span `json:"-"`
 	// Seq is monotomically increasing for each new span in a workflow starting from 0.
 	Seq int
 	// Nesting represents hierarchical relation between spans.
@@ -32,6 +33,9 @@ type Span struct {
 	Args    map[string]any `json:",omitzero"`
 	Results map[string]any `json:",omitzero"`
 
+	// Artifacts produced or operated on during this step.
+	Artifacts map[ArtifactType]string `json:",omitzero"`
+
 	// Agent invocation.
 	Instruction string `json:",omitzero"`
 	Prompt      string `json:",omitzero"`
@@ -46,6 +50,12 @@ type Span struct {
 	OutputTokens         int `json:",omitzero"`
 	OutputThoughtsTokens int `json:",omitzero"`
 }
+
+type ArtifactType string
+
+const (
+	ArtifactSyzProg ArtifactType = "syz-prog"
+)
 
 type SpanType string
 
