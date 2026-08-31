@@ -190,8 +190,8 @@ func (ctx *reproContext) run() (*Result, *Stats, error) {
 
 func determineTestTimeouts(timeouts targets.Timeouts, crashTitle string,
 	crashType crash.Type, fast bool) []time.Duration {
-	programTimeout := max(30*time.Second, 3*timeouts.Program)
-	hungTaskTimeout := max(180*time.Second, 20*timeouts.Program)
+	programTimeout := max(45*time.Second, 5*timeouts.Program)
+	hungTaskTimeout := max(210*time.Second, 25*timeouts.Program)
 
 	var testTimeouts []time.Duration
 	switch {

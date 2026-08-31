@@ -736,7 +736,7 @@ func TestDetermineTestTimeouts(t *testing.T) {
 			crashTitle: "",
 			crashType:  crash.UnknownType,
 			fast:       false,
-			want:       []time.Duration{30 * time.Second, 10 * time.Minute},
+			want:       []time.Duration{45 * time.Second, 10 * time.Minute},
 		},
 		{
 			name: "no output/lost connection",
@@ -747,7 +747,7 @@ func TestDetermineTestTimeouts(t *testing.T) {
 			crashTitle: "no output/lost connection",
 			crashType:  crash.LostConnection,
 			fast:       false,
-			want:       []time.Duration{30 * time.Second, 10 * time.Minute},
+			want:       []time.Duration{45 * time.Second, 10 * time.Minute},
 		},
 		{
 			name: "hang crash",
@@ -757,7 +757,7 @@ func TestDetermineTestTimeouts(t *testing.T) {
 			crashTitle: "INFO: task hung in foo",
 			crashType:  crash.Hang,
 			fast:       false,
-			want:       []time.Duration{180 * time.Second},
+			want:       []time.Duration{210 * time.Second},
 		},
 		{
 			name: "memory leak crash",
@@ -777,7 +777,7 @@ func TestDetermineTestTimeouts(t *testing.T) {
 			crashTitle: "KASAN: null-ptr-deref in bar",
 			crashType:  crash.Bug,
 			fast:       false,
-			want:       []time.Duration{30 * time.Second},
+			want:       []time.Duration{45 * time.Second},
 		},
 		{
 			name: "standard warning crash",
@@ -787,7 +787,7 @@ func TestDetermineTestTimeouts(t *testing.T) {
 			crashTitle: "WARNING in baz",
 			crashType:  crash.Warning,
 			fast:       false,
-			want:       []time.Duration{30 * time.Second},
+			want:       []time.Duration{45 * time.Second},
 		},
 		{
 			name: "fast mode",
@@ -798,7 +798,7 @@ func TestDetermineTestTimeouts(t *testing.T) {
 			crashTitle: "KASAN: slab-out-of-bounds",
 			crashType:  crash.Bug,
 			fast:       true,
-			want:       []time.Duration{30 * time.Second, 5 * time.Minute},
+			want:       []time.Duration{45 * time.Second, 5 * time.Minute},
 		},
 		{
 			name: "fast mode with hang",
@@ -808,7 +808,7 @@ func TestDetermineTestTimeouts(t *testing.T) {
 			crashTitle: "INFO: task hung",
 			crashType:  crash.Hang,
 			fast:       true,
-			want:       []time.Duration{30 * time.Second, 5 * time.Minute},
+			want:       []time.Duration{45 * time.Second, 5 * time.Minute},
 		},
 		{
 			name: "scaled timeouts for slow environment",
@@ -819,7 +819,7 @@ func TestDetermineTestTimeouts(t *testing.T) {
 			crashTitle: "",
 			crashType:  crash.UnknownType,
 			fast:       false,
-			want:       []time.Duration{60 * time.Second, 30 * time.Minute},
+			want:       []time.Duration{100 * time.Second, 30 * time.Minute},
 		},
 		{
 			name: "hang with scaled timeouts",
@@ -829,7 +829,7 @@ func TestDetermineTestTimeouts(t *testing.T) {
 			crashTitle: "INFO: task hung",
 			crashType:  crash.Hang,
 			fast:       false,
-			want:       []time.Duration{400 * time.Second},
+			want:       []time.Duration{500 * time.Second},
 		},
 		{
 			name: "memory leak with scaled timeouts",
@@ -849,7 +849,7 @@ func TestDetermineTestTimeouts(t *testing.T) {
 			crashTitle: "BUG: failure",
 			crashType:  crash.Bug,
 			fast:       true,
-			want:       []time.Duration{60 * time.Second, 5 * time.Minute},
+			want:       []time.Duration{100 * time.Second, 5 * time.Minute},
 		},
 	}
 
