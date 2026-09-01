@@ -15,6 +15,7 @@ import (
 	"github.com/google/syzkaller/pkg/mgrconfig"
 	"github.com/google/syzkaller/pkg/tool"
 	"github.com/google/syzkaller/sys/targets"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExecprogCmd(t *testing.T) {
@@ -52,7 +53,7 @@ func TestExecprogCmd(t *testing.T) {
 				FaultCall: 2,
 				FaultNth:  3,
 			},
-		}, true, 10, "", "myprog")
+		}, true, 10, "", "myprog", false)
 	args := strings.Split(cmdLine, " ")[1:]
 	if err := tool.ParseFlags(flags, args); err != nil {
 		t.Fatal(err)
@@ -99,6 +100,51 @@ func TestExecprogCmd(t *testing.T) {
 	if *flagSlowdown != 10 {
 		t.Errorf("bad slowdown: %v, want: %v", *flagSlowdown, 10)
 	}
+}
+
+func execprogFlagSet() *flag.FlagSet {
+	flags := flag.NewFlagSet("", flag.ContinueOnError)
+	flags.String("os", runtime.GOOS, "target os")
+	flags.String("arch", "", "target arch")
+	flags.Int("repeat", 1, "repeat execution that many times (0 for infinite loop)")
+	flags.Int("procs", 1, "number of parallel processes to execute programs")
+	flags.Int("fault_call", -1, "inject fault into this call (0-based)")
+	flags.Int("fault_nth", 0, "inject fault on n-th operation (0-based)")
+	flags.String("executor", "./syz-executor", "path to executor binary")
+	flags.Bool("threaded", true, "use threaded mode in executor")
+	flags.Bool("collide", false, "collide syscalls to provoke data races")
+	flags.Bool("cover", false, "collect feedback signals (coverage)")
+	flags.String("sandbox", "none", "sandbox for fuzzing (none/setuid/namespace/android)")
+	flags.Int("slowdown", 1, "")
+	flags.Int("sandbox_arg", 0, "argument for sandbox runner to adjust it via config")
+	flags.Bool("shuffle", false, "")
+	flags.Int64("seed", 0, "")
+	return flags
+}
+
+func TestExecprogCmdShuffle(t *testing.T) {
+	flags := execprogFlagSet()
+	cmdLine := ExecprogCmd(os.Args[0], "/myexecutor", targets.Linux, targets.AMD64, targets.AMD64, "vmtype",
+		csource.Options{}, true, 1, "", "myprog", true)
+	args := strings.Split(cmdLine, " ")[1:]
+	require.NoError(t, tool.ParseFlags(flags, args))
+	flagShuffle := flags.Lookup("shuffle")
+	require.NotNil(t, flagShuffle)
+	require.Equal(t, "true", flagShuffle.Value.String())
+}
+
+func TestExecprogCmdSeed(t *testing.T) {
+	flags := execprogFlagSet()
+	cmdLine := ExecprogCmd(os.Args[0], "/myexecutor", targets.Linux, targets.AMD64, targets.AMD64, "vmtype",
+		csource.Options{}, true, 1, "", "myprog", true, 12345)
+	args := strings.Split(cmdLine, " ")[1:]
+	require.NoError(t, tool.ParseFlags(flags, args))
+	flagShuffle := flags.Lookup("shuffle")
+	require.NotNil(t, flagShuffle)
+	require.Equal(t, "true", flagShuffle.Value.String())
+	flagSeed := flags.Lookup("seed")
+	require.NotNil(t, flagSeed)
+	require.Equal(t, "12345", flagSeed.Value.String())
 }
 
 func TestRunnerCmd(t *testing.T) {

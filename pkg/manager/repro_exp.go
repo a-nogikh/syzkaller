@@ -34,9 +34,8 @@ type ConfigID int
 const (
 	Config6Progs ConfigID = iota
 	Config25ProgsSliding
-	ConfigAsIs
-	ConfigAsIsSliding
 	ConfigAsIsSlidingExact
+	ConfigAsIsSlidingRand
 )
 
 const (
@@ -55,6 +54,7 @@ type ReproConfig struct {
 	MaxPerProc    int      `json:"max_per_proc"`
 	SlidingWindow bool     `json:"sliding_window"`
 	ExactCrash    bool     `json:"exact_crash"`
+	Shuffle       bool     `json:"shuffle"`
 }
 
 var ReproConfigs = []ReproConfig{
@@ -65,6 +65,7 @@ var ReproConfigs = []ReproConfig{
 		MaxPerProc:    6,
 		SlidingWindow: false,
 		ExactCrash:    false,
+		Shuffle:       false,
 	},
 	{
 		ID:            Config25ProgsSliding,
@@ -73,22 +74,7 @@ var ReproConfigs = []ReproConfig{
 		MaxPerProc:    25,
 		SlidingWindow: true,
 		ExactCrash:    false,
-	},
-	{
-		ID:            ConfigAsIs,
-		Key:           "as_is",
-		Name:          "as is",
-		MaxPerProc:    0,
-		SlidingWindow: false,
-		ExactCrash:    false,
-	},
-	{
-		ID:            ConfigAsIsSliding,
-		Key:           "as_is_sliding",
-		Name:          "as is + sliding",
-		MaxPerProc:    0,
-		SlidingWindow: true,
-		ExactCrash:    false,
+		Shuffle:       false,
 	},
 	{
 		ID:            ConfigAsIsSlidingExact,
@@ -97,6 +83,16 @@ var ReproConfigs = []ReproConfig{
 		MaxPerProc:    0,
 		SlidingWindow: true,
 		ExactCrash:    true,
+		Shuffle:       false,
+	},
+	{
+		ID:            ConfigAsIsSlidingRand,
+		Key:           "as_is_sliding_rand",
+		Name:          "as is + sliding + rand",
+		MaxPerProc:    0,
+		SlidingWindow: true,
+		ExactCrash:    true,
+		Shuffle:       true,
 	},
 }
 
@@ -675,6 +671,7 @@ func (exp *ReproExp) defaultRunRepro(ctx context.Context, crashLog []byte,
 		Pool:          exp.pool,
 		SlidingWindow: cfg.SlidingWindow,
 		ExactCrash:    cfg.ExactCrash,
+		Shuffle:       cfg.Shuffle,
 	})
 }
 

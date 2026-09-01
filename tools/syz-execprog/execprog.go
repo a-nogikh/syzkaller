@@ -66,6 +66,8 @@ var (
 	// executing random programs and mutated programs from the corpus.
 	flagStress   = flag.Bool("stress", false, "enable stress mode (local fuzzer)")
 	flagSyscalls = flag.String("syscalls", "", "comma-separated list of enabled syscalls for the stress mode")
+	flagShuffle  = flag.Bool("shuffle", false, "shuffle the list of programs after the first cycle")
+	flagSeed     = flag.Int64("seed", 0, "random seed (0 for time-based)")
 
 	flagGDB = flag.Bool("gdb", false, "start executor under gdb")
 
@@ -145,19 +147,25 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+	seed := *flagSeed
+	if seed == 0 {
+		seed = time.Now().UnixNano()
+	}
+	log.Logf(0, "using seed %v", seed)
 	rpcCtx, done := context.WithCancel(context.Background())
 	ctx := &Context{
 		target:    target,
 		done:      done,
 		progs:     progs,
 		globs:     strings.Split(*flagGlob, ":"),
-		rs:        rand.NewSource(time.Now().UnixNano()),
+		rs:        rand.NewSource(seed),
 		coverFile: *flagCoverFile,
 		output:    *flagOutput,
 		signal:    *flagSignal,
 		hints:     *flagHints,
 		stress:    *flagStress,
 		repeat:    *flagRepeat,
+		shuffle:   *flagShuffle,
 		defaultOpts: flatrpc.ExecOpts{
 			EnvFlags:   env,
 			ExecFlags:  exec,
@@ -213,6 +221,7 @@ type Context struct {
 	hints       bool
 	stress      bool
 	repeat      int
+	shuffle     bool
 	pos         int
 	completed   atomic.Uint64
 	resultIndex atomic.Int64
@@ -244,11 +253,10 @@ func (ctx *Context) Next() *queue.Request {
 	if ctx.stress {
 		p = ctx.createStressProg()
 	} else {
-		idx := ctx.getProgramIndex()
-		if idx < 0 {
+		p = ctx.getProgram()
+		if p == nil {
 			return nil
 		}
-		p = ctx.progs[idx]
 	}
 	if ctx.output {
 		data := p.Serialize()
@@ -378,11 +386,23 @@ func (ctx *Context) dumpCoverage(info *flatrpc.ProgInfo) {
 	}
 }
 
-func (ctx *Context) getProgramIndex() int {
+func (ctx *Context) getProgram() *prog.Prog {
 	ctx.posMu.Lock()
 	defer ctx.posMu.Unlock()
-	if ctx.repeat > 0 && ctx.pos >= len(ctx.progs)*ctx.repeat {
-		return -1
+	if len(ctx.progs) == 0 || (ctx.repeat > 0 && ctx.pos >= len(ctx.progs)*ctx.repeat) {
+		return nil
+	}
+	if ctx.shuffle && ctx.pos > 0 && ctx.pos%len(ctx.progs) == 0 {
+		lastProg := ctx.progs[len(ctx.progs)-1]
+		rnd := rand.New(ctx.rs)
+		rnd.Shuffle(len(ctx.progs), func(i, j int) {
+			ctx.progs[i], ctx.progs[j] = ctx.progs[j], ctx.progs[i]
+		})
+		if len(ctx.progs) > 1 && ctx.progs[0] == lastProg {
+			// Avoid executing the same program back-to-back across cycle boundary.
+			swapIdx := 1 + rnd.Intn(len(ctx.progs)-1)
+			ctx.progs[0], ctx.progs[swapIdx] = ctx.progs[swapIdx], ctx.progs[0]
+		}
 	}
 	idx := ctx.pos % len(ctx.progs)
 	if idx == 0 && time.Since(ctx.lastPrint) > 5*time.Second {
@@ -390,13 +410,14 @@ func (ctx *Context) getProgramIndex() int {
 		ctx.lastPrint = time.Now()
 	}
 	ctx.pos++
-	return idx
+	return ctx.progs[idx]
 }
 
 func (ctx *Context) createStressProg() *prog.Prog {
 	ctx.posMu.Lock()
-	rnd := rand.New(ctx.rs)
+	seed := ctx.rs.Int63()
 	ctx.posMu.Unlock()
+	rnd := rand.New(rand.NewSource(seed))
 	if len(ctx.progs) == 0 || rnd.Intn(2) == 0 {
 		return ctx.target.Generate(rnd, prog.RecommendedCalls, ctx.choiceTable)
 	}

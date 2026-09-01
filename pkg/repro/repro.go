@@ -73,6 +73,7 @@ type reproContext struct {
 	fast           bool
 	slidingWindow  bool
 	exactCrash     bool
+	shuffle        bool
 }
 
 // execInterface describes the interfaces needed by pkg/repro.
@@ -93,6 +94,7 @@ type Environment struct {
 	Fast          bool
 	SlidingWindow bool
 	ExactCrash    bool
+	Shuffle       bool
 
 	logf func(string, ...any)
 }
@@ -147,6 +149,7 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 		fast:           env.Fast,
 		slidingWindow:  env.SlidingWindow,
 		exactCrash:     env.ExactCrash,
+		shuffle:        env.Shuffle,
 		logf:           env.logf,
 	}
 	if env.ExactCrash {
@@ -453,8 +456,11 @@ func (ctx *reproContext) extractProgBisect(entries []*prog.LogEntry, baseDuratio
 	ctx.reproLogf(3, "bisect: bisecting %d programs with base timeout %s", len(entries), baseDuration)
 
 	opts := ctx.startOpts
+	// Programs in execution traces average ~0.7s wall-clock time across 4 procs (~1.45 progs/s).
+	// Allocate 1s per entry on top of baseDuration to ensure full passes (and subsequent shuffled
+	// cycles) can complete before timeout.
 	duration := func(entries int) time.Duration {
-		return baseDuration + time.Duration(entries/4)*time.Second
+		return baseDuration + time.Duration(entries)*time.Second
 	}
 
 	// First check if replaying the log may crash the kernel at all.
@@ -944,6 +950,7 @@ func (ctx *reproContext) testProgs(entries []*prog.LogEntry, duration time.Durat
 		return ctx.exec.RunSyz(ctx.ctx, pstr, instance.RunOptions{
 			Opts:     opts,
 			Duration: duration,
+			Shuffle:  ctx.shuffle,
 		}, ctx.reproLogf)
 	}, strict)
 }

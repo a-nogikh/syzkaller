@@ -490,7 +490,7 @@ func (inst *inst) csourceOptions() (csource.Options, error) {
 // ExecprogCmd returns the command to run execprog.
 // nolint:revive
 func ExecprogCmd(execprog, executor, OS, arch, vmArch, vmType string, opts csource.Options,
-	optionalFlags bool, slowdown int, coverFile, progFile string) string {
+	optionalFlags bool, slowdown int, coverFile, progFile string, shuffle bool, seed ...int64) string {
 	repeatCount := 1
 	if opts.Repeat {
 		// syz-execprog uses 0 for infinite loop. Allow specific repeat count
@@ -519,6 +519,12 @@ func ExecprogCmd(execprog, executor, OS, arch, vmArch, vmType string, opts csour
 		}
 		if vmArch != "" && vmArch != arch {
 			optFlags = append(optFlags, tool.Flag{Name: "vmarch", Value: vmArch})
+		}
+		if shuffle {
+			optFlags = append(optFlags, tool.Flag{Name: "shuffle", Value: "true"})
+		}
+		if len(seed) > 0 && seed[0] != 0 {
+			optFlags = append(optFlags, tool.Flag{Name: "seed", Value: fmt.Sprint(seed[0])})
 		}
 		optionalArg += " " + tool.OptionalFlags(optFlags)
 	}
