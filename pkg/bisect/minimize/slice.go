@@ -12,17 +12,31 @@ import (
 	"strings"
 )
 
+type Result int
+
+const (
+	ResultFalse Result = iota
+	ResultTrue
+	ResultUnknown
+)
+
 type Config[T any] struct {
 	// The original slice is minimized with respect to this predicate.
-	// If Pred(X) returns true, X is assumed to contain all elements that must stay.
-	Pred func([]T) (bool, error)
+	// If Pred(X) returns ResultTrue, X is assumed to contain all elements that must stay.
+	// If Pred(X) returns ResultFalse, the omitted elements are needed.
+	// If Pred(X) returns ResultUnknown, the outcome is unknown (e.g. an unrelated crash);
+	// in this case, the omitted elements are kept, split in two chunks, and bisection continues.
+	Pred func([]T) (Result, error)
+	// PredBool is an alternative binary predicate for convenience. Exactly one of Pred or PredBool
+	// may be provided.
+	PredBool func([]T) (bool, error)
 	// MaxSteps is a limit on the number of predicate calls during bisection.
-	// If it's hit, the bisection continues as if Pred() begins to return false.
+	// If it's hit, the bisection continues as if Pred() begins to return ResultFalse.
 	// If it's set to 0 (by default), no limit is applied.
 	MaxSteps int
 	// MaxChunks sets a limit on the number of chunks pursued by the bisection algorithm.
 	// If we hit the limit, bisection is stopped and Array() returns ErrTooManyChunks
-	// anongside the intermediate bisection result (a valid, but not fully minimized slice).
+	// alongside the intermediate bisection result (a valid, but not fully minimized slice).
 	MaxChunks int
 	// Logf is used for sharing debugging output.
 	Logf func(string, ...any)
@@ -79,8 +93,8 @@ func SliceWithFixed[T any](config Config[T], slice []T, fixed func(T) bool) ([]T
 	newConfig := Config[int]{
 		MaxSteps:  config.MaxSteps,
 		MaxChunks: config.MaxChunks,
-		Pred: func(idx []int) (bool, error) {
-			return config.Pred(convert(idx))
+		Pred: func(idx []int) (Result, error) {
+			return config.callPred(convert(idx))
 		},
 		Logf: config.Logf,
 	}
@@ -89,6 +103,20 @@ func SliceWithFixed[T any](config Config[T], slice []T, fixed func(T) bool) ([]T
 		return nil, err
 	}
 	return convert(result), nil
+}
+
+func (cfg *Config[T]) callPred(elems []T) (Result, error) {
+	if cfg.Pred != nil {
+		return cfg.Pred(elems)
+	}
+	if cfg.PredBool != nil {
+		ret, err := cfg.PredBool(elems)
+		if ret {
+			return ResultTrue, err
+		}
+		return ResultFalse, err
+	}
+	return ResultFalse, errors.New("minimize: no predicate specified")
 }
 
 type sliceCtx[T any] struct {
@@ -158,9 +186,12 @@ func (ctx *sliceCtx[T]) splitChunks(someNeeded bool) error {
 				if err != nil {
 					return err
 				}
-				if ret {
+				if ret == ResultTrue {
 					ctx.Logf("the chunk can be dropped")
 					continue
+				}
+				if ret == ResultUnknown {
+					ctx.Logf("the predicate returned unknown; keeping chunk to split further")
 				}
 			} else {
 				ctx.Logf("no need to test this chunk, it's definitely needed")
@@ -186,19 +217,18 @@ func (ctx *sliceCtx[T]) initialSplit(size int) int {
 	if ctx.MaxSteps > 0 && math.Log2(float64(size)) > float64(ctx.MaxSteps) {
 		return ctx.MaxSteps
 	}
-	// Otherwise let's split in 3.
-	return 3
+	return 2
 }
 
 // predRun() determines whether (before + mid + after) covers the necessary elements.
-func (ctx *sliceCtx[T]) predRun(before []*arrayChunk[T], mid []T, after []*arrayChunk[T]) (bool, error) {
+func (ctx *sliceCtx[T]) predRun(before []*arrayChunk[T], mid []T, after []*arrayChunk[T]) (Result, error) {
 	if ctx.MaxSteps > 0 && ctx.predRuns >= ctx.MaxSteps {
 		ctx.Logf("we have reached the limit on predicate runs (%d); pretend it returns false",
 			ctx.MaxSteps)
-		return false, nil
+		return ResultFalse, nil
 	}
 	ctx.predRuns++
-	return ctx.Pred(mergeChunks(before, mid, after))
+	return ctx.callPred(mergeChunks(before, mid, after))
 }
 
 // The bisection process is done once every chunk is marked as final.

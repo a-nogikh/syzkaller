@@ -48,7 +48,7 @@ func (kconf *KConfig) Minimize(base, full *ConfigFile, pred func(*ConfigFile) (b
 	}
 	result, err := minimize.Slice(
 		minimize.Config[string]{
-			Pred:     minimizePred,
+			PredBool: minimizePred,
 			MaxSteps: maxSteps,
 			Logf:     dt.Logf,
 		},

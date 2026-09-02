@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/syzkaller/pkg/bisect/minimize"
 	"github.com/google/syzkaller/pkg/csource"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/instance"
@@ -59,14 +60,17 @@ func TestBisect(t *testing.T) {
 			progs = append(progs, &prog)
 			numGuilty++
 		}
-		progs, _ = ctx.bisectProgs(progs, func(p []*prog.LogEntry) (bool, error) {
+		progs, _ = ctx.bisectProgs(progs, func(p []*prog.LogEntry) (minimize.Result, error) {
 			guilty := 0
 			for _, prog := range p {
 				if prog.Proc == 42 {
 					guilty++
 				}
 			}
-			return guilty == numGuilty, nil
+			if guilty == numGuilty {
+				return minimize.ResultTrue, nil
+			}
+			return minimize.ResultFalse, nil
 		})
 		if numGuilty > 6 && len(progs) == 0 {
 			// Bisection has been aborted.
@@ -81,6 +85,43 @@ func TestBisect(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestBisectProgsUnknown(t *testing.T) {
+	ctx := &reproContext{
+		stats:         new(Stats),
+		bisectUnknown: true,
+	}
+	var progs []*prog.LogEntry
+	for i := range 30 {
+		var p prog.LogEntry
+		p.Proc = i
+		progs = append(progs, &p)
+	}
+	// Target bug is Proc = 10.
+	// Unrelated bug is Proc = 20.
+	isolated, err := ctx.bisectProgs(progs, func(p []*prog.LogEntry) (minimize.Result, error) {
+		hasTarget := false
+		hasUnrelated := false
+		for _, ent := range p {
+			if ent.Proc == 10 {
+				hasTarget = true
+			}
+			if ent.Proc == 20 {
+				hasUnrelated = true
+			}
+		}
+		if hasUnrelated {
+			return minimize.ResultUnknown, nil
+		}
+		if hasTarget {
+			return minimize.ResultTrue, nil
+		}
+		return minimize.ResultFalse, nil
+	})
+	require.NoError(t, err)
+	require.Len(t, isolated, 1)
+	require.Equal(t, 10, isolated[0].Proc)
 }
 
 func TestSimplifies(t *testing.T) {
@@ -562,6 +603,53 @@ func TestSlidingWindowReplay(t *testing.T) {
 		res, _, err := runInner(context.Background(), []byte(panicLog), env, exec)
 		require.NoError(t, err)
 		require.Nil(t, res)
+	})
+
+	t.Run("with exact crash and bisect unknown circumvents unrelated crash", func(t *testing.T) {
+		exec := &testExecInterface{
+			run: func(p []byte) (*instance.RunResult, error) {
+				str := string(p)
+				hasTarget := strings.Contains(str, "pause()") && strings.Contains(str, "alarm(0xa)")
+				// If block has > 200 programs (like the whole log of 300), it triggers an unrelated crash.
+				if strings.Count(str, "executing program") > 200 {
+					return fakeCrashResult("panic: other bug"), nil
+				}
+				if hasTarget {
+					return fakeCrashResult("panic: target bug"), nil
+				}
+				return fakeCrashResult(""), nil
+			},
+		}
+		// Without BisectUnknown, whole log crashes with 'panic: other bug' and bails out.
+		envDisabled := Environment{
+			Config:        mgrConfig,
+			Features:      flatrpc.AllFeatures,
+			Fast:          true,
+			Reporter:      reporter,
+			SlidingWindow: false,
+			ExactCrash:    true,
+			BisectUnknown: false,
+			logf:          t.Logf,
+		}
+		resDisabled, _, err := runInner(context.Background(), []byte(panicLog), envDisabled, exec)
+		require.NoError(t, err)
+		require.Nil(t, resDisabled)
+
+		// With BisectUnknown, it proceeds to bisection and extracts the target reproducer.
+		envEnabled := Environment{
+			Config:        mgrConfig,
+			Features:      flatrpc.AllFeatures,
+			Fast:          true,
+			Reporter:      reporter,
+			SlidingWindow: false,
+			ExactCrash:    true,
+			BisectUnknown: true,
+			logf:          t.Logf,
+		}
+		resEnabled, _, err := runInner(context.Background(), []byte(panicLog), envEnabled, exec)
+		require.NoError(t, err)
+		require.NotNil(t, resEnabled)
+		require.Equal(t, "pause()\nalarm(0xa)\n", string(resEnabled.Prog.Serialize()))
 	})
 
 	t.Run("with sliding window no crash skips bisection", func(t *testing.T) {

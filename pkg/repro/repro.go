@@ -75,6 +75,7 @@ type reproContext struct {
 	exactCrash     bool
 	shuffle        bool
 	procReplay     bool
+	bisectUnknown  bool
 }
 
 // execInterface describes the interfaces needed by pkg/repro.
@@ -97,6 +98,7 @@ type Environment struct {
 	ExactCrash    bool
 	Shuffle       bool
 	ProcReplay    bool
+	BisectUnknown bool
 
 	logf func(string, ...any)
 }
@@ -153,6 +155,7 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 		exactCrash:     env.ExactCrash,
 		shuffle:        env.Shuffle,
 		procReplay:     env.ProcReplay,
+		bisectUnknown:  env.BisectUnknown,
 		logf:           env.logf,
 	}
 	if env.ProcReplay {
@@ -481,8 +484,12 @@ func (ctx *reproContext) extractProgBisect(entries []*prog.LogEntry, baseDuratio
 
 	if !ctx.slidingWindow || len(entries) < minSlidingEntries {
 		if !ret.Crashed {
-			ctx.reproLogf(3, "replaying the whole log did not cause a kernel crash")
-			return nil, nil
+			if ctx.bisectUnknown && ret.Unrelated {
+				ctx.reproLogf(3, "bisect: whole log crashed with an unrelated crash; continuing bisection with unknown handling")
+			} else {
+				ctx.reproLogf(3, "replaying the whole log did not cause a kernel crash")
+				return nil, nil
+			}
 		}
 	} else if !ctx.isExpectedCrash(ret) {
 		entries, err = ctx.extractSlidingWindow(entries, duration, opts)
@@ -492,9 +499,15 @@ func (ctx *reproContext) extractProgBisect(entries []*prog.LogEntry, baseDuratio
 	}
 
 	// Bisect the log to find multiple guilty programs.
-	entries, err = ctx.bisectProgs(entries, func(progs []*prog.LogEntry) (bool, error) {
+	entries, err = ctx.bisectProgs(entries, func(progs []*prog.LogEntry) (minimize.Result, error) {
 		ret, err := ctx.testProgs(progs, duration(len(progs)), opts, false)
-		return ret.Crashed, err
+		if ret.Crashed {
+			return minimize.ResultTrue, err
+		}
+		if ctx.bisectUnknown && ret.Unrelated {
+			return minimize.ResultUnknown, err
+		}
+		return minimize.ResultFalse, err
 	})
 	if err != nil {
 		return nil, err
@@ -844,8 +857,9 @@ func (ctx *reproContext) testProg(p *prog.Prog, duration time.Duration, opts cso
 }
 
 type verdict struct {
-	Crashed  bool
-	Duration time.Duration
+	Crashed   bool
+	Duration  time.Duration
+	Unrelated bool
 }
 
 func (ctx *reproContext) getVerdict(callback func() (rep *instance.RunResult, err error), strict bool) (
@@ -869,20 +883,20 @@ func (ctx *reproContext) getVerdict(callback func() (rep *instance.RunResult, er
 	}
 	rep := result.Report
 	if rep == nil {
-		return verdict{false, result.Duration}, nil
+		return verdict{false, result.Duration, false}, nil
 	}
 	if rep.Suppressed {
 		ctx.reproLogf(2, "suppressed program crash: %v", rep.Title)
-		return verdict{false, result.Duration}, nil
+		return verdict{false, result.Duration, true}, nil
 	}
 	if ctx.crashType == crash.MemoryLeak && rep.Type != crash.MemoryLeak {
 		ctx.reproLogf(2, "not a leak crash: %v", rep.Title)
-		return verdict{false, result.Duration}, nil
+		return verdict{false, result.Duration, true}, nil
 	}
 	if ctx.exactCrash {
 		if !TitlesIntersect(ctx.crashTitle, ctx.crashAltTitles, rep.Title, rep.AltTitles) {
 			ctx.reproLogf(2, "crash title %q does not match target crash %q, ignore", rep.Title, ctx.crashTitle)
-			return verdict{false, result.Duration}, nil
+			return verdict{false, result.Duration, true}, nil
 		}
 		ctx.observedTitles[rep.Title] = rep.Type
 		for _, alt := range rep.AltTitles {
@@ -892,15 +906,15 @@ func (ctx *reproContext) getVerdict(callback func() (rep *instance.RunResult, er
 		// Already established title, always permit.
 	} else if !isHighPrioReport(rep.Type) && ctx.observedHighPrioCrash() {
 		ctx.reproLogf(2, "ignore low priority crash: %v", rep.Title)
-		return verdict{false, result.Duration}, nil
+		return verdict{false, result.Duration, true}, nil
 	} else if strict && len(ctx.observedTitles) > 0 {
 		ctx.reproLogf(2, "a never seen crash title: %v, ignore", rep.Title)
-		return verdict{false, result.Duration}, nil
+		return verdict{false, result.Duration, true}, nil
 	} else {
 		ctx.observedTitles[rep.Title] = rep.Type
 	}
 	ctx.report = rep
-	return verdict{true, result.Duration}, nil
+	return verdict{true, result.Duration, false}, nil
 }
 
 func (ctx *reproContext) observedHighPrioCrash() bool {
@@ -992,14 +1006,14 @@ func (ctx *reproContext) reproLogf(level int, format string, args ...any) {
 	ctx.stats.Log = append(ctx.stats.Log, []byte(fmt.Sprintf(format, args...)+"\n")...)
 }
 
-func (ctx *reproContext) bisectProgs(progs []*prog.LogEntry, pred func([]*prog.LogEntry) (bool, error)) (
+func (ctx *reproContext) bisectProgs(progs []*prog.LogEntry, pred func([]*prog.LogEntry) (minimize.Result, error)) (
 	[]*prog.LogEntry, error) {
 	// Set up progs bisection.
 	ctx.reproLogf(3, "bisect: bisecting %d programs", len(progs))
-	minimizePred := func(progs []*prog.LogEntry) (bool, error) {
+	minimizePred := func(progs []*prog.LogEntry) (minimize.Result, error) {
 		// Don't waste time testing empty crash log.
 		if len(progs) == 0 {
-			return false, nil
+			return minimize.ResultFalse, nil
 		}
 		return pred(progs)
 	}
@@ -1008,6 +1022,8 @@ func (ctx *reproContext) bisectProgs(progs []*prog.LogEntry, pred func([]*prog.L
 	chunks := 6
 	if ctx.fast {
 		chunks = 2
+	} else if ctx.bisectUnknown {
+		chunks = 10
 	}
 	ret, err := minimize.SliceWithFixed(minimize.Config[*prog.LogEntry]{
 		Pred:      minimizePred,

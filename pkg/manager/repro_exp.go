@@ -35,6 +35,7 @@ const (
 	Config6Progs ConfigID = iota
 	ConfigAsIsPerProcExact
 	ConfigAsIsSlidingRand
+	ConfigAsIsUnknownExact
 )
 
 const (
@@ -55,6 +56,7 @@ type ReproConfig struct {
 	ExactCrash    bool     `json:"exact_crash"`
 	Shuffle       bool     `json:"shuffle"`
 	ProcReplay    bool     `json:"proc_replay"`
+	BisectUnknown bool     `json:"bisect_unknown"`
 }
 
 var ReproConfigs = []ReproConfig{
@@ -67,6 +69,7 @@ var ReproConfigs = []ReproConfig{
 		ExactCrash:    false,
 		Shuffle:       false,
 		ProcReplay:    false,
+		BisectUnknown: false,
 	},
 	{
 		ID:            ConfigAsIsPerProcExact,
@@ -77,6 +80,7 @@ var ReproConfigs = []ReproConfig{
 		ExactCrash:    true,
 		Shuffle:       false,
 		ProcReplay:    true,
+		BisectUnknown: false,
 	},
 	{
 		ID:            ConfigAsIsSlidingRand,
@@ -87,6 +91,18 @@ var ReproConfigs = []ReproConfig{
 		ExactCrash:    true,
 		Shuffle:       true,
 		ProcReplay:    false,
+		BisectUnknown: false,
+	},
+	{
+		ID:            ConfigAsIsUnknownExact,
+		Key:           "as_is_unknown_exact",
+		Name:          "as is + unknown + exact",
+		MaxPerProc:    0,
+		SlidingWindow: false,
+		ExactCrash:    true,
+		Shuffle:       false,
+		ProcReplay:    false,
+		BisectUnknown: true,
 	},
 }
 
@@ -668,6 +684,7 @@ func (exp *ReproExp) defaultRunRepro(ctx context.Context, crashLog []byte,
 		ExactCrash:    cfg.ExactCrash,
 		Shuffle:       cfg.Shuffle,
 		ProcReplay:    cfg.ProcReplay,
+		BisectUnknown: cfg.BisectUnknown,
 	})
 }
 

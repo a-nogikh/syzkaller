@@ -194,8 +194,8 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 	require.NoError(t, exp.Init())
 	exp.Run(context.Background())
 
-	// Total jobs = 2 bugs * 3 configs = 6 jobs.
-	require.Equal(t, 6, callCount)
+	// Total jobs = 2 bugs * 4 configs = 8 jobs.
+	require.Equal(t, 8, callCount)
 
 	// Verify sourceWorkdir was NOT modified (no repro-exp dir written there).
 	require.NoFileExists(t, filepath.Join(sourceWorkdir, "repro-exp"))
@@ -208,9 +208,9 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 
 	// Verify UI table output.
 	ui := exp.UI()
-	require.Len(t, ui.Columns, 3)
+	require.Len(t, ui.Columns, 4)
 	require.Len(t, ui.Rows, 2)
-	require.Len(t, ui.Stats, 3)
+	require.Len(t, ui.Stats, 4)
 
 	// Check that per-job folders exist with both truncated.log and repro.log.
 	for _, row := range ui.Rows {
@@ -228,7 +228,7 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 	// Now simulate restart:
 	// Create a new ReproExp on the same workdirs.
 	expRestart := NewReproExp(cfg, sourceWorkdir, nil, nil)
-	// Mock runner should NOT be called because all 6 jobs were already completed!
+	// Mock runner should NOT be called because all 8 jobs were already completed!
 	expRestart.runRepro = func(ctx context.Context, log []byte, cfg ReproConfig) (*repro.Result, *repro.Stats, error) {
 		t.Fatalf("runRepro should not be called for already completed jobs!")
 		return nil, nil, nil
@@ -244,16 +244,18 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 }
 
 func TestReproConfigs(t *testing.T) {
-	require.Len(t, ReproConfigs, 3)
-	expectedKeys := []string{"6_progs", "as_is_per_proc_exact", "as_is_sliding_rand"}
-	expectedExact := []bool{false, true, true}
-	expectedShuffle := []bool{false, false, true}
-	expectedProcReplay := []bool{false, true, false}
+	require.Len(t, ReproConfigs, 4)
+	expectedKeys := []string{"6_progs", "as_is_per_proc_exact", "as_is_sliding_rand", "as_is_unknown_exact"}
+	expectedExact := []bool{false, true, true, true}
+	expectedShuffle := []bool{false, false, true, false}
+	expectedProcReplay := []bool{false, true, false, false}
+	expectedBisectUnknown := []bool{false, false, false, true}
 	for i, cfg := range ReproConfigs {
 		require.Equal(t, expectedKeys[i], cfg.Key)
 		require.Equal(t, expectedExact[i], cfg.ExactCrash)
 		require.Equal(t, expectedShuffle[i], cfg.Shuffle)
 		require.Equal(t, expectedProcReplay[i], cfg.ProcReplay)
+		require.Equal(t, expectedBisectUnknown[i], cfg.BisectUnknown)
 	}
 }
 
