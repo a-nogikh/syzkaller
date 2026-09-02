@@ -6,16 +6,16 @@ package rpcserver
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLastExecutingEmpty(t *testing.T) {
-	last := MakeLastExecuting(10, 10)
-	assert.Empty(t, last.Collect())
+	last := MakeLastExecuting(10, 10, 0)
+	require.Empty(t, last.Collect())
 }
 
 func TestLastExecuting(t *testing.T) {
-	last := MakeLastExecuting(21, 3)
+	last := MakeLastExecuting(21, 3, 0)
 	last.Note(1, 0, []byte("prog1"), 1)
 
 	last.Note(2, 1, []byte("prog2"), 2)
@@ -35,7 +35,7 @@ func TestLastExecuting(t *testing.T) {
 
 	last.Note(13, 8, []byte("prog13"), 13)
 
-	assert.Equal(t, last.Collect(), []ExecRecord{
+	require.Equal(t, last.Collect(), []ExecRecord{
 		{ID: 1, Proc: 0, Prog: []byte("prog1"), Time: 12},
 
 		{ID: 2, Proc: 1, Prog: []byte("prog2"), Time: 11},
@@ -56,7 +56,7 @@ func TestLastExecuting(t *testing.T) {
 }
 
 func TestLastExecutingHanged(t *testing.T) {
-	last := MakeLastExecuting(1, 3)
+	last := MakeLastExecuting(1, 3, 0)
 	last.Note(1, 0, []byte("prog1"), 10)
 	last.Note(2, 0, []byte("prog2"), 20)
 	last.Hanged(2, 0, []byte("prog2"), 25)
@@ -68,11 +68,30 @@ func TestLastExecutingHanged(t *testing.T) {
 	last.Note(7, 0, []byte("prog7"), 70)
 	last.Note(8, 0, []byte("prog8"), 80)
 	last.Note(9, 0, []byte("prog9"), 90)
-	assert.Equal(t, last.Collect(), []ExecRecord{
+	require.Equal(t, last.Collect(), []ExecRecord{
 		{ID: 2, Proc: 32, Prog: []byte("prog2"), Time: 65},
 		{ID: 5, Proc: 33, Prog: []byte("prog5"), Time: 35},
 		{ID: 7, Proc: 0, Prog: []byte("prog7"), Time: 20},
 		{ID: 8, Proc: 0, Prog: []byte("prog8"), Time: 10},
 		{ID: 9, Proc: 0, Prog: []byte("prog9"), Time: 0},
+	})
+}
+
+func TestLastExecutingTotalLimit(t *testing.T) {
+	last := MakeLastExecuting(2, 5, 4)
+	last.Note(1, 0, []byte("prog1"), 10)
+	last.Note(2, 1, []byte("prog2"), 15)
+	last.Note(3, 0, []byte("prog3"), 20)
+	last.Note(4, 1, []byte("prog4"), 25)
+	last.Note(5, 0, []byte("prog5"), 30)
+	last.Note(6, 1, []byte("prog6"), 35)
+
+	// Total recorded: 6 programs. Limit: 4 programs.
+	// Only the 4 latest programs (closest to crash at Time: 35) should be returned.
+	require.Equal(t, last.Collect(), []ExecRecord{
+		{ID: 3, Proc: 0, Prog: []byte("prog3"), Time: 15},
+		{ID: 4, Proc: 1, Prog: []byte("prog4"), Time: 10},
+		{ID: 5, Proc: 0, Prog: []byte("prog5"), Time: 5},
+		{ID: 6, Proc: 1, Prog: []byte("prog6"), Time: 0},
 	})
 }

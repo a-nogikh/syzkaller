@@ -18,6 +18,7 @@ import (
 // for each proc in a VM, and allows to query this set after a crash.
 type LastExecuting struct {
 	count     int
+	total     int
 	procs     []ExecRecord
 	hanged    []ExecRecord // hanged programs, kept forever
 	positions []int
@@ -30,9 +31,10 @@ type ExecRecord struct {
 	Time time.Duration
 }
 
-func MakeLastExecuting(procs, count int) *LastExecuting {
+func MakeLastExecuting(procs, count, total int) *LastExecuting {
 	return &LastExecuting{
 		count:     count,
+		total:     total,
 		procs:     make([]ExecRecord, procs*count),
 		positions: make([]int, procs),
 	}
@@ -73,6 +75,9 @@ func (last *LastExecuting) Collect() []ExecRecord {
 	procs := slices.Concat(last.procs, last.hanged)
 	last.procs = nil // The type must not be used after this.
 	last.hanged = nil
+	if len(procs) == 0 {
+		return nil
+	}
 	slices.SortFunc(procs, func(a, b ExecRecord) int {
 		return cmp.Compare(a.Time, b.Time)
 	})
@@ -83,6 +88,9 @@ func (last *LastExecuting) Collect() []ExecRecord {
 			break
 		}
 		procs[i].Time = max - proc.Time
+	}
+	if last.total > 0 && len(procs) > last.total {
+		procs = procs[len(procs)-last.total:]
 	}
 	return procs
 }
