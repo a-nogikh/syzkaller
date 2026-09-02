@@ -356,8 +356,8 @@ func (runner *Runner) sendRequest(req *queue.Request) error {
 	default:
 		panic("unhandled request type")
 	}
-	var avoid uint64
-	for _, id := range req.Avoid {
+	avoid := req.Avoid
+	for _, id := range req.AvoidVM {
 		if id.VM == runner.id {
 			avoid |= uint64(1 << id.Proc)
 		}

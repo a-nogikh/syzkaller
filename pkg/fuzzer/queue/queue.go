@@ -43,9 +43,12 @@ type Request struct {
 	// Important requests will be retried even from crashed VMs.
 	Important bool
 
-	// Avoid specifies set of executors that are preferable to avoid when executing this request.
+	// Avoid specifies a bitmask of procs to avoid in the executor.
+	Avoid uint64
+
+	// AvoidVM specifies set of executors that are preferable to avoid when executing this request.
 	// The restriction is soft since there can be only one executor at all or available right now.
-	Avoid []ExecutorID
+	AvoidVM []ExecutorID
 
 	// The callback will be called on request completion in the LIFO order.
 	// If it returns false, all further processing will be stopped.

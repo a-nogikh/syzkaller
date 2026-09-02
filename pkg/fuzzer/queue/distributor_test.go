@@ -21,7 +21,7 @@ func TestDistributor(t *testing.T) {
 	assert.Equal(t, req, dist.Next(1))
 
 	// Avoid VM 0.
-	req.Avoid = []ExecutorID{{VM: 0}}
+	req.AvoidVM = []ExecutorID{{VM: 0}}
 	q.Submit(req)
 	var noReq *Request
 	assert.Equal(t, noReq, dist.Next(0))
@@ -42,7 +42,7 @@ func TestDistributor(t *testing.T) {
 	// If all active VMs are in the avoid set, then they should get
 	// the request immidiatly.
 	assert.Equal(t, noReq, dist.Next(1))
-	req.Avoid = []ExecutorID{{VM: 0}, {VM: 1}}
+	req.AvoidVM = []ExecutorID{{VM: 0}, {VM: 1}}
 	q.Submit(req)
 	assert.Equal(t, req, dist.Next(1))
 }
@@ -57,7 +57,7 @@ func TestDistributorSingleVM(t *testing.T) {
 	dist := Distribute(q)
 
 	// VM 0 is the only VM that ever serves requests.
-	req := &Request{Avoid: []ExecutorID{{VM: 0}}}
+	req := &Request{AvoidVM: []ExecutorID{{VM: 0}}}
 	q.Submit(req)
 	// With only VM 0 active, avoidance is impossible, so it must get the request
 	// right away without waiting out the recency window.

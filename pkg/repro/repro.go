@@ -74,6 +74,7 @@ type reproContext struct {
 	slidingWindow  bool
 	exactCrash     bool
 	shuffle        bool
+	procReplay     bool
 }
 
 // execInterface describes the interfaces needed by pkg/repro.
@@ -95,6 +96,7 @@ type Environment struct {
 	SlidingWindow bool
 	ExactCrash    bool
 	Shuffle       bool
+	ProcReplay    bool
 
 	logf func(string, ...any)
 }
@@ -150,7 +152,15 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 		slidingWindow:  env.SlidingWindow,
 		exactCrash:     env.ExactCrash,
 		shuffle:        env.Shuffle,
+		procReplay:     env.ProcReplay,
 		logf:           env.logf,
+	}
+	if env.ProcReplay {
+		maxLogProc := 0
+		for _, ent := range entries {
+			maxLogProc = max(maxLogProc, ent.Proc)
+		}
+		reproCtx.startOpts.Procs = min(prog.MaxPids, max(reproCtx.startOpts.Procs, maxLogProc+1))
 	}
 	if env.ExactCrash {
 		if crashTitle != "" {
@@ -932,6 +942,13 @@ func (ctx *reproContext) testProgs(entries []*prog.LogEntry, duration time.Durat
 	if len(entries) == 0 {
 		return ret, fmt.Errorf("no programs to execute")
 	}
+	if ctx.procReplay {
+		maxLogProc := 0
+		for _, ent := range entries {
+			maxLogProc = max(maxLogProc, ent.Proc)
+		}
+		opts.Procs = min(prog.MaxPids, max(opts.Procs, maxLogProc+1))
+	}
 	pstr := encodeEntries(entries)
 	program := entries[0].P.String()
 	if len(entries) > 1 {
@@ -948,9 +965,10 @@ func (ctx *reproContext) testProgs(entries []*prog.LogEntry, duration time.Durat
 	ctx.reproLogf(3, "detailed listing:\n%s", pstr)
 	return ctx.getVerdict(func() (*instance.RunResult, error) {
 		return ctx.exec.RunSyz(ctx.ctx, pstr, instance.RunOptions{
-			Opts:     opts,
-			Duration: duration,
-			Shuffle:  ctx.shuffle,
+			Opts:       opts,
+			Duration:   duration,
+			Shuffle:    ctx.shuffle,
+			ProcReplay: ctx.procReplay,
 		}, ctx.reproLogf)
 	}, strict)
 }

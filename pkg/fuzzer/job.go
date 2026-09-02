@@ -251,7 +251,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 			Prog:            job.p,
 			ExecOpts:        setFlags(flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagCollectSignal),
 			ReturnAllSignal: indices,
-			Avoid:           avoid,
+			AvoidVM:         avoid,
 			Stat:            job.fuzzer.statExecTriage,
 		}, progInTriage)
 		if result.Stop() {

@@ -647,11 +647,14 @@ private:
 		for (auto& proc : procs_) {
 			proc->Ready(select, now, requests_.empty());
 			if (!IsScheduledForLeakCheck() && !requests_.empty()) {
-				if (proc->Execute(requests_.front())) {
-					requests_.pop_front();
+				for (auto it = requests_.begin(); it != requests_.end(); ++it) {
+					if (proc->Execute(*it)) {
+						requests_.erase(it);
 #if GOOS_linux
-					++execs_since_leak_check_;
+						++execs_since_leak_check_;
 #endif
+						break;
+					}
 				}
 			}
 		}

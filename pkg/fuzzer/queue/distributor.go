@@ -44,7 +44,7 @@ func (dist *Distributor) Next(vm int) *Request {
 	}
 	for {
 		req := dist.source.Next()
-		if req == nil || !contains(req.Avoid, vm) || !dist.hasOtherActive(req.Avoid) {
+		if req == nil || !contains(req.AvoidVM, vm) || !dist.hasOtherActive(req.AvoidVM) {
 			return req
 		}
 		dist.delay(req)
@@ -68,7 +68,7 @@ func (dist *Distributor) delayed(vm int) *Request {
 	defer dist.mu.Unlock()
 	seq := dist.seq.Load()
 	for i, req := range dist.queue {
-		violation := contains(req.Avoid, vm)
+		violation := contains(req.AvoidVM, vm)
 		// The delayedSince check protects from a situation when we had another VM available,
 		// and delayed a request, but then the VM was taken for reproduction and does not
 		// serve requests any more. If we could not dispatch a request in 1000 attempts,

@@ -216,6 +216,7 @@ type RunOptions struct {
 	MemoryDumpDir string
 	Shuffle       bool
 	Seed          int64
+	ProcReplay    bool
 }
 
 func (inst *ExecProgInstance) RunCProg(p *prog.Prog, opts RunOptions) (*RunResult, error) {
@@ -264,7 +265,7 @@ func (inst *ExecProgInstance) RunSyzProgFile(progFile string, opts RunOptions) (
 	}
 	command := ExecprogCmd(inst.execprogBin, inst.executorBin, inst.mgrCfg.TargetOS, inst.mgrCfg.TargetArch,
 		inst.mgrCfg.TargetVMArch, inst.mgrCfg.Type, opts.Opts, !inst.OldFlagsCompatMode,
-		inst.mgrCfg.Timeouts.Slowdown, coverFile, vmProgFile, opts.Shuffle, opts.Seed)
+		inst.mgrCfg.Timeouts.Slowdown, coverFile, vmProgFile, opts.Shuffle, opts.ProcReplay, opts.Seed)
 	res, err := inst.runCommand(command, opts)
 	if err != nil {
 		return nil, err

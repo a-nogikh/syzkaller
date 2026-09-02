@@ -53,7 +53,7 @@ func TestExecprogCmd(t *testing.T) {
 				FaultCall: 2,
 				FaultNth:  3,
 			},
-		}, true, 10, "", "myprog", false)
+		}, true, 10, "", "myprog", false, false)
 	args := strings.Split(cmdLine, " ")[1:]
 	if err := tool.ParseFlags(flags, args); err != nil {
 		t.Fatal(err)
@@ -119,32 +119,50 @@ func execprogFlagSet() *flag.FlagSet {
 	flags.Int("sandbox_arg", 0, "argument for sandbox runner to adjust it via config")
 	flags.Bool("shuffle", false, "")
 	flags.Int64("seed", 0, "")
+	flags.Bool("proc_replay", false, "")
 	return flags
 }
 
-func TestExecprogCmdShuffle(t *testing.T) {
-	flags := execprogFlagSet()
-	cmdLine := ExecprogCmd(os.Args[0], "/myexecutor", targets.Linux, targets.AMD64, targets.AMD64, "vmtype",
-		csource.Options{}, true, 1, "", "myprog", true)
-	args := strings.Split(cmdLine, " ")[1:]
-	require.NoError(t, tool.ParseFlags(flags, args))
-	flagShuffle := flags.Lookup("shuffle")
-	require.NotNil(t, flagShuffle)
-	require.Equal(t, "true", flagShuffle.Value.String())
-}
-
-func TestExecprogCmdSeed(t *testing.T) {
-	flags := execprogFlagSet()
-	cmdLine := ExecprogCmd(os.Args[0], "/myexecutor", targets.Linux, targets.AMD64, targets.AMD64, "vmtype",
-		csource.Options{}, true, 1, "", "myprog", true, 12345)
-	args := strings.Split(cmdLine, " ")[1:]
-	require.NoError(t, tool.ParseFlags(flags, args))
-	flagShuffle := flags.Lookup("shuffle")
-	require.NotNil(t, flagShuffle)
-	require.Equal(t, "true", flagShuffle.Value.String())
-	flagSeed := flags.Lookup("seed")
-	require.NotNil(t, flagSeed)
-	require.Equal(t, "12345", flagSeed.Value.String())
+func TestExecprogCmdOptionalFlags(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		shuffle    bool
+		procReplay bool
+		seed       []int64
+		flag       string
+		val        string
+	}{
+		{
+			name:    "shuffle",
+			shuffle: true,
+			flag:    "shuffle",
+			val:     "true",
+		},
+		{
+			name:       "proc_replay",
+			procReplay: true,
+			flag:       "proc_replay",
+			val:        "true",
+		},
+		{
+			name:    "seed",
+			shuffle: true,
+			seed:    []int64{12345},
+			flag:    "seed",
+			val:     "12345",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			flags := execprogFlagSet()
+			cmdLine := ExecprogCmd(os.Args[0], "/myexecutor", targets.Linux, targets.AMD64, targets.AMD64, "vmtype",
+				csource.Options{}, true, 1, "", "myprog", test.shuffle, test.procReplay, test.seed...)
+			args := strings.Split(cmdLine, " ")[1:]
+			require.NoError(t, tool.ParseFlags(flags, args))
+			fl := flags.Lookup(test.flag)
+			require.NotNil(t, fl)
+			require.Equal(t, test.val, fl.Value.String())
+		})
+	}
 }
 
 func TestRunnerCmd(t *testing.T) {

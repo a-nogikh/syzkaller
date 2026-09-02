@@ -242,13 +242,15 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 
 func TestReproConfigs(t *testing.T) {
 	require.Len(t, ReproConfigs, 4)
-	expectedKeys := []string{"6_progs", "25_progs_sliding", "as_is_sliding_exact", "as_is_sliding_rand"}
+	expectedKeys := []string{"6_progs", "25_progs_sliding", "as_is_per_proc_exact", "as_is_sliding_rand"}
 	expectedExact := []bool{false, false, true, true}
 	expectedShuffle := []bool{false, false, false, true}
+	expectedProcReplay := []bool{false, false, true, false}
 	for i, cfg := range ReproConfigs {
 		require.Equal(t, expectedKeys[i], cfg.Key)
 		require.Equal(t, expectedExact[i], cfg.ExactCrash)
 		require.Equal(t, expectedShuffle[i], cfg.Shuffle)
+		require.Equal(t, expectedProcReplay[i], cfg.ProcReplay)
 	}
 }
 

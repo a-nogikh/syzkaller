@@ -10,9 +10,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math/bits"
 	"math/rand"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -64,10 +66,11 @@ var (
 	// syz-execprog will execute random programs infinitely until it's stopped or it crashes
 	// the kernel underneath. If it's given a corpus of programs, it will alternate between
 	// executing random programs and mutated programs from the corpus.
-	flagStress   = flag.Bool("stress", false, "enable stress mode (local fuzzer)")
-	flagSyscalls = flag.String("syscalls", "", "comma-separated list of enabled syscalls for the stress mode")
-	flagShuffle  = flag.Bool("shuffle", false, "shuffle the list of programs after the first cycle")
-	flagSeed     = flag.Int64("seed", 0, "random seed (0 for time-based)")
+	flagStress     = flag.Bool("stress", false, "enable stress mode (local fuzzer)")
+	flagSyscalls   = flag.String("syscalls", "", "comma-separated list of enabled syscalls for the stress mode")
+	flagShuffle    = flag.Bool("shuffle", false, "shuffle the list of programs after the first cycle")
+	flagSeed       = flag.Int64("seed", 0, "random seed (0 for time-based)")
+	flagProcReplay = flag.Bool("proc_replay", false, "replay programs on their recorded proc IDs from the log")
 
 	flagGDB = flag.Bool("gdb", false, "start executor under gdb")
 
@@ -142,7 +145,7 @@ func main() {
 		exec |= flatrpc.ExecFlagDedupCover
 	}
 
-	progs := loadPrograms(target, flag.Args())
+	progs, procProgs := loadPrograms(target, flag.Args())
 	if *flagGlob == "" && !*flagStress && len(progs) == 0 {
 		flag.Usage()
 		os.Exit(1)
@@ -154,18 +157,20 @@ func main() {
 	log.Logf(0, "using seed %v", seed)
 	rpcCtx, done := context.WithCancel(context.Background())
 	ctx := &Context{
-		target:    target,
-		done:      done,
-		progs:     progs,
-		globs:     strings.Split(*flagGlob, ":"),
-		rs:        rand.NewSource(seed),
-		coverFile: *flagCoverFile,
-		output:    *flagOutput,
-		signal:    *flagSignal,
-		hints:     *flagHints,
-		stress:    *flagStress,
-		repeat:    *flagRepeat,
-		shuffle:   *flagShuffle,
+		target:     target,
+		done:       done,
+		progs:      progs,
+		procProgs:  procProgs,
+		procReplay: *flagProcReplay,
+		globs:      strings.Split(*flagGlob, ":"),
+		rs:         rand.NewSource(seed),
+		coverFile:  *flagCoverFile,
+		output:     *flagOutput,
+		signal:     *flagSignal,
+		hints:      *flagHints,
+		stress:     *flagStress,
+		repeat:     *flagRepeat,
+		shuffle:    *flagShuffle,
 		defaultOpts: flatrpc.ExecOpts{
 			EnvFlags:   env,
 			ExecFlags:  exec,
@@ -206,26 +211,34 @@ func main() {
 }
 
 type Context struct {
-	target      *prog.Target
-	done        func()
-	progs       []*prog.Prog
-	globs       []string
-	defaultOpts flatrpc.ExecOpts
-	choiceTable *prog.ChoiceTable
-	logMu       sync.Mutex
-	posMu       sync.Mutex
-	rs          rand.Source
-	coverFile   string
-	output      bool
-	signal      bool
-	hints       bool
-	stress      bool
-	repeat      int
-	shuffle     bool
-	pos         int
-	completed   atomic.Uint64
-	resultIndex atomic.Int64
-	lastPrint   time.Time
+	target       *prog.Target
+	done         func()
+	progs        []*prog.Prog
+	procProgs    map[int][]*prog.Prog
+	procReplay   bool
+	globs        []string
+	defaultOpts  flatrpc.ExecOpts
+	choiceTable  *prog.ChoiceTable
+	logMu        sync.Mutex
+	posMu        sync.Mutex
+	rs           rand.Source
+	coverFile    string
+	output       bool
+	signal       bool
+	hints        bool
+	stress       bool
+	repeat       int
+	shuffle      bool
+	pos          int
+	completed    atomic.Uint64
+	resultIndex  atomic.Int64
+	lastPrint    time.Time
+	procPos      map[int]int
+	procInFlight map[int]int
+	procDone     map[int]bool
+	activeProcs  []int
+	currentCycle int
+	rrIndex      int
 }
 
 func (ctx *Context) machineChecked(features flatrpc.Feature, syscalls map[*prog.Syscall]bool) queue.Source {
@@ -250,8 +263,14 @@ func (ctx *Context) Next() *queue.Request {
 		return req
 	}
 	var p *prog.Prog
+	var proc int
 	if ctx.stress {
 		p = ctx.createStressProg()
+	} else if ctx.procReplay {
+		p, proc = ctx.getNextProcProg()
+		if p == nil {
+			return nil
+		}
 	} else {
 		p = ctx.getProgram()
 		if p == nil {
@@ -261,12 +280,19 @@ func (ctx *Context) Next() *queue.Request {
 	if ctx.output {
 		data := p.Serialize()
 		ctx.logMu.Lock()
-		log.Logf(0, "executing program:\n%s", data)
+		if ctx.procReplay {
+			log.Logf(0, "executing program %v:\n%s", proc, data)
+		} else {
+			log.Logf(0, "executing program:\n%s", data)
+		}
 		ctx.logMu.Unlock()
 	}
 
 	req := &queue.Request{
 		Prog: p,
+	}
+	if ctx.procReplay {
+		req.Avoid = ^(uint64(1) << proc)
 	}
 	if ctx.hints {
 		req.ExecOpts.ExecFlags |= flatrpc.ExecFlagCollectComps
@@ -306,9 +332,19 @@ func (ctx *Context) Done(req *queue.Request, res *queue.Result) bool {
 			ctx.dumpCoverage(res.Info)
 		}
 	}
+	if ctx.procReplay && req.Prog != nil {
+		inv := ^req.Avoid
+		if bits.OnesCount64(inv) == 1 {
+			proc := bits.TrailingZeros64(inv)
+			ctx.doneProc(proc)
+		}
+	}
 	completed := int(ctx.completed.Add(1))
-	if ctx.repeat > 0 && completed >= len(ctx.progs)*ctx.repeat {
-		ctx.done()
+	total := ctx.totalPrograms()
+	if ctx.repeat > 0 && total > 0 && completed >= total*ctx.repeat {
+		if ctx.done != nil {
+			ctx.done()
+		}
 	}
 	return true
 }
@@ -426,8 +462,128 @@ func (ctx *Context) createStressProg() *prog.Prog {
 	return p
 }
 
-func loadPrograms(target *prog.Target, files []string) []*prog.Prog {
+func (ctx *Context) totalPrograms() int {
+	if ctx.procReplay {
+		total := 0
+		for _, progs := range ctx.procProgs {
+			total += len(progs)
+		}
+		return total
+	}
+	return len(ctx.progs)
+}
+
+func (ctx *Context) initProcReplayLocked() {
+	if ctx.procPos != nil {
+		return
+	}
+	ctx.procPos = make(map[int]int)
+	ctx.procInFlight = make(map[int]int)
+	ctx.procDone = make(map[int]bool)
+	var active []int
+	for p, progs := range ctx.procProgs {
+		if len(progs) > 0 {
+			active = append(active, p)
+		}
+	}
+	slices.Sort(active)
+	ctx.activeProcs = active
+}
+
+func (ctx *Context) checkCycleLocked() {
+	if len(ctx.activeProcs) == 0 {
+		return
+	}
+	for _, p := range ctx.activeProcs {
+		if !ctx.procDone[p] {
+			return
+		}
+	}
+	ctx.currentCycle++
+	if ctx.repeat > 0 && ctx.currentCycle >= ctx.repeat {
+		return
+	}
+	ctx.rrIndex = 0
+	if ctx.shuffle {
+		ctx.shuffleProcProgsLocked()
+	}
+	for _, p := range ctx.activeProcs {
+		ctx.procPos[p] = 0
+		ctx.procDone[p] = false
+	}
+}
+
+func (ctx *Context) shuffleProcProgsLocked() {
+	rnd := rand.New(ctx.rs)
+	for _, p := range ctx.activeProcs {
+		progs := ctx.procProgs[p]
+		if len(progs) <= 1 {
+			continue
+		}
+		lastProg := progs[len(progs)-1]
+		rnd.Shuffle(len(progs), func(i, j int) {
+			progs[i], progs[j] = progs[j], progs[i]
+		})
+		if progs[0] == lastProg {
+			// Avoid executing the same program back-to-back across cycle boundary.
+			swapIdx := 1 + rnd.Intn(len(progs)-1)
+			progs[0], progs[swapIdx] = progs[swapIdx], progs[0]
+		}
+	}
+}
+
+func (ctx *Context) getNextProcProg() (*prog.Prog, int) {
+	ctx.posMu.Lock()
+	defer ctx.posMu.Unlock()
+
+	ctx.initProcReplayLocked()
+	if len(ctx.activeProcs) == 0 {
+		return nil, 0
+	}
+	ctx.checkCycleLocked()
+	if ctx.repeat > 0 && ctx.currentCycle >= ctx.repeat {
+		return nil, 0
+	}
+
+	for i := range len(ctx.activeProcs) {
+		idx := (ctx.rrIndex + i) % len(ctx.activeProcs)
+		proc := ctx.activeProcs[idx]
+
+		if ctx.procDone[proc] {
+			continue
+		}
+		if ctx.procInFlight[proc] >= 1 {
+			continue
+		}
+		if ctx.procPos[proc] >= len(ctx.procProgs[proc]) {
+			continue
+		}
+
+		p := ctx.procProgs[proc][ctx.procPos[proc]]
+		ctx.procPos[proc]++
+		ctx.procInFlight[proc]++
+		ctx.rrIndex = (idx + 1) % len(ctx.activeProcs)
+		return p, proc
+	}
+	return nil, 0
+}
+
+func (ctx *Context) doneProc(proc int) {
+	ctx.posMu.Lock()
+	defer ctx.posMu.Unlock()
+	ctx.initProcReplayLocked()
+	if ctx.procInFlight[proc] > 0 {
+		ctx.procInFlight[proc]--
+	}
+	if ctx.procPos[proc] >= len(ctx.procProgs[proc]) && ctx.procInFlight[proc] == 0 {
+		ctx.procDone[proc] = true
+	}
+	ctx.checkCycleLocked()
+}
+
+func loadPrograms(target *prog.Target, files []string) ([]*prog.Prog, map[int][]*prog.Prog) {
 	var progs []*prog.Prog
+	procProgs := make(map[int][]*prog.Prog)
 	mode := prog.NonStrict
 	if *flagUnsafe {
 		mode = prog.NonStrictUnsafe
@@ -440,6 +596,7 @@ func loadPrograms(target *prog.Target, files []string) []*prog.Prog {
 					continue
 				}
 				progs = append(progs, p)
+				procProgs[0] = append(procProgs[0], p)
 			}
 			continue
 		}
@@ -449,8 +606,10 @@ func loadPrograms(target *prog.Target, files []string) []*prog.Prog {
 		}
 		for _, entry := range target.ParseLog(data, mode) {
 			progs = append(progs, entry.P)
+			proc := entry.Proc % prog.MaxPids
+			procProgs[proc] = append(procProgs[proc], entry.P)
 		}
 	}
 	log.Logf(0, "parsed %v programs", len(progs))
-	return progs
+	return progs, procProgs
 }
