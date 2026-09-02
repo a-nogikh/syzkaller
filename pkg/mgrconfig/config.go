@@ -105,6 +105,9 @@ type Config struct {
 	// but otherwise don't send any info to dashboard (default: false).
 	DashboardOnlyRepro bool `json:"dashboard_only_repro,omitempty"`
 
+	// Gemini API token for AI-assisted features (e.g. repro log filtering).
+	GeminiToken string `json:"gemini_token,omitempty"`
+
 	// Location of the syzkaller checkout, syz-manager will look
 	// for binaries in bin subdir (does not have to be syzkaller checkout as
 	// long as it preserves `bin` dir structure)

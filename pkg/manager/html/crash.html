@@ -3,10 +3,13 @@ Copyright 2024 syzkaller project authors. All rights reserved.
 Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 */}}
 
-<b>{{.Title}}</b>
+<b>{{.Title}}</b><br>
 
 {{if .Triaged}}
-Report: <a href="/report?id={{.ID}}">{{.Triaged}}</a>
+Report: <a href="/report?id={{.ID}}">{{.Triaged}}</a><br>
+{{end}}
+{{if .TrajectoryFile}}
+Trajectory: <a href="/file?name={{.TrajectoryFile}}&raw=1">view AI trajectory</a><br>
 {{end}}
 
 <table class="list_table">

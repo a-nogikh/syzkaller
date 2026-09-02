@@ -5,18 +5,24 @@ package prog
 
 import (
 	"bytes"
+	"regexp"
 	"slices"
 	"strconv"
+	"time"
 )
 
 // LogEntry describes one program in execution log.
 type LogEntry struct {
-	P     *Prog
-	Proc  int // index of parallel proc
-	ID    int // ID of the executed program (-1 if not present)
-	Start int // start offset in log
-	End   int // end offset in log
+	P       *Prog
+	Proc    int           // index of parallel proc
+	ID      int           // ID of the executed program (-1 if not present)
+	Start   int           // start offset in log
+	End     int           // end offset in log
+	Time    time.Duration // execution duration before crash/end of log
+	HasTime bool          // whether Time is present in the log
 }
+
+var relativeTimeRe = regexp.MustCompile(`((?:[0-9.]+(?:h|m|s|ms|us|µs|ns))+)\s+ago:`)
 
 func (target *Target) ParseLog(data []byte, mode DeserializeMode) []*LogEntry {
 	var entries []*LogEntry
@@ -46,6 +52,12 @@ func (target *Target) ParseLog(data []byte, mode DeserializeMode) []*LogEntry {
 				Proc:  proc,
 				Start: pos0,
 				ID:    -1,
+			}
+			if m := relativeTimeRe.FindSubmatch(line); len(m) > 1 {
+				if d, err := time.ParseDuration(string(m[1])); err == nil {
+					ent.Time = d
+					ent.HasTime = true
+				}
 			}
 			if id, ok := extractInt(line, "id="); ok {
 				ent.ID = id

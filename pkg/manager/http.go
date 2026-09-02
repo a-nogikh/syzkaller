@@ -252,7 +252,14 @@ func shouldShowBug(subsystems, filterSubsystems []string) bool {
 }
 
 func (serv *HTTPServer) httpConfig(w http.ResponseWriter, r *http.Request) {
-	serv.jsonPage(w, r, "config", serv.Cfg)
+	cfg := *serv.Cfg
+	if cfg.GeminiToken != "" {
+		cfg.GeminiToken = "[REDACTED]"
+	}
+	if cfg.DashboardKey != "" {
+		cfg.DashboardKey = "[REDACTED]"
+	}
+	serv.jsonPage(w, r, "config", &cfg)
 }
 
 func (serv *HTTPServer) jsonPage(w http.ResponseWriter, r *http.Request, title string, data any) {

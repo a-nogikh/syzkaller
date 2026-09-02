@@ -452,3 +452,21 @@ func TestReproDuration(t *testing.T) {
 		})
 	}
 }
+
+func TestCanRunLLM(t *testing.T) {
+	ctx := &reproContext{}
+	require.False(t, ctx.canRunLLM(nil))
+
+	ctx.cfg = &mgrconfig.Config{}
+	require.False(t, ctx.canRunLLM([]*prog.LogEntry{{}, {}}))
+
+	ctx.cfg.GeminiToken = "fake-token"
+	require.False(t, ctx.canRunLLM([]*prog.LogEntry{{}, {}})) // missing Syzkaller and crashTitle
+
+	ctx.cfg.Syzkaller = "/syzkaller"
+	require.False(t, ctx.canRunLLM([]*prog.LogEntry{{}, {}})) // missing crashTitle/crashReport
+
+	ctx.crashTitle = "some crash"
+	require.False(t, ctx.canRunLLM([]*prog.LogEntry{{}})) // only 1 entry
+	require.True(t, ctx.canRunLLM([]*prog.LogEntry{{}, {}}))
+}

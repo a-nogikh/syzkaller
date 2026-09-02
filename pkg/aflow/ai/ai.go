@@ -21,6 +21,7 @@ const (
 	WorkflowPatchTriage        = WorkflowType("patch-triage")
 	WorkflowSeedGen            = WorkflowType("seed-gen")
 	WorkflowSeedGenFileLine    = WorkflowType("seed-gen-file-line")
+	WorkflowReproLogFilter     = WorkflowType("repro-log-filter")
 )
 
 // Outputs of various workflow types.
@@ -171,4 +172,29 @@ type SeedGenOutputs struct {
 	Success bool
 	GiveUp  bool
 	Reason  string
+}
+
+type LogProgram struct {
+	UUID            string   `json:"uuid"`
+	Position        int      `json:"position"`
+	TimeBeforeCrash string   `json:"time_before_crash,omitempty"`
+	Proc            int      `json:"proc,omitempty"`
+	ExecID          int      `json:"exec_id,omitempty"`
+	Calls           []string `json:"calls,omitempty"`
+	Prog            string   `json:"prog"`
+}
+
+type ReproLogFilterArgs struct {
+	BugTitle    string `json:",omitempty"`
+	CrashReport string
+	Programs    []LogProgram
+	KernelSrc   string
+	Syzkaller   string
+	TargetOS    string
+	TargetArch  string
+}
+
+type ReproLogFilterResult struct {
+	SelectedProgIDs []string
+	Reasoning       string
 }

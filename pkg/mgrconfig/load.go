@@ -181,6 +181,10 @@ func Complete(cfg *Config) error {
 	}
 	cfg.CompleteKernelDirs()
 
+	if cfg.GeminiToken == "" {
+		cfg.GeminiToken = os.Getenv("GEMINI_API_KEY")
+	}
+
 	if err := cfg.completeServices(); err != nil {
 		return nil
 	}

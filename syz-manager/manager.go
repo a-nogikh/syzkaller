@@ -845,7 +845,11 @@ func (mgr *Manager) saveFailedRepro(rep *report.Report, stats *repro.Stats, repr
 		}
 		return
 	}
-	err := mgr.crashStore.SaveFailedRepro(rep.Title, reproLog)
+	var traj []byte
+	if stats != nil {
+		traj = stats.TrajectoryHTML
+	}
+	err := mgr.crashStore.SaveFailedRepro(rep.Title, reproLog, traj)
 	if err != nil {
 		log.Logf(0, "failed to save repro log for %q: %v", rep.Title, err)
 	}

@@ -5,8 +5,9 @@ package prog
 
 import (
 	"testing"
+	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseSingle(t *testing.T) {
@@ -57,6 +58,12 @@ func TestParseMulti(t *testing.T) {
 		entries[4].ID != 85 {
 		t.Fatalf("bad IDs")
 	}
+	require.False(t, entries[0].HasTime)
+	require.Equal(t, time.Duration(0), entries[0].Time)
+	require.True(t, entries[1].HasTime)
+	require.Equal(t, 15133581935*time.Nanosecond, entries[1].Time)
+	require.True(t, entries[4].HasTime)
+	require.Equal(t, 12133581935*time.Nanosecond, entries[4].Time)
 }
 
 func TestParseMultiLegacy(t *testing.T) {
@@ -68,7 +75,75 @@ func TestParseMultiLegacy(t *testing.T) {
 	entries := target.ParseLog([]byte(execLogOld), NonStrict)
 	validateProgs(t, entries, len(execLogOld))
 	for _, ent := range entries {
-		assert.Equal(t, -1, ent.ID)
+		require.Equal(t, -1, ent.ID)
+		require.False(t, ent.HasTime)
+		require.Equal(t, time.Duration(0), ent.Time)
+	}
+}
+
+func TestParseLogTimings(t *testing.T) {
+	t.Parallel()
+	target, err := GetTarget("test", "64")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		log      string
+		wantHas  []bool
+		wantTime []time.Duration
+	}{
+		{
+			name: "RelativeSimple",
+			log: `
+15.5s ago: executing program 1 (id=70):
+test$res0()
+2.5s ago: executing program 2 (id=71):
+test$res0()
+0s ago: executing program 1 (id=72):
+test$res0()
+`,
+			wantHas:  []bool{true, true, true},
+			wantTime: []time.Duration{15500 * time.Millisecond, 2500 * time.Millisecond, 0},
+		},
+		{
+			name: "RelativeCompound",
+			log: `
+38m31.024071087s ago: executing program 1 (id=70):
+test$res0()
+1h2m3s ago: executing program 2 (id=71):
+test$res0()
+0s ago: executing program 1 (id=72):
+test$res0()
+`,
+			wantHas: []bool{true, true, true},
+			wantTime: []time.Duration{
+				38*time.Minute + 31024071087*time.Nanosecond,
+				1*time.Hour + 2*time.Minute + 3*time.Second,
+				0,
+			},
+		},
+		{
+			name: "LegacyAndNoTimings",
+			log: `
+executing program 1:
+test$res0()
+2015/12/21 12:18:05 executing program 2:
+test$res0()
+`,
+			wantHas:  []bool{false, false},
+			wantTime: []time.Duration{0, 0},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := target.ParseLog([]byte(tt.log), NonStrict)
+			require.Len(t, entries, len(tt.wantHas))
+			for i, ent := range entries {
+				require.Equal(t, tt.wantHas[i], ent.HasTime)
+				require.Equal(t, tt.wantTime[i], ent.Time)
+			}
+		})
 	}
 }
 
