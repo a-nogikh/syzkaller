@@ -127,7 +127,7 @@ func (cs *CrashStore) MoreReproAttempts(title string) bool {
 	return false
 }
 
-func (cs *CrashStore) SaveFailedRepro(title string, log []byte) error {
+func (cs *CrashStore) SaveFailedRepro(title string, log, traj []byte) error {
 	dir := cs.path(title)
 	osutil.MkdirAll(dir)
 	for i := range cs.MaxReproLogs {
@@ -136,6 +136,9 @@ func (cs *CrashStore) SaveFailedRepro(title string, log []byte) error {
 			err := osutil.WriteFile(name, log)
 			if err != nil {
 				return err
+			}
+			if len(traj) > 0 {
+				_ = osutil.WriteFile(filepath.Join(dir, fmt.Sprintf("repro%v.trajectory.html", i)), traj)
 			}
 			break
 		}
@@ -190,6 +193,9 @@ func (cs *CrashStore) SaveRepro(res *ReproResult, progText, cProgText []byte) er
 	if reproLog := res.Stats.FullLog(); len(reproLog) > 0 {
 		osutil.WriteFile(filepath.Join(dir, "repro.stats"), reproLog)
 	}
+	if res.Stats != nil && len(res.Stats.TrajectoryHTML) > 0 {
+		osutil.WriteFile(filepath.Join(dir, "repro.trajectory.html"), res.Stats.TrajectoryHTML)
+	}
 	return nil
 }
 
@@ -238,6 +244,7 @@ type BugInfo struct {
 	HasCRepro      bool
 	StraceFile     string // relative to the workdir
 	MemoryDumpFile string // relative to the workdir
+	TrajectoryFile string // relative to the workdir
 	ReproAttempts  int
 	Crashes        []*CrashInfo
 	Rank           int
@@ -291,6 +298,10 @@ func (cs *CrashStore) BugInfo(id string, full bool) (*BugInfo, error) {
 			ret.HasCRepro = true
 		} else if f == straceFileName {
 			ret.StraceFile = filepath.Join(dir, f)
+		} else if strings.HasSuffix(f, ".trajectory.html") {
+			if f == "repro.trajectory.html" || !strings.HasSuffix(ret.TrajectoryFile, "repro.trajectory.html") {
+				ret.TrajectoryFile = filepath.Join("crashes", id, f)
+			}
 		} else if strings.HasPrefix(f, "repro") {
 			ret.ReproAttempts++
 		} else if f == "vmcore" {

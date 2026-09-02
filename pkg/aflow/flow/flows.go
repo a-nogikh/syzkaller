@@ -10,5 +10,6 @@ import (
 	_ "github.com/google/syzkaller/pkg/aflow/flow/patching"
 	_ "github.com/google/syzkaller/pkg/aflow/flow/repro"
 	_ "github.com/google/syzkaller/pkg/aflow/flow/reproc"
+	_ "github.com/google/syzkaller/pkg/aflow/flow/reprolog"
 	_ "github.com/google/syzkaller/pkg/aflow/flow/seedgen"
 )

@@ -11,8 +11,12 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/google/syzkaller/pkg/aflow"
+	"github.com/google/syzkaller/pkg/aflow/ai"
+	"github.com/google/syzkaller/pkg/aflow/flow/reprolog"
 	"github.com/google/syzkaller/pkg/bisect/minimize"
 	"github.com/google/syzkaller/pkg/csource"
 	"github.com/google/syzkaller/pkg/flatrpc"
@@ -49,15 +53,20 @@ type Stats struct {
 	SimplifyProgTime time.Duration
 	ExtractCTime     time.Duration
 	SimplifyCTime    time.Duration
+	TrajectoryHTML   []byte
+	LLMExtractTime   time.Duration
 }
 
 type reproContext struct {
 	ctx            context.Context
 	exec           execInterface
+	cfg            *mgrconfig.Config
 	logf           func(string, ...any)
 	target         *targets.Target
+	crashLog       []byte
 	crashTitle     string
 	crashType      crash.Type
+	crashReport    string
 	crashStart     int
 	crashExecutor  *report.ExecutorInfo
 	entries        []*prog.LogEntry
@@ -109,11 +118,13 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 	crashStart := len(crashLog)
 	crashTitle, crashType := "", crash.UnknownType
 	var crashExecutor *report.ExecutorInfo
+	var crashReport string
 	if rep := env.Reporter.Parse(crashLog); rep != nil {
 		crashStart = rep.StartPos
 		crashTitle = rep.Title
 		crashType = rep.Type
 		crashExecutor = rep.Executor
+		crashReport = string(rep.Report)
 	}
 	testTimeouts := []time.Duration{
 		max(30*time.Second, 3*cfg.Timeouts.Program), // to catch simpler crashes (i.e. no races and no hangs)
@@ -140,9 +151,12 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 	reproCtx := &reproContext{
 		ctx:           ctx,
 		exec:          exec,
+		cfg:           cfg,
 		target:        cfg.SysTarget,
+		crashLog:      crashLog,
 		crashTitle:    crashTitle,
 		crashType:     crashType,
+		crashReport:   crashReport,
 		crashStart:    crashStart,
 		crashExecutor: crashExecutor,
 
@@ -340,6 +354,9 @@ func (ctx *reproContext) extractProg(entries []*prog.LogEntry) (*Result, error) 
 		toTest = lastEntries(entries)
 	}
 
+	var llmEntries []*prog.LogEntry
+	llmAttempted := false
+
 	for i, timeout := range ctx.testTimeouts {
 		// Execute each program separately to detect simple crashes caused by a single program.
 		// Programs are executed in reverse order, usually the last program is the guilty one.
@@ -362,6 +379,31 @@ func (ctx *reproContext) extractProg(entries []*prog.LogEntry) (*Result, error) 
 			continue
 		}
 
+		if !llmAttempted && ctx.canRunLLM(entries) {
+			llmAttempted = true
+			llmEntries = ctx.extractProgLLM(entries)
+		}
+		if len(llmEntries) > 0 {
+			res, err := ctx.extractProgSingle(llmEntries, timeout)
+			if err != nil {
+				return nil, err
+			}
+			if res != nil {
+				ctx.reproLogf(3, "found reproducer among LLM candidates with %d syscalls", len(res.Prog.Calls))
+				return res, nil
+			}
+			if len(llmEntries) > 1 {
+				res, err = ctx.extractProgBisect(llmEntries, timeout)
+				if err != nil {
+					return nil, err
+				}
+				if res != nil {
+					ctx.reproLogf(3, "found reproducer by bisecting LLM candidates with %d syscalls", len(res.Prog.Calls))
+					return res, nil
+				}
+			}
+		}
+
 		// Execute all programs and bisect the log to find multiple guilty programs.
 		res, err = ctx.extractProgBisect(entries, timeout)
 		if err != nil {
@@ -375,6 +417,73 @@ func (ctx *reproContext) extractProg(entries []*prog.LogEntry) (*Result, error) 
 
 	ctx.reproLogf(2, "failed to extract reproducer")
 	return nil, nil
+}
+
+func (ctx *reproContext) canRunLLM(entries []*prog.LogEntry) bool {
+	return ctx.cfg != nil && ctx.cfg.GeminiToken != "" && len(entries) > 1 &&
+		(ctx.crashTitle != "" || ctx.crashReport != "") && ctx.cfg.Syzkaller != ""
+}
+
+func (ctx *reproContext) extractProgLLM(entries []*prog.LogEntry) []*prog.LogEntry {
+	ctx.reproLogf(3, "attempting AI-assisted log filtering with LLM...")
+	progs, idMap := reprolog.EntriesToLogPrograms(entries)
+	ctx.reproLogf(3, "prepared %d log programs for LLM analysis", len(progs))
+
+	const maxConsoleLog = 5 << 10 // 5 KB
+	var consoleLog string
+	if len(ctx.crashLog) > 0 {
+		tail := ctx.crashLog
+		if len(tail) > maxConsoleLog {
+			tail = tail[len(tail)-maxConsoleLog:]
+			if idx := bytes.IndexByte(tail, '\n'); idx != -1 && idx < 200 {
+				tail = tail[idx+1:]
+			}
+		}
+		consoleLog = strings.ToValidUTF8(string(tail), "")
+	}
+
+	args := ai.ReproLogFilterArgs{
+		BugTitle:    ctx.crashTitle,
+		CrashReport: ctx.crashReport,
+		ConsoleLog:  consoleLog,
+		Programs:    progs,
+		KernelSrc:   ctx.cfg.KernelSrc,
+		Syzkaller:   ctx.cfg.Syzkaller,
+		TargetOS:    ctx.cfg.TargetOS,
+		TargetArch:  ctx.cfg.TargetArch,
+	}
+
+	aiCtx, cancel := context.WithTimeout(ctx.ctx, 10*time.Minute)
+	defer cancel()
+
+	const defaultTokenLimit = 10_000_000
+	aiStart := time.Now()
+	res, err := aflow.RunWorkflow[ai.ReproLogFilterArgs, ai.ReproLogFilterResult](
+		aiCtx,
+		ai.WorkflowReproLogFilter,
+		ctx.cfg.GeminiToken,
+		args,
+		aflow.RunWithTokenLimit(defaultTokenLimit),
+	)
+	if ctx.stats != nil {
+		ctx.stats.LLMExtractTime += time.Since(aiStart)
+	}
+	if ctx.stats != nil && res != nil && len(res.TrajectoryHTML) > 0 {
+		ctx.stats.TrajectoryHTML = res.TrajectoryHTML
+	}
+	if err != nil {
+		ctx.reproLogf(3, "LLM log filtering failed: %v", err)
+		return nil
+	}
+
+	filterRes := res.Output
+	ctx.reproLogf(3, "LLM selected %d candidate programs (reasoning: %s)",
+		len(filterRes.SelectedProgIDs), filterRes.Reasoning)
+
+	filtered := reprolog.FilterEntriesByUUIDs(entries, idMap, filterRes.SelectedProgIDs)
+	ctx.reproLogf(3, "filtered log down to %d candidate programs from %d original programs",
+		len(filtered), len(entries))
+	return filtered
 }
 
 // Extract last program on every proc.
@@ -1084,9 +1193,13 @@ func (stats *Stats) FullLog() []byte {
 	if stats == nil {
 		return nil
 	}
-	return []byte(fmt.Sprintf("Extracting prog: %v\nMinimizing prog: %v\n"+
+	var llmStats string
+	if stats.LLMExtractTime > 0 {
+		llmStats = fmt.Sprintf("LLM extract prog: %v\n", stats.LLMExtractTime)
+	}
+	return []byte(fmt.Sprintf("%sExtracting prog: %v\nMinimizing prog: %v\n"+
 		"Simplifying prog options: %v\nExtracting C: %v\nSimplifying C: %v\n\n\n%s",
-		stats.ExtractProgTime, stats.MinimizeProgTime,
+		llmStats, stats.ExtractProgTime, stats.MinimizeProgTime,
 		stats.SimplifyProgTime, stats.ExtractCTime, stats.SimplifyCTime, stats.Log))
 }
 

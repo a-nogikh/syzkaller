@@ -6,24 +6,19 @@
 package triage
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/syzkaller/pkg/aflow"
 	"github.com/google/syzkaller/pkg/aflow/ai"
-	"github.com/google/syzkaller/pkg/aflow/backend/gemini"
 	_ "github.com/google/syzkaller/pkg/aflow/flow"
-	"github.com/google/syzkaller/pkg/aflow/trajectory"
-	aflowhtml "github.com/google/syzkaller/pkg/aflow/trajectory/html"
 	"github.com/google/syzkaller/pkg/debugtracer"
 	"github.com/google/syzkaller/pkg/gcpsecret"
 	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/syz-cluster/pkg/api"
 	"github.com/google/syzkaller/syz-cluster/pkg/app"
-	"google.golang.org/genai"
 )
 
 type AITriageResult struct {
@@ -62,83 +57,42 @@ func EvaluatePatch(ctx context.Context, config *app.AppConfig, series *api.Serie
 	aiCtx, cancel := context.WithTimeout(ctx, aiEvaluationTimeout)
 	defer cancel()
 
-	var spans []*trajectory.Span
-	seenID := make(map[int]struct{})
-	onEvent := func(span *trajectory.Span) error {
-		// Aflow sends us the same span pointer twice: on start and on finish.
-		if _, ok := seenID[span.Seq]; ok {
-			return nil
-		}
-		seenID[span.Seq] = struct{}{}
-		spans = append(spans, span)
-		return nil
-	}
-
-	args := ai.PatchTriageArgs{
-		// TODO: Set TargetArch dynamically based on the fuzzing targets for the patch.
-		// For now it's irrelevant as we only fuzz amd64 anyway.
-		TargetArch: "amd64",
-		KernelSrc:  kernelSrcDir,
-	}
-	argsBytes, err := json.Marshal(args)
+	cacheDir, err := os.MkdirTemp("", "aflow-cache-*")
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal initial args: %w", err)
+		return nil, fmt.Errorf("failed to create aflow cache dir: %w", err)
 	}
-	var initialState map[string]any
-	if err := json.Unmarshal(argsBytes, &initialState); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal initial state: %w", err)
-	}
+	defer os.RemoveAll(cacheDir)
 
-	tracer.Logf("starting AI patch evaluation...")
-	workflowDesc := aflow.Flows[string(ai.WorkflowPatchTriage)]
-	if workflowDesc == nil {
-		return nil, fmt.Errorf("failed to find workflow %s", ai.WorkflowPatchTriage)
-	}
-
-	cache, err := aflow.NewCache("/tmp/aflow-cache", 1024*1024*1024)
+	cache, err := aflow.NewCache(cacheDir, 1024*1024*1024)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create aflow cache: %w", err)
 	}
 
-	provider, err := gemini.NewProvider(aiCtx, gemini.Config{
-		ClientConfig: &genai.ClientConfig{
-			APIKey: apiKey,
+	tracer.Logf("starting AI patch evaluation...")
+	runRes, err := aflow.RunWorkflow[ai.PatchTriageArgs, ai.PatchTriageResult](
+		aiCtx,
+		ai.WorkflowPatchTriage,
+		apiKey,
+		ai.PatchTriageArgs{
+			// TODO: Set TargetArch dynamically based on the fuzzing targets for the patch.
+			// For now it's irrelevant as we only fuzz amd64 anyway.
+			TargetArch: "amd64",
+			KernelSrc:  kernelSrcDir,
 		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize LLM provider: %w", err)
-	}
-	defer provider.Close()
-
-	outputs, err := workflowDesc.Execute(aiCtx, initialState, aflow.ExecuteOptions{
-		Provider:   provider,
-		Workdir:    "/tmp/aflow-cache",
-		Cache:      cache,
-		OnEvent:    onEvent,
-		TokenLimit: defaultTokenLimit,
-	})
+		aflow.RunWithWorkdir(cacheDir),
+		aflow.RunWithCache(cache),
+		aflow.RunWithTokenLimit(defaultTokenLimit),
+	)
 
 	var htmlReport []byte
-	buf := new(bytes.Buffer)
-	if renderErr := aflowhtml.RenderReport(buf, spans); renderErr == nil {
-		htmlReport = buf.Bytes()
-	} else {
-		tracer.Logf("failed to render trajectory: %v", renderErr)
+	if runRes != nil {
+		htmlReport = runRes.TrajectoryHTML
 	}
-
 	if err != nil {
 		return &AITriageResult{Trajectory: htmlReport}, err
 	}
 
-	outBytes, err := json.Marshal(outputs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal outputs: %w", err)
-	}
-	var result ai.PatchTriageResult
-	if err := json.Unmarshal(outBytes, &result); err != nil {
-		return nil, fmt.Errorf("AI evaluation returned invalid data: %w", err)
-	}
-
+	result := runRes.Output
 	tracer.Logf("AI verdict: WorthFuzzing=%v (Reason: %s)", result.WorthFuzzing, result.Reasoning)
 
 	return &AITriageResult{

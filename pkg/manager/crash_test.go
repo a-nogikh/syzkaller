@@ -220,3 +220,32 @@ func TestGetSubsystems(t *testing.T) {
 		})
 	}
 }
+
+func TestCrashTrajectory(t *testing.T) {
+	crashStore := &CrashStore{
+		BaseDir:      t.TempDir(),
+		MaxCrashLogs: 5,
+		MaxReproLogs: 5,
+	}
+
+	title := "Crash with trajectory"
+	_, err := crashStore.SaveCrash(&Crash{
+		Report: &report.Report{
+			Title:  title,
+			Output: []byte("Output"),
+		},
+	})
+	require.NoError(t, err)
+
+	err = crashStore.SaveFailedRepro(title, []byte("failed repro log 0"), []byte("<html>traj0</html>"))
+	require.NoError(t, err)
+
+	err = crashStore.SaveFailedRepro(title, []byte("failed repro log 1"), []byte("<html>traj1</html>"))
+	require.NoError(t, err)
+
+	info, err := crashStore.BugInfo(crashHash(title), false)
+	require.NoError(t, err)
+	require.Equal(t, 2, info.ReproAttempts)
+	require.NotEmpty(t, info.TrajectoryFile)
+	require.FileExists(t, filepath.Join(crashStore.BaseDir, info.TrajectoryFile))
+}

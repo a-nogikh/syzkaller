@@ -75,6 +75,9 @@ Use of this source code is governed by Apache 2 LICENSE that can be found in the
 			{{if $c.StraceFile}}
 				<a href="/file?name={{$c.StraceFile}}">Strace</a>
 			{{end}}
+			{{if $c.TrajectoryFile}}
+				<a href="/file?name={{$c.TrajectoryFile}}&raw=1">Trajectory</a>
+			{{end}}
 		</td>
 		{{if $.ShowCore}}
 		<td>
