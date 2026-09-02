@@ -33,7 +33,6 @@ type ConfigID int
 
 const (
 	Config6Progs ConfigID = iota
-	Config25ProgsSliding
 	ConfigAsIsPerProcExact
 	ConfigAsIsSlidingRand
 )
@@ -70,16 +69,6 @@ var ReproConfigs = []ReproConfig{
 		ProcReplay:    false,
 	},
 	{
-		ID:            Config25ProgsSliding,
-		Key:           "25_progs_sliding",
-		Name:          "25 progs/proc + sliding",
-		MaxPerProc:    25,
-		SlidingWindow: true,
-		ExactCrash:    false,
-		Shuffle:       false,
-		ProcReplay:    false,
-	},
-	{
 		ID:            ConfigAsIsPerProcExact,
 		Key:           "as_is_per_proc_exact",
 		Name:          "as is + per_proc + exact",
@@ -104,6 +93,7 @@ var ReproConfigs = []ReproConfig{
 func ShouldSkipCrash(title string) bool {
 	t := strings.ToLower(title)
 	return t == "" ||
+		strings.HasPrefix(t, "info:") ||
 		strings.Contains(t, "syzfail") ||
 		strings.Contains(t, "syzfatal") ||
 		strings.Contains(t, "lost connection") ||

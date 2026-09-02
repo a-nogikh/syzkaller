@@ -32,6 +32,8 @@ func TestShouldSkipCrash(t *testing.T) {
 		{"No Output from test machine", true},
 		{"BUG: MAX_LOCKDEP_KEYS too low!", true},
 		{"bug: max_lockdep_keys too low!", true},
+		{"INFO: task hung in foo", true},
+		{"INFO: rcu detected stall", true},
 		{"KASAN: slab-out-of-bounds in test_function", false},
 		{"BUG: unable to handle kernel paging request in foo", false},
 		{"WARNING: refcount leak in bar", false},
@@ -64,6 +66,7 @@ func TestDiscoverBugs(t *testing.T) {
 		"c5": {"WARNING: lockdep warning", ""},              // empty log.
 		"c6": {"WARNING: uninit value", "some junk output"}, // no progs.
 		"c7": {"BUG: bad page state", validLog},
+		"c8": {"INFO: task hung in bar", validLog},
 	}
 
 	for id, c := range crashes {
@@ -169,7 +172,7 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 
 	// Mock runRepro:
 	// For crash1 + 6_progs -> C repro.
-	// For crash1 + 25_progs_sliding -> syz repro.
+	// For crash1 + as_is_per_proc_exact -> syz repro.
 	// For crash2 + 6_progs -> error.
 	// For others -> failed (no repro).
 	callCount := 0
@@ -182,7 +185,7 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 		if callCount == 2 {
 			return &repro.Result{CRepro: false, Report: &report.Report{Title: "BUG: crash crash1"}}, stats, nil
 		}
-		if callCount == 5 {
+		if callCount == 4 {
 			return nil, nil, fmt.Errorf("machine boot failed")
 		}
 		return nil, stats, nil
@@ -191,8 +194,8 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 	require.NoError(t, exp.Init())
 	exp.Run(context.Background())
 
-	// Total jobs = 2 bugs * 4 configs = 8 jobs.
-	require.Equal(t, 8, callCount)
+	// Total jobs = 2 bugs * 3 configs = 6 jobs.
+	require.Equal(t, 6, callCount)
 
 	// Verify sourceWorkdir was NOT modified (no repro-exp dir written there).
 	require.NoFileExists(t, filepath.Join(sourceWorkdir, "repro-exp"))
@@ -205,9 +208,9 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 
 	// Verify UI table output.
 	ui := exp.UI()
-	require.Len(t, ui.Columns, 4)
+	require.Len(t, ui.Columns, 3)
 	require.Len(t, ui.Rows, 2)
-	require.Len(t, ui.Stats, 4)
+	require.Len(t, ui.Stats, 3)
 
 	// Check that per-job folders exist with both truncated.log and repro.log.
 	for _, row := range ui.Rows {
@@ -225,7 +228,7 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 	// Now simulate restart:
 	// Create a new ReproExp on the same workdirs.
 	expRestart := NewReproExp(cfg, sourceWorkdir, nil, nil)
-	// Mock runner should NOT be called because all 8 jobs were already completed!
+	// Mock runner should NOT be called because all 6 jobs were already completed!
 	expRestart.runRepro = func(ctx context.Context, log []byte, cfg ReproConfig) (*repro.Result, *repro.Stats, error) {
 		t.Fatalf("runRepro should not be called for already completed jobs!")
 		return nil, nil, nil
@@ -241,11 +244,11 @@ func TestReproExpExecutionAndPersistence(t *testing.T) {
 }
 
 func TestReproConfigs(t *testing.T) {
-	require.Len(t, ReproConfigs, 4)
-	expectedKeys := []string{"6_progs", "25_progs_sliding", "as_is_per_proc_exact", "as_is_sliding_rand"}
-	expectedExact := []bool{false, false, true, true}
-	expectedShuffle := []bool{false, false, false, true}
-	expectedProcReplay := []bool{false, false, true, false}
+	require.Len(t, ReproConfigs, 3)
+	expectedKeys := []string{"6_progs", "as_is_per_proc_exact", "as_is_sliding_rand"}
+	expectedExact := []bool{false, true, true}
+	expectedShuffle := []bool{false, false, true}
+	expectedProcReplay := []bool{false, true, false}
 	for i, cfg := range ReproConfigs {
 		require.Equal(t, expectedKeys[i], cfg.Key)
 		require.Equal(t, expectedExact[i], cfg.ExactCrash)
