@@ -77,13 +77,19 @@ func replaceBlobs(ctx *aflow.Context, text string) string {
 
 // EntriesToLogPrograms converts a slice of parsed prog.LogEntry items to ai.LogProgram structs
 // with assigned UUIDs, Position counted backwards from the crash (0 = last program before crash),
-// and optional TimeBeforeCrash (from ent.Time if present), and returns a lookup map from UUID to the original LogEntry.
-func EntriesToLogPrograms(entries []*prog.LogEntry) ([]ai.LogProgram, map[string]*prog.LogEntry) {
+// optional TimeBeforeCrash (from ent.Time if present), and marks whether any entry was already tested standalone.
+// Returns the converted programs and a lookup map from UUID to the original LogEntry.
+func EntriesToLogPrograms(entries, tested []*prog.LogEntry) ([]ai.LogProgram, map[string]*prog.LogEntry) {
 	var validEntries []*prog.LogEntry
 	for _, ent := range entries {
 		if ent != nil && ent.P != nil {
 			validEntries = append(validEntries, ent)
 		}
+	}
+
+	testedMap := make(map[*prog.LogEntry]bool, len(tested))
+	for _, ent := range tested {
+		testedMap[ent] = true
 	}
 
 	n := len(validEntries)
@@ -109,6 +115,7 @@ func EntriesToLogPrograms(entries []*prog.LogEntry) ([]ai.LogProgram, map[string
 			ExecID:          ent.ID,
 			Calls:           callNames,
 			Prog:            string(ent.P.Serialize()),
+			TestedFailed:    testedMap[ent],
 		})
 	}
 	return progs, idMap
@@ -134,20 +141,35 @@ func FilterEntriesByUUIDs(entries []*prog.LogEntry, idMap map[string]*prog.LogEn
 }
 
 type prepareLogContextArgs struct {
-	Programs []ai.LogProgram
+	Programs      []ai.LogProgram
+	TestedProgIDs []string
 }
 
 type prepareLogContextResult struct {
-	LogOverview  string
-	ValidProgIDs []string
+	LogOverview   string
+	ValidProgIDs  []string
+	TestedProgIDs []string
 }
 
 var actionPrepareLogContext = aflow.NewFuncAction("prepare-log-context", prepareLogContextFunc)
 
 func prepareLogContextFunc(ctx *aflow.Context, args prepareLogContextArgs) (prepareLogContextResult, error) {
 	validIDs := make([]string, 0, len(args.Programs))
+	testedSet := make(map[string]bool, len(args.TestedProgIDs))
+	for _, id := range args.TestedProgIDs {
+		testedSet[id] = true
+	}
 	for _, p := range args.Programs {
 		validIDs = append(validIDs, p.UUID)
+		if p.TestedFailed {
+			testedSet[p.UUID] = true
+		}
+	}
+	var testedIDs []string
+	for _, id := range validIDs {
+		if testedSet[id] {
+			testedIDs = append(testedIDs, id)
+		}
 	}
 
 	var overview strings.Builder
@@ -166,8 +188,12 @@ func prepareLogContextFunc(ctx *aflow.Context, args prepareLogContextArgs) (prep
 		if p.TimeBeforeCrash != "" {
 			timing = fmt.Sprintf(" (%s before crash)", p.TimeBeforeCrash)
 		}
-		fmt.Fprintf(&overview, "- UUID: %s [Position %d%s, Proc %d]: %s\n",
-			p.UUID, p.Position, timing, p.Proc, strings.Join(p.Calls, ", "))
+		testedTag := ""
+		if p.TestedFailed || testedSet[p.UUID] {
+			testedTag = " [ALREADY TESTED STANDALONE: FAILED TO REPRODUCE]"
+		}
+		fmt.Fprintf(&overview, "- UUID: %s [Position %d%s, Proc %d, ExecID %d]%s: %s\n",
+			p.UUID, p.Position, timing, p.Proc, p.ExecID, testedTag, strings.Join(p.Calls, ", "))
 	}
 
 	if len(args.Programs) > maxDirectOverview {
@@ -176,8 +202,9 @@ func prepareLogContextFunc(ctx *aflow.Context, args prepareLogContextArgs) (prep
 	}
 
 	return prepareLogContextResult{
-		LogOverview:  overview.String(),
-		ValidProgIDs: validIDs,
+		LogOverview:   overview.String(),
+		ValidProgIDs:  validIDs,
+		TestedProgIDs: testedIDs,
 	}, nil
 }
 
@@ -198,15 +225,16 @@ type getLogProgramResult struct {
 	Proc            int      `jsonschema:"The parallel process ID that executed the program."`
 	ExecID          int      `jsonschema:"The execution ID of the program." json:",omitempty"`
 	Calls           []string `jsonschema:"The list of system calls executed by the program."`
-	Prog            string   `jsonschema:"The full serialized syzlang text of the program."`
+	Prog            string   `jsonschema:"The full serialized syzlang text of the program with blobs replaced."`
 }
 
 var ToolGetLogProgram = aflow.NewFuncTool("get-log-program", getLogProgramFunc, `
 Retrieve the full syzlang source text and metadata of an execution log program by its UUID.
+Large binary blobs are replaced with placeholders.
 Use this tool to closely inspect the syscall arguments, resources, and configurations of candidate programs.
 `)
 
-func getLogProgramFunc(_ *aflow.Context, state logToolState, args getLogProgramArgs) (getLogProgramResult, error) {
+func getLogProgramFunc(ctx *aflow.Context, state logToolState, args getLogProgramArgs) (getLogProgramResult, error) {
 	for _, p := range state.Programs {
 		if p.UUID == args.UUID {
 			return getLogProgramResult{
@@ -216,7 +244,7 @@ func getLogProgramFunc(_ *aflow.Context, state logToolState, args getLogProgramA
 				Proc:            p.Proc,
 				ExecID:          p.ExecID,
 				Calls:           p.Calls,
-				Prog:            p.Prog,
+				Prog:            replaceBlobs(ctx, p.Prog),
 			}, nil
 		}
 	}
@@ -428,55 +456,73 @@ var reproLogFilterAgent = &aflow.LLMAgent{
 	),
 	Outputs: aflow.ValidatedLLMOutputs[filterAgentOutputs](validateFilterAgentOutputs),
 	Instruction: `
-You are an expert Linux kernel developer and security researcher specializing in crash triage and root cause analysis.
-You are given a kernel crash report and a chronological log of syzkaller test programs executed before the crash.
+You are an expert Linux kernel developer and security researcher specializing in crash triage.
+You are given a kernel crash report, optional recent console log output, and a chronological log of
+syzkaller test programs executed before the crash.
 
-Your goal is to identify which program(s) from the log may have caused or contributed to the crash.
+Your goal is to identify which program(s) from the log caused or contributed to the crash.
 
-Investigate using your tools:
-1. Kernel source inspection:
-   - Use 'grepper' to search the kernel source tree for functions in the stack trace, drivers, or errors.
-   - Use 'read-file' and 'codesearch-dir-index' to view the kernel implementation at the crash site.
-2. Syzlang descriptions:
-   - Use 'syz-grepper' and 'read-syz-spec' to find syscall definitions matching the faulting kernel subsystems.
-3. Execution log:
-   - Use 'get-log-program' to read the full syzlang code of suspect programs.
-   - Use 'search-log-programs' to search for specific syscalls, ioctls, or parameters in the log.
-     Matches are sorted closest to the crash first, with large binary blobs replaced.
-   - Use 'list-log-programs' if you need to browse earlier programs.
+Investigation Tools:
+1. Execution Log Inspection:
+   - Use 'search-log-programs' to search across all log programs using regex (e.g. syscall names
+     like 'mount', 'bpf', 'ioctl', or device strings). Matches are sorted closest to the crash first.
+   - Use 'get-log-program' to read the full syzlang source text and syscall arguments of candidates.
+   - Use 'list-log-programs' to browse programs or filter by specific parallel 'Proc' IDs.
+2. Kernel Source & Syzlang Descriptions:
+   - Use 'grepper' to search kernel source for functions, struct names, drivers, or error strings.
+   - Use 'read-file' and 'codesearch-dir-index' to view kernel implementations at the crash site.
+   - Use 'syz-grepper' and 'read-syz-spec' to inspect syscall definitions for faulting subsystems.
 
-Understanding Log Metadata:
+Understanding Log Metadata & Placeholders:
 - 'Position': The program's position counted backwards from the crash point
   (0 is the final program running when the crash occurred, 1 is the program immediately before it, etc.).
 - 'TimeBeforeCrash': Approximate time elapsed between this program and the crash (e.g. "3.5s", "0s").
 - 'Proc' numbers:
-  * Each Proc number corresponds to an independent parallel executor process running concurrently
-    inside the VM (configured via syzkaller 'procs').
-  * Programs with the SAME Proc number executed sequentially within that process context
-    (sharing file descriptors and process state).
-  * Programs with DIFFERENT Proc numbers executed concurrently in parallel processes!
-  * For race conditions and concurrency bugs, look for programs executed around the same time
-    across different Proc numbers that access the same objects, devices, sockets, or memory areas.
+  * Each Proc corresponds to an independent parallel executor process inside the VM.
+  * Programs with the SAME Proc executed sequentially within that process context (sharing FDs).
+  * Programs with DIFFERENT Procs executed concurrently in parallel processes!
+- Large Blobs: Strings like "$BLOB_abcdef012345" represent large binary literals (e.g. filesystem images,
+  packet payloads, BPF bytecode) replaced with placeholders to conserve context.
 
-Temporal Proximity vs. Root Cause:
-- A crash is NOT always caused by the program running directly before the crash!
-- While the last executing program (Position = 0) is often guilty, delayed crashes are common:
-  * Asynchronous memory corruption (use-after-free, slab/page heap corruption) may only panic later
-    when an innocent subsystem accesses the corrupted memory.
-  * Deferred workqueues, timer callbacks, RCU grace periods, and async tasklets scheduled by an
-    earlier program may fire seconds after that program finished.
-  * Background kernel daemons (e.g. kswapd, bdi-writeback, networking queues).
-  * Multi-program setup sequences: an earlier program (higher Position) may have mounted
-    a filesystem, created a network namespace, registered a character device, or loaded a BPF program,
-    which subsequent programs then triggered.
-- Always check the faulting subsystem in the stack trace and search for programs touching that
-  subsystem, even if they ran earlier in the log.
+Analyzing Crash Reports and Console Logs:
+- Check the Crash Report and Recent Console Log for:
+  * Task names: comm="syz.X.Y" directly indicates Proc X and ExecID Y! Use this to locate the program.
+  * Subsystem error messages or warnings right before the crash (e.g. filesystem errors, driver probe
+    failures, memory allocation warnings, RCU stalls).
+  * The faulting function and call stack to identify the subsystem (e.g., fs/jffs2, drivers/media).
+- If the Crash Report is empty or generic ("no output/lost connection"), rely on the Recent Console Log
+  to determine which subsystem or Proc was active immediately before the kernel hung or disconnected.
 
-Selection criteria:
-A crash may be caused by:
-- A single program directly executing the faulting syscall or ioctl.
-- A sequence of programs: e.g. program A sets up a subsystem or mounts a filesystem, and program B triggers the bug.
-- Concurrency / race conditions: programs on different procs interleaving calls to corrupt state.
+SETUP VS. TRIGGER SEQUENCES (CRITICAL):
+Many kernel vulnerabilities require a multi-program sequence:
+- Setup Program: Mounts a filesystem image (e.g. 'syz_mount_image', 'mount$ext4', 'mount$jffs2'), opens
+  or creates a device node or pseudo-terminal ('syz_open_dev', 'openat$ptmx'), creates a network
+  namespace or interface ('unshare', 'syz_net_dev'), or creates directory hierarchies ('mkdir', 'configfs').
+- Trigger Program: Executes the faulting syscall ('read', 'write', 'ioctl', 'rmdir', 'close') on that
+  mounted filesystem, device, or socket.
+RULE: If a suspect program operates on a mounted filesystem or specific device/resource, you MUST
+search earlier in the log for the setup program that mounted or initialized that resource, and INCLUDE
+BOTH the setup program(s) AND the trigger program in 'SelectedProgIDs'! Syzkaller tests all selected
+programs together in chronological order during reproduction. A trigger program alone will fail without
+its prerequisite setup.
+
+Concurrency, Hung Tasks & Deadlocks:
+- Concurrency / Races: Look for programs executed around the same time across different Procs accessing
+  the same objects, devices, or memory areas.
+- Hung Tasks ("INFO: task hung in ..."): khungtaskd detects tasks blocked for >120 seconds. Check
+  comm="syz.X.Y" in the trace for the stuck task. Search for programs on Proc X or programs manipulating
+  the lock/resource the task is waiting on.
+- Deadlocks / Lockdep ("possible deadlock in ..."): Lockdep detects circular lock dependencies (A -> B
+  vs B -> A). The crash stack shows where the second lock was attempted. Search the log for programs
+  that acquire conflicting locks or manipulate the same subsystem concurrently on other Procs.
+
+Efficient Investigation Strategy:
+1. Analyze the crash report / console log to identify key subsystem names, syscalls, or device nodes.
+2. Search log programs immediately with 'search-log-programs' for those syscalls or device names.
+3. Inspect matching candidate programs with 'get-log-program'.
+4. Check if candidates require earlier setup programs (e.g. filesystem mounts).
+5. Use kernel code reading tools ('grepper', 'read-file') selectively when needed to clarify lock names
+   or syscall semantics. Avoid deep dives into unrelated kernel code when log candidates are clear.
 
 CRITICAL INSTRUCTIONS:
 - You must return SelectedProgIDs containing ONLY the UUIDs of the programs you identified.
@@ -489,7 +535,10 @@ Bug Title: {{.BugTitle}}
 
 Crash Report:
 {{.CrashReport}}
-
+{{if .ConsoleLog}}
+Recent Console Log (last 5KB):
+{{.ConsoleLog}}
+{{end}}
 {{.DescriptionFilesPrompt}}
 
 {{.SkillsPrompt}}

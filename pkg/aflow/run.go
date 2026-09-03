@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/google/syzkaller/pkg/aflow/ai"
 	"github.com/google/syzkaller/pkg/aflow/backend/gemini"
@@ -105,10 +106,19 @@ func RunWorkflow[Inputs, Outputs any](ctx context.Context, typ ai.WorkflowType, 
 	}
 	defer provider.Close()
 
+	cache := cfg.cache
+	if cache == nil {
+		var err error
+		cache, err = NewCache(filepath.Join(workdir, "cache"), 1024*1024*1024)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create aflow cache: %w", err)
+		}
+	}
+
 	outputs, err := workflowDesc.Execute(ctx, initialState, ExecuteOptions{
 		Provider:   provider,
 		Workdir:    workdir,
-		Cache:      cfg.cache,
+		Cache:      cache,
 		OnEvent:    onEvent,
 		TokenLimit: cfg.tokenLimit,
 	})

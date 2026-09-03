@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/syzkaller/pkg/aflow"
@@ -62,6 +63,7 @@ type reproContext struct {
 	cfg            *mgrconfig.Config
 	logf           func(string, ...any)
 	target         *targets.Target
+	crashLog       []byte
 	crashTitle     string
 	crashType      crash.Type
 	crashReport    string
@@ -151,6 +153,7 @@ func runInner(ctx context.Context, crashLog []byte, env Environment, exec execIn
 		exec:          exec,
 		cfg:           cfg,
 		target:        cfg.SysTarget,
+		crashLog:      crashLog,
 		crashTitle:    crashTitle,
 		crashType:     crashType,
 		crashReport:   crashReport,
@@ -426,9 +429,23 @@ func (ctx *reproContext) extractProgLLM(entries []*prog.LogEntry) []*prog.LogEnt
 	progs, idMap := reprolog.EntriesToLogPrograms(entries)
 	ctx.reproLogf(3, "prepared %d log programs for LLM analysis", len(progs))
 
+	const maxConsoleLog = 5 << 10 // 5 KB
+	var consoleLog string
+	if len(ctx.crashLog) > 0 {
+		tail := ctx.crashLog
+		if len(tail) > maxConsoleLog {
+			tail = tail[len(tail)-maxConsoleLog:]
+			if idx := bytes.IndexByte(tail, '\n'); idx != -1 && idx < 200 {
+				tail = tail[idx+1:]
+			}
+		}
+		consoleLog = strings.ToValidUTF8(string(tail), "")
+	}
+
 	args := ai.ReproLogFilterArgs{
 		BugTitle:    ctx.crashTitle,
 		CrashReport: ctx.crashReport,
+		ConsoleLog:  consoleLog,
 		Programs:    progs,
 		KernelSrc:   ctx.cfg.KernelSrc,
 		Syzkaller:   ctx.cfg.Syzkaller,

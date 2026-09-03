@@ -4,12 +4,16 @@
 package reprolog
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/syzkaller/pkg/aflow"
 	"github.com/google/syzkaller/pkg/aflow/ai"
+	"github.com/google/syzkaller/pkg/aflow/backend"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys/targets"
 	"github.com/stretchr/testify/require"
@@ -247,6 +251,32 @@ func TestSearchLogProgramsBlobReplacementAndProximitySort(t *testing.T) {
 	require.Equal(t, 10, res.Matches[1].Position)
 }
 
+func TestGetLogProgramBlobReplacement(t *testing.T) {
+	hugeBlob := strings.Repeat("0123456789abcdef", 16) // 256 chars >= 128
+	progWithBlob := "mount(&(0x7f0000000000)=\"" + hugeBlob + "\")\n"
+
+	state := logToolState{
+		Programs: []ai.LogProgram{
+			{
+				UUID:            "uuid-blob",
+				Position:        0,
+				TimeBeforeCrash: "0s",
+				Proc:            0,
+				ExecID:          1,
+				Calls:           []string{"mount"},
+				Prog:            progWithBlob,
+			},
+		},
+	}
+
+	aflow.TestTool(t, ToolGetLogProgram, state, getLogProgramArgs{UUID: "uuid-blob"},
+		func(got getLogProgramResult) {
+			require.Equal(t, "uuid-blob", got.UUID)
+			require.Contains(t, got.Prog, "$BLOB_")
+			require.NotContains(t, got.Prog, hugeBlob)
+		}, "")
+}
+
 func TestEntriesToLogProgramsTiming(t *testing.T) {
 	target, err := prog.GetTarget(targets.TestOS, targets.TestArch64)
 	require.NoError(t, err)
@@ -322,4 +352,56 @@ func TestValidateFilterAgentOutputs(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unknown program UUIDs")
 	})
+}
+
+type dummyProvider struct{}
+
+func (p *dummyProvider) Client(ctx context.Context) (backend.Client, error) {
+	return nil, fmt.Errorf("dummy client error")
+}
+
+func (p *dummyProvider) Models(ctx context.Context) ([]string, error) { return nil, nil }
+
+func (p *dummyProvider) ResolveModels(category backend.ModelCategory) []string {
+	return []string{"model1"}
+}
+
+func (p *dummyProvider) Close() error { return nil }
+
+func TestReproLogFilterFlowInputs(t *testing.T) {
+	flow := aflow.Flows[string(ai.WorkflowReproLogFilter)]
+	require.NotNil(t, flow)
+
+	args := ai.ReproLogFilterArgs{
+		BugTitle:    "kernel BUG in test",
+		CrashReport: "kernel BUG at fs/test.c:123!",
+		ConsoleLog:  "[  12.345678] test kernel console log line\n",
+		Programs: []ai.LogProgram{
+			{
+				UUID:            "test-uuid-1",
+				Position:        0,
+				TimeBeforeCrash: "1.5s",
+				Proc:            0,
+				ExecID:          1,
+				Calls:           []string{"test$res0"},
+				Prog:            "test$res0()\n",
+			},
+		},
+		KernelSrc:  "/tmp",
+		Syzkaller:  "/tmp",
+		TargetOS:   "linux",
+		TargetArch: "amd64",
+	}
+
+	argsBytes, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	var initialState map[string]any
+	err = json.Unmarshal(argsBytes, &initialState)
+	require.NoError(t, err)
+
+	_, err = flow.Execute(context.Background(), initialState, aflow.ExecuteOptions{
+		Provider: &dummyProvider{},
+	})
+	require.EqualError(t, err, "failed to initialize LLM client: dummy client error")
 }

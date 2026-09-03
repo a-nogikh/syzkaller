@@ -175,23 +175,26 @@ type SeedGenOutputs struct {
 }
 
 type LogProgram struct {
-	UUID            string   `json:"uuid"`
-	Position        int      `json:"position"`
-	TimeBeforeCrash string   `json:"time_before_crash,omitempty"`
-	Proc            int      `json:"proc,omitempty"`
-	ExecID          int      `json:"exec_id,omitempty"`
-	Calls           []string `json:"calls,omitempty"`
-	Prog            string   `json:"prog"`
+	UUID            string
+	Position        int
+	TimeBeforeCrash string   `json:",omitempty"`
+	Proc            int      `json:",omitempty"`
+	ExecID          int      `json:",omitempty"`
+	Calls           []string `json:",omitempty"`
+	Prog            string
+	TestedFailed    bool `json:",omitempty"`
 }
 
 type ReproLogFilterArgs struct {
-	BugTitle    string `json:",omitempty"`
-	CrashReport string
-	Programs    []LogProgram
-	KernelSrc   string
-	Syzkaller   string
-	TargetOS    string
-	TargetArch  string
+	BugTitle      string `json:",omitempty"`
+	CrashReport   string
+	ConsoleLog    string `json:",omitempty"`
+	Programs      []LogProgram
+	TestedProgIDs []string `json:",omitempty"`
+	KernelSrc     string
+	Syzkaller     string
+	TargetOS      string
+	TargetArch    string
 }
 
 type ReproLogFilterResult struct {
