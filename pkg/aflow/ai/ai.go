@@ -198,5 +198,6 @@ type ReproLogFilterArgs struct {
 
 type ReproLogFilterResult struct {
 	SelectedProgIDs []string
+	GiveUp          bool `json:",omitempty"`
 	Reasoning       string
 }

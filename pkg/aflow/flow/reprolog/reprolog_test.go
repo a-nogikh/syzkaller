@@ -373,6 +373,27 @@ func TestValidateFilterAgentOutputs(t *testing.T) {
 		require.Contains(t, err.Error(), "Reasoning must be provided")
 	})
 
+	t.Run("GiveUpValid", func(t *testing.T) {
+		got, err := validateFilterAgentOutputs(nil, state, filterAgentOutputs{
+			SelectedProgIDs: []string{},
+			GiveUp:          true,
+			Reasoning:       "requires physical hardware not present",
+		})
+		require.NoError(t, err)
+		require.Empty(t, got.SelectedProgIDs)
+		require.True(t, got.GiveUp)
+	})
+
+	t.Run("GiveUpWithProgsRejected", func(t *testing.T) {
+		_, err := validateFilterAgentOutputs(nil, state, filterAgentOutputs{
+			SelectedProgIDs: []string{"uuid-2"},
+			GiveUp:          true,
+			Reasoning:       "test reason",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "SelectedProgIDs must be empty when GiveUp is true")
+	})
+
 	t.Run("UnknownUUID", func(t *testing.T) {
 		_, err := validateFilterAgentOutputs(nil, state, filterAgentOutputs{
 			SelectedProgIDs: []string{"uuid-fake"},
@@ -380,6 +401,82 @@ func TestValidateFilterAgentOutputs(t *testing.T) {
 		})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unknown program UUIDs")
+	})
+}
+
+type mockTester struct {
+	result *TestProgramsResult
+	err    error
+	called []string
+}
+
+func (m *mockTester) TestPrograms(ctx context.Context, progIDs []string,
+	timeout time.Duration) (*TestProgramsResult, error) {
+	m.called = progIDs
+	return m.result, m.err
+}
+
+func TestToolTestCandidatePrograms(t *testing.T) {
+	state := testToolState{
+		BugTitle:     "KASAN: slab-use-after-free in foo",
+		ValidProgIDs: []string{"uuid-1", "uuid-2"},
+	}
+
+	t.Run("NoTester", func(t *testing.T) {
+		ctx := aflow.NewTestContext(t)
+		res, err := testCandidateProgramsFunc(ctx, state, testCandidateProgramsArgs{ProgIDs: []string{"uuid-1"}})
+		require.NoError(t, err)
+		require.False(t, res.Crashed)
+		require.Contains(t, res.ExecutionSummary, "Interactive VM testing is not available")
+	})
+
+	t.Run("UnknownUUID", func(t *testing.T) {
+		ctx := aflow.NewTestContext(t)
+		_, err := testCandidateProgramsFunc(ctx, state, testCandidateProgramsArgs{ProgIDs: []string{"uuid-invalid"}})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unknown program UUIDs")
+	})
+
+	t.Run("CrashTargetReproduced", func(t *testing.T) {
+		mock := &mockTester{
+			result: &TestProgramsResult{
+				Crashed:     true,
+				CrashTitle:  "KASAN: slab-use-after-free in foo",
+				IsTargetBug: true,
+				Duration:    5 * time.Second,
+			},
+		}
+		bgCtx := ContextWithProgramTester(context.Background(), mock)
+		ctx := aflow.NewTestContext(t)
+		ctx.Context = bgCtx
+		res, err := testCandidateProgramsFunc(ctx, state, testCandidateProgramsArgs{
+			ProgIDs: []string{"uuid-1", "uuid-2"},
+		})
+		require.ErrorIs(t, err, ErrCrashFound)
+		require.True(t, res.Crashed)
+		require.True(t, res.IsTargetBug)
+		require.Equal(t, "KASAN: slab-use-after-free in foo", res.CrashTitle)
+		require.Equal(t, []string{"uuid-1", "uuid-2"}, mock.called)
+	})
+
+	t.Run("NoCrashReturnsSummary", func(t *testing.T) {
+		mock := &mockTester{
+			result: &TestProgramsResult{
+				Crashed:   false,
+				RawOutput: []byte("[   5.123] syz_mount_image: failed with errno 2: No such file or directory\n"),
+				Duration:  10 * time.Second,
+			},
+		}
+		bgCtx := ContextWithProgramTester(context.Background(), mock)
+		ctx := aflow.NewTestContext(t)
+		ctx.Context = bgCtx
+		res, err := testCandidateProgramsFunc(ctx, state, testCandidateProgramsArgs{
+			ProgIDs: []string{"uuid-1"},
+		})
+		require.NoError(t, err)
+		require.False(t, res.Crashed)
+		require.Contains(t, res.ExecutionSummary, "errno 2")
+		require.Equal(t, 10.0, res.DurationSeconds)
 	})
 }
 

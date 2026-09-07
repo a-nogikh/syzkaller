@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/syzkaller/pkg/aflow/flow/reprolog"
 	"github.com/google/syzkaller/pkg/csource"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/instance"
@@ -514,4 +515,40 @@ func TestIsDelayedCrash(t *testing.T) {
 		}
 		require.Equal(t, tt.want, ctx.isDelayedCrash(), tt.title)
 	}
+}
+
+func TestReproRunner(t *testing.T) {
+	target, err := prog.GetTarget(targets.Linux, targets.AMD64)
+	require.NoError(t, err)
+	p, err := target.Deserialize([]byte("getpid()\n"), prog.Strict)
+	require.NoError(t, err)
+
+	entry := &prog.LogEntry{P: p, Proc: 0, ID: 1}
+	entries := []*prog.LogEntry{entry}
+	progs, idMap := reprolog.EntriesToLogPrograms(entries, nil)
+	require.Len(t, progs, 1)
+	uuid := progs[0].UUID
+
+	t.Run("BudgetExceeded", func(t *testing.T) {
+		runner := &reproRunner{
+			ctx:      &reproContext{entries: entries},
+			idMap:    idMap,
+			maxRuns:  1,
+			runCount: 1,
+		}
+		_, err := runner.TestPrograms(context.Background(), []string{uuid}, 30*time.Second)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "budget exceeded")
+	})
+
+	t.Run("UnknownUUID", func(t *testing.T) {
+		runner := &reproRunner{
+			ctx:     &reproContext{entries: entries},
+			idMap:   idMap,
+			maxRuns: 3,
+		}
+		_, err := runner.TestPrograms(context.Background(), []string{"unknown-uuid"}, 30*time.Second)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "none of the specified program UUIDs found")
+	})
 }

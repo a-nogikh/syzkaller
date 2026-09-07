@@ -5,7 +5,10 @@
 package reprolog
 
 import (
+	"bytes"
 	"cmp"
+	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -15,10 +18,12 @@ import (
 	"github.com/google/syzkaller/pkg/aflow"
 	"github.com/google/syzkaller/pkg/aflow/action/actionsyzlang"
 	"github.com/google/syzkaller/pkg/aflow/ai"
+	"github.com/google/syzkaller/pkg/aflow/backend"
 	"github.com/google/syzkaller/pkg/aflow/syzspec"
 	"github.com/google/syzkaller/pkg/aflow/tool/codesearcher"
 	"github.com/google/syzkaller/pkg/aflow/tool/grepper"
 	"github.com/google/syzkaller/pkg/aflow/tool/syzlang"
+	"github.com/google/syzkaller/pkg/aflow/trajectory"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/uuid"
 )
@@ -409,11 +414,238 @@ func listLogProgramsFunc(_ *aflow.Context, state logToolState,
 	}, nil
 }
 
+// Program testing tool and interfaces.
+
+// ProgramTester provides an interface for executing candidate programs in a test VM.
+type ProgramTester interface {
+	TestPrograms(ctx context.Context, progIDs []string, timeout time.Duration) (*TestProgramsResult, error)
+}
+
+// TestProgramsResult contains the outcome of executing candidate programs in a VM.
+type TestProgramsResult struct {
+	Crashed     bool
+	CrashTitle  string
+	IsTargetBug bool
+	RawOutput   []byte
+	Duration    time.Duration
+}
+
+type contextKeyType int
+
+const programTesterKey contextKeyType = 1
+
+// ContextWithProgramTester attaches a ProgramTester to the context.
+func ContextWithProgramTester(ctx context.Context, tester ProgramTester) context.Context {
+	return context.WithValue(ctx, programTesterKey, tester)
+}
+
+// ProgramTesterFromContext retrieves a ProgramTester from the context if present.
+func ProgramTesterFromContext(ctx context.Context) ProgramTester {
+	if val, ok := ctx.Value(programTesterKey).(ProgramTester); ok {
+		return val
+	}
+	return nil
+}
+
+// ErrCrashFound is returned when a candidate program successfully reproduces the target crash.
+var ErrCrashFound = errors.New("target crash reproduced successfully")
+
+type testCandidateProgramsArgs struct {
+	ProgIDs        []string `jsonschema:"Program UUIDs from execution log to execute together in chronological order."`
+	TimeoutSeconds int      `json:",omitempty" jsonschema:"Optional test timeout in seconds (default 30, max 120)."`
+}
+
+type testCandidateProgramsResult struct {
+	Crashed          bool    `jsonschema:"Whether a kernel crash occurred during execution."`
+	CrashTitle       string  `json:",omitempty" jsonschema:"The title of the detected crash, if any."`
+	IsTargetBug      bool    `json:",omitempty" jsonschema:"Whether the crash matches the target bug."`
+	ExecutionSummary string  `jsonschema:"Summary of serial console and executor log highlighting failed syscalls."`
+	DurationSeconds  float64 `jsonschema:"Elapsed execution time in seconds."`
+}
+
+type testToolState struct {
+	BugTitle     string
+	ValidProgIDs []string
+}
+
+var ToolTestCandidatePrograms = aflow.NewFuncTool("test-candidate-programs", testCandidateProgramsFunc, `
+Execute candidate programs from the log inside an instrumented test VM to test whether they reproduce the crash.
+You can specify multiple program UUIDs (e.g. [SetupProgramUUID, TriggerProgramUUID]) to execute multi-program sequences.
+If the program crashes the kernel with the target bug, reproduction succeeds and completes automatically.
+If the program does NOT crash, a sub-agent will inspect the serial console and executor output to summarize any syscall
+errors (such as -ENOENT, -ENODEV, or failed mounts) to help you identify missing setup programs.
+You have a budget of up to 3 candidate tests.
+`)
+
+func testCandidateProgramsFunc(ctx *aflow.Context, state testToolState,
+	args testCandidateProgramsArgs) (testCandidateProgramsResult, error) {
+	if len(args.ProgIDs) == 0 {
+		return testCandidateProgramsResult{}, aflow.BadCallError("ProgIDs cannot be empty")
+	}
+	var invalid []string
+	for _, id := range args.ProgIDs {
+		if !slices.Contains(state.ValidProgIDs, id) {
+			invalid = append(invalid, id)
+		}
+	}
+	if len(invalid) > 0 {
+		return testCandidateProgramsResult{}, aflow.BadCallError(
+			"unknown program UUIDs: %v. Only select UUIDs that exist in the execution log", invalid)
+	}
+
+	tester := ProgramTesterFromContext(ctx.Context)
+	if tester == nil {
+		return testCandidateProgramsResult{
+			ExecutionSummary: "Interactive VM testing is not available in this environment. " +
+				"Please analyze the execution log and kernel source directly to select candidates.",
+		}, nil
+	}
+
+	timeout := time.Duration(args.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	timeout = min(max(timeout, 10*time.Second), 120*time.Second)
+
+	res, err := tester.TestPrograms(ctx.Context, args.ProgIDs, timeout)
+	if err != nil {
+		return testCandidateProgramsResult{}, err
+	}
+	if res.Crashed {
+		if res.IsTargetBug {
+			return testCandidateProgramsResult{
+				Crashed:         true,
+				CrashTitle:      res.CrashTitle,
+				IsTargetBug:     true,
+				DurationSeconds: res.Duration.Seconds(),
+				ExecutionSummary: fmt.Sprintf("Target crash '%s' successfully reproduced in %.1fs!",
+					res.CrashTitle, res.Duration.Seconds()),
+			}, ErrCrashFound
+		}
+		return testCandidateProgramsResult{
+			Crashed:         true,
+			CrashTitle:      res.CrashTitle,
+			IsTargetBug:     false,
+			DurationSeconds: res.Duration.Seconds(),
+			ExecutionSummary: fmt.Sprintf("Kernel crashed with an unrelated crash '%s' (not the target bug).",
+				res.CrashTitle),
+		}, nil
+	}
+
+	summary, err := summarizeSerialOutput(ctx, state.BugTitle, res.RawOutput)
+	if err != nil {
+		summary = fallbackSummarizeLog(res.RawOutput)
+	}
+
+	return testCandidateProgramsResult{
+		Crashed:          false,
+		ExecutionSummary: summary,
+		DurationSeconds:  res.Duration.Seconds(),
+	}, nil
+}
+
+func summarizeSerialOutput(ctx *aflow.Context, bugTitle string, output []byte) (string, error) {
+	if len(output) == 0 {
+		return "Program completed without crashing. No console output recorded.", nil
+	}
+	const maxLog = 32 << 10 // 32 KB
+	tail := output
+	if len(tail) > maxLog {
+		tail = tail[len(tail)-maxLog:]
+		if idx := bytes.IndexByte(tail, '\n'); idx != -1 && idx < 200 {
+			tail = tail[idx+1:]
+		}
+	}
+	cleanLog := strings.ToValidUTF8(string(tail), "")
+
+	if ctx == nil {
+		return fallbackSummarizeLog(output), nil
+	}
+
+	prompt := fmt.Sprintf(`Target bug being investigated: %s
+A syzkaller test program was executed in the Linux VM and did NOT trigger a kernel crash.
+Below is the tail of the serial console and executor log from that execution:
+
+--- CONSOLE LOG START ---
+%s
+--- CONSOLE LOG END ---
+
+Analyze the log and provide a concise 2-4 sentence technical summary:
+1. Did any syscalls fail with errors (e.g. -ENOENT, -ENODEV, -EPERM, -EINVAL, or mount/open failures)?
+2. Did the kernel print any relevant warnings, dmesg lines, or driver messages?
+3. What prerequisite setup or device configuration appears to be missing?
+Focus only on actionable clues for why the crash was not triggered. Keep the summary under 100 words.`,
+		bugTitle, cleanLog)
+
+	span := &trajectory.Span{
+		Type: trajectory.SpanAgent,
+		Name: "serial-output-analyzer",
+	}
+	_ = ctx.StartSpan(span)
+
+	cfg := &backend.GenerateConfig{}
+	req := []*backend.Message{
+		{
+			Role: backend.RoleUser,
+			Parts: []backend.Part{
+				{Text: prompt},
+			},
+		},
+	}
+
+	resp, err := ctx.GenerateContent(backend.LightweightModel, cfg, req)
+	if err != nil {
+		_ = ctx.FinishSpan(span, err)
+		return fallbackSummarizeLog(output), nil
+	}
+	var summary string
+	for _, part := range resp.Parts {
+		if part.Text != "" {
+			summary += part.Text
+		}
+	}
+	summary = strings.TrimSpace(summary)
+	span.Results = map[string]any{"summary": summary}
+	_ = ctx.FinishSpan(span, nil)
+	if summary == "" {
+		return fallbackSummarizeLog(output), nil
+	}
+	return summary, nil
+}
+
+func fallbackSummarizeLog(output []byte) string {
+	if len(output) == 0 {
+		return "Execution completed without crash. No console output."
+	}
+	var matchingLines []string
+	keywords := []string{
+		"errno", "failed", "cannot", "no such", "permission denied",
+		"invalid argument", "error", "warning", "BUG", "oops",
+	}
+	for line := range strings.SplitSeq(string(output), "\n") {
+		lower := strings.ToLower(line)
+		for _, kw := range keywords {
+			if strings.Contains(lower, kw) {
+				matchingLines = append(matchingLines, strings.TrimSpace(line))
+				break
+			}
+		}
+	}
+	if len(matchingLines) == 0 {
+		return "Execution completed without crash. Syscalls completed without obvious kernel errors."
+	}
+	if len(matchingLines) > 6 {
+		matchingLines = matchingLines[len(matchingLines)-6:]
+	}
+	return "Execution completed without crash. Key console/executor messages:\n- " + strings.Join(matchingLines, "\n- ")
+}
+
 // Agent definition.
 
 type filterAgentOutputs struct {
-	SelectedProgIDs []string `jsonschema:"List of program UUIDs from the log that may cause the crash."`
-	Reasoning       string   `jsonschema:"Detailed technical reasoning explaining how the programs relate to the crash."`
+	SelectedProgIDs []string `jsonschema:"Program UUIDs from log causing crash, or empty if GiveUp is true."`
+	GiveUp          bool     `json:",omitempty" jsonschema:"Set true if bug cannot be reproduced from log."`
+	Reasoning       string   `jsonschema:"Technical reasoning for crash relationship or why repro is impossible."`
 }
 
 type filterAgentState struct {
@@ -425,6 +657,12 @@ func validateFilterAgentOutputs(_ *aflow.Context, state filterAgentState,
 	args filterAgentOutputs) (filterAgentOutputs, error) {
 	if strings.TrimSpace(args.Reasoning) == "" {
 		return filterAgentOutputs{}, aflow.BadCallError("Reasoning must be provided")
+	}
+	if args.GiveUp {
+		if len(args.SelectedProgIDs) > 0 {
+			return filterAgentOutputs{}, aflow.BadCallError("SelectedProgIDs must be empty when GiveUp is true")
+		}
+		return args, nil
 	}
 	var invalid []string
 	for _, id := range args.SelectedProgIDs {
@@ -460,6 +698,7 @@ var reproLogFilterAgent = &aflow.LLMAgent{
 		ToolGetLogProgram,
 		ToolSearchLogPrograms,
 		ToolListLogPrograms,
+		ToolTestCandidatePrograms,
 	),
 	Outputs: aflow.ValidatedLLMOutputs[filterAgentOutputs](validateFilterAgentOutputs),
 	Instruction: `
@@ -479,6 +718,13 @@ Investigation Tools:
    - Use 'grepper' to search kernel source for functions, struct names, drivers, or error strings.
    - Use 'read-file' and 'codesearch-dir-index' to view kernel implementations at the crash site.
    - Use 'syz-grepper' and 'read-syz-spec' to inspect syscall definitions for faulting subsystems.
+3. Interactive Candidate Testing inside VM:
+   - Use 'test-candidate-programs' to execute candidate programs from the log inside an instrumented test VM.
+   - You can provide multiple program UUIDs (e.g. [SetupUUID, TriggerUUID]) to test multi-program sequences.
+   - If the target crash reproduces during candidate testing, reproduction succeeds and completes automatically!
+   - If the test does not crash, a sub-agent will analyze the serial console and executor output to summarize
+     syscall return codes, failed mounts, or missing devices (-ENOENT, -ENODEV).
+   - You have a budget of up to 3 candidate tests. Use them to test your strongest hypotheses.
 
 Understanding Log Metadata & Placeholders:
 - 'Position': The program's position counted backwards from the crash point
@@ -537,16 +783,31 @@ Concurrency, Hung Tasks & Deadlocks:
   vs B -> A). The crash stack shows where the second lock was attempted. Search the log for programs
   that acquire conflicting locks or manipulate the same subsystem concurrently on other Procs.
 
+GIVING UP (WHEN A BUG IS NOT REPRODUCIBLE FROM LOG):
+Some crashes in the execution log cannot be reproduced via clean replay:
+- The bug may require specific physical hardware or network configurations not present in the VM.
+- The bug may be a watchdog timeout, hang, or stall requiring hundreds of seconds of external delay.
+- The root cause may be state corruption that occurred long before the captured log window.
+- The bug may have an extremely elusive race window that requires thousands of iterations.
+If after analyzing the log, kernel code, and testing candidates you determine that the bug CANNOT be reproduced
+from this log, you SHOULD give up:
+- Set 'GiveUp: true'
+- Set 'SelectedProgIDs: []'
+- In 'Reasoning', clearly explain why the bug cannot be reproduced from this log.
+Do NOT guess or hallucinate unrelated syscalls just to populate SelectedProgIDs.
+
 Efficient Investigation Strategy:
 1. Analyze the crash report / console log to identify key subsystem names, syscalls, or device nodes.
 2. Search log programs immediately with 'search-log-programs' for those syscalls or device names.
 3. Inspect matching candidate programs with 'get-log-program'.
 4. Check if candidates require earlier setup programs (e.g. filesystem mounts).
-5. Use kernel code reading tools ('grepper', 'read-file') selectively when needed to clarify lock names
+5. Test your hypothesis using 'test-candidate-programs'. Inspect the sub-agent summary if it doesn't crash.
+6. Use kernel code reading tools ('grepper', 'read-file') selectively when needed to clarify lock names
    or syscall semantics. Avoid deep dives into unrelated kernel code when log candidates are clear.
 
 CRITICAL INSTRUCTIONS:
-- You must return SelectedProgIDs containing ONLY the UUIDs of the programs you identified.
+- Return SelectedProgIDs containing ONLY the UUIDs of identified programs, or an empty list if GiveUp is true.
+- If you determine the bug cannot be reproduced from this log, set GiveUp to true and SelectedProgIDs to [].
 - DO NOT copy or paste program code into the output.
 - Explain your rationale in 'Reasoning', referencing the relevant kernel functions, call stacks, and syscalls.
 `,

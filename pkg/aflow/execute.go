@@ -242,6 +242,35 @@ func (ctx *Context) runWithState(state map[string]any, fn func(*Context) error) 
 	return fn(ctx)
 }
 
+// GenerateContent generates content using the workflow's configured LLM client.
+func (ctx *Context) GenerateContent(cat backend.ModelCategory, cfg *backend.GenerateConfig,
+	req []*backend.Message) (*backend.GenerateResponse, error) {
+	if ctx.generateContent == nil {
+		return nil, errors.New("generateContent is not initialized")
+	}
+	var model string
+	if ctx.provider != nil {
+		models := ctx.provider.ResolveModels(cat)
+		if len(models) > 0 {
+			model = models[0]
+		}
+	}
+	if model == "" {
+		model = string(cat)
+	}
+	return ctx.generateContent(model, cfg, req)
+}
+
+// StartSpan records the start of a trajectory span.
+func (ctx *Context) StartSpan(span *trajectory.Span) error {
+	return ctx.startSpan(span)
+}
+
+// FinishSpan records the completion of a trajectory span.
+func (ctx *Context) FinishSpan(span *trajectory.Span, spanErr error) error {
+	return ctx.finishSpan(span, spanErr)
+}
+
 func (ctx *Context) ConsumeTokens(tokens int) error {
 	if ctx.tokenLimit == 0 {
 		return nil
@@ -329,15 +358,24 @@ func (ctx *Context) Close() {
 }
 
 func (ctx *Context) startSpan(span *trajectory.Span) error {
+	if ctx.timeNow == nil {
+		ctx.timeNow = time.Now
+	}
 	span.Seq = ctx.spanSeq
 	ctx.spanSeq++
 	span.Nesting = ctx.spanNesting
 	ctx.spanNesting++
 	span.Started = ctx.timeNow()
+	if ctx.onEvent == nil {
+		return nil
+	}
 	return ctx.onEvent(span)
 }
 
 func (ctx *Context) finishSpan(span *trajectory.Span, spanErr error) error {
+	if ctx.timeNow == nil {
+		ctx.timeNow = time.Now
+	}
 	ctx.spanNesting--
 	if ctx.spanNesting < 0 {
 		panic("unbalanced spans")
@@ -345,6 +383,9 @@ func (ctx *Context) finishSpan(span *trajectory.Span, spanErr error) error {
 	span.Finished = ctx.timeNow()
 	if spanErr != nil {
 		span.Error = spanErr.Error()
+	}
+	if ctx.onEvent == nil {
+		return spanErr
 	}
 	err := ctx.onEvent(span)
 	if spanErr != nil {

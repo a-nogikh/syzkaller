@@ -77,6 +77,7 @@ type reproContext struct {
 	timeouts       targets.Timeouts
 	observedTitles map[string]crash.Type
 	fast           bool
+	lastOutput     []byte
 }
 
 // execInterface describes the interfaces needed by pkg/repro.
@@ -381,7 +382,11 @@ func (ctx *reproContext) extractProg(entries []*prog.LogEntry) (*Result, error) 
 
 		if !llmAttempted && ctx.canRunLLM(entries) {
 			llmAttempted = true
-			llmEntries = ctx.extractProgLLM(entries, toTest)
+			var res *Result
+			res, llmEntries = ctx.extractProgLLM(entries, toTest)
+			if res != nil {
+				return res, nil
+			}
 		}
 		res, err = ctx.testLLMCandidates(toTest, llmEntries, timeout)
 		if err != nil {
@@ -456,7 +461,87 @@ func (ctx *reproContext) canRunLLM(entries []*prog.LogEntry) bool {
 		(ctx.crashTitle != "" || ctx.crashReport != "") && ctx.cfg.Syzkaller != ""
 }
 
-func (ctx *reproContext) extractProgLLM(entries, tested []*prog.LogEntry) []*prog.LogEntry {
+type reproRunner struct {
+	ctx          *reproContext
+	idMap        map[string]*prog.LogEntry
+	foundResult  *Result
+	foundEntries []*prog.LogEntry
+	runCount     int
+	maxRuns      int
+}
+
+func (r *reproRunner) TestPrograms(ctx context.Context, progIDs []string,
+	timeout time.Duration) (*reprolog.TestProgramsResult, error) {
+	if r.runCount >= r.maxRuns {
+		return nil, aflow.BadCallError(
+			"candidate test budget exceeded (%d runs max); finalize your candidate selection", r.maxRuns)
+	}
+	r.runCount++
+
+	entries := reprolog.FilterEntriesByUUIDs(r.ctx.entries, r.idMap, progIDs)
+	if len(entries) == 0 {
+		return nil, aflow.BadCallError("none of the specified program UUIDs found in execution log")
+	}
+
+	if r.ctx.isDelayedCrash() && timeout < 100*time.Second {
+		timeout = 100 * time.Second
+	}
+
+	r.ctx.reproLogf(2, "AI testing candidate sequence of %d programs (attempt %d/%d, timeout %s)",
+		len(entries), r.runCount, r.maxRuns, timeout)
+
+	ret, err := r.ctx.testProgs(entries, timeout, r.ctx.startOpts, false)
+	if err != nil {
+		return nil, err
+	}
+
+	if ret.Crashed {
+		rep := r.ctx.report
+		crashTitle := ""
+		if rep != nil {
+			crashTitle = rep.Title
+		}
+		r.ctx.reproLogf(2, "AI candidate execution reproduced crash: '%s'", crashTitle)
+
+		var res *Result
+		if len(entries) == 1 {
+			res = &Result{
+				Prog:     entries[0].P,
+				Duration: reproDuration(timeout, ret.Duration, r.ctx.timeouts.Program),
+				Opts:     r.ctx.startOpts,
+			}
+		} else {
+			p := &prog.Prog{Target: entries[0].P.Target}
+			for _, ent := range entries {
+				p.Calls = append(p.Calls, ent.P.Calls...)
+			}
+			if len(p.Calls) <= prog.MaxCalls {
+				res = &Result{
+					Prog:     p,
+					Duration: reproDuration(timeout, ret.Duration, r.ctx.timeouts.Program),
+					Opts:     r.ctx.startOpts,
+				}
+			}
+		}
+		r.foundResult = res
+		r.foundEntries = entries
+
+		return &reprolog.TestProgramsResult{
+			Crashed:     true,
+			CrashTitle:  crashTitle,
+			IsTargetBug: true,
+			Duration:    ret.Duration,
+		}, nil
+	}
+
+	return &reprolog.TestProgramsResult{
+		Crashed:   false,
+		RawOutput: r.ctx.lastOutput,
+		Duration:  ret.Duration,
+	}, nil
+}
+
+func (ctx *reproContext) extractProgLLM(entries, tested []*prog.LogEntry) (*Result, []*prog.LogEntry) {
 	ctx.reproLogf(3, "attempting AI-assisted log filtering with LLM...")
 	progs, idMap := reprolog.EntriesToLogPrograms(entries, tested)
 	ctx.reproLogf(3, "prepared %d log programs for LLM analysis", len(progs))
@@ -485,8 +570,15 @@ func (ctx *reproContext) extractProgLLM(entries, tested []*prog.LogEntry) []*pro
 		TargetArch:  ctx.cfg.TargetArch,
 	}
 
-	aiCtx, cancel := context.WithTimeout(ctx.ctx, 15*time.Minute)
+	aiCtx, cancel := context.WithTimeout(ctx.ctx, time.Hour)
 	defer cancel()
+
+	runner := &reproRunner{
+		ctx:     ctx,
+		idMap:   idMap,
+		maxRuns: 3,
+	}
+	aiCtx = reprolog.ContextWithProgramTester(aiCtx, runner)
 
 	const defaultTokenLimit = 10_000_000
 	aiStart := time.Now()
@@ -503,19 +595,34 @@ func (ctx *reproContext) extractProgLLM(entries, tested []*prog.LogEntry) []*pro
 	if ctx.stats != nil && res != nil && len(res.TrajectoryHTML) > 0 {
 		ctx.stats.TrajectoryHTML = res.TrajectoryHTML
 	}
+	if errors.Is(err, reprolog.ErrCrashFound) {
+		if runner.foundResult != nil {
+			ctx.reproLogf(3, "AI candidate execution successfully reproduced crash early!")
+			return runner.foundResult, nil
+		}
+		if len(runner.foundEntries) > 0 {
+			ctx.reproLogf(3, "AI candidate produced crash but requires complex concatenation, passing to standard pipeline")
+			return nil, runner.foundEntries
+		}
+	}
 	if err != nil {
 		ctx.reproLogf(3, "LLM log filtering failed: %v", err)
-		return nil
+		return nil, nil
 	}
 
 	filterRes := res.Output
+	if filterRes.GiveUp {
+		ctx.reproLogf(3, "LLM determined crash cannot be reproduced from log: %s", filterRes.Reasoning)
+		return nil, nil
+	}
+
 	ctx.reproLogf(3, "LLM selected %d candidate programs (reasoning: %s)",
 		len(filterRes.SelectedProgIDs), filterRes.Reasoning)
 
 	filtered := reprolog.FilterEntriesByUUIDs(entries, idMap, filterRes.SelectedProgIDs)
 	ctx.reproLogf(3, "filtered log down to %d candidate programs from %d original programs",
 		len(filtered), len(entries))
-	return filtered
+	return nil, filtered
 }
 
 // Extract last program on every proc.
@@ -845,6 +952,7 @@ func (ctx *reproContext) getVerdict(callback func() (rep *instance.RunResult, er
 	if err != nil {
 		return verdict{}, err
 	}
+	ctx.lastOutput = result.Output
 	rep := result.Report
 	if rep == nil {
 		return verdict{false, result.Duration}, nil
