@@ -381,27 +381,14 @@ func (ctx *reproContext) extractProg(entries []*prog.LogEntry) (*Result, error) 
 
 		if !llmAttempted && ctx.canRunLLM(entries) {
 			llmAttempted = true
-			llmEntries = ctx.extractProgLLM(entries)
+			llmEntries = ctx.extractProgLLM(entries, toTest)
 		}
-		if len(llmEntries) > 0 {
-			res, err := ctx.extractProgSingle(llmEntries, timeout)
-			if err != nil {
-				return nil, err
-			}
-			if res != nil {
-				ctx.reproLogf(3, "found reproducer among LLM candidates with %d syscalls", len(res.Prog.Calls))
-				return res, nil
-			}
-			if len(llmEntries) > 1 {
-				res, err = ctx.extractProgBisect(llmEntries, timeout)
-				if err != nil {
-					return nil, err
-				}
-				if res != nil {
-					ctx.reproLogf(3, "found reproducer by bisecting LLM candidates with %d syscalls", len(res.Prog.Calls))
-					return res, nil
-				}
-			}
+		res, err = ctx.testLLMCandidates(toTest, llmEntries, timeout)
+		if err != nil {
+			return nil, err
+		}
+		if res != nil {
+			return res, nil
 		}
 
 		// Execute all programs and bisect the log to find multiple guilty programs.
@@ -419,14 +406,59 @@ func (ctx *reproContext) extractProg(entries []*prog.LogEntry) (*Result, error) 
 	return nil, nil
 }
 
+func (ctx *reproContext) testLLMCandidates(toTest, llmEntries []*prog.LogEntry,
+	timeout time.Duration) (*Result, error) {
+	if len(llmEntries) == 0 {
+		return nil, nil
+	}
+	candTimeout := timeout
+	if ctx.isDelayedCrash() && len(ctx.testTimeouts) > 0 {
+		candTimeout = ctx.testTimeouts[len(ctx.testTimeouts)-1]
+	}
+	if len(llmEntries) == 1 && slices.Contains(toTest, llmEntries[0]) && candTimeout == timeout {
+		ctx.reproLogf(3, "LLM candidate was already tested separately without reproducing")
+	} else {
+		res, err := ctx.extractProgSingle(llmEntries, candTimeout)
+		if err != nil {
+			return nil, err
+		}
+		if res != nil {
+			ctx.reproLogf(3, "found reproducer among LLM candidates with %d syscalls", len(res.Prog.Calls))
+			return res, nil
+		}
+	}
+	if len(llmEntries) > 1 {
+		res, err := ctx.extractProgBisect(llmEntries, candTimeout)
+		if err != nil {
+			return nil, err
+		}
+		if res != nil {
+			ctx.reproLogf(3, "found reproducer by bisecting LLM candidates with %d syscalls", len(res.Prog.Calls))
+			return res, nil
+		}
+	}
+	return nil, nil
+}
+
+func (ctx *reproContext) isDelayedCrash() bool {
+	if ctx.crashType == crash.Hang {
+		return true
+	}
+	title := strings.ToLower(ctx.crashTitle)
+	return strings.Contains(title, "unregister_netdevice") ||
+		strings.Contains(title, "waiting for") ||
+		strings.Contains(title, "stall") ||
+		strings.Contains(title, "hung in")
+}
+
 func (ctx *reproContext) canRunLLM(entries []*prog.LogEntry) bool {
 	return ctx.cfg != nil && ctx.cfg.GeminiToken != "" && len(entries) > 1 &&
 		(ctx.crashTitle != "" || ctx.crashReport != "") && ctx.cfg.Syzkaller != ""
 }
 
-func (ctx *reproContext) extractProgLLM(entries []*prog.LogEntry) []*prog.LogEntry {
+func (ctx *reproContext) extractProgLLM(entries, tested []*prog.LogEntry) []*prog.LogEntry {
 	ctx.reproLogf(3, "attempting AI-assisted log filtering with LLM...")
-	progs, idMap := reprolog.EntriesToLogPrograms(entries)
+	progs, idMap := reprolog.EntriesToLogPrograms(entries, tested)
 	ctx.reproLogf(3, "prepared %d log programs for LLM analysis", len(progs))
 
 	const maxConsoleLog = 5 << 10 // 5 KB
@@ -453,7 +485,7 @@ func (ctx *reproContext) extractProgLLM(entries []*prog.LogEntry) []*prog.LogEnt
 		TargetArch:  ctx.cfg.TargetArch,
 	}
 
-	aiCtx, cancel := context.WithTimeout(ctx.ctx, 10*time.Minute)
+	aiCtx, cancel := context.WithTimeout(ctx.ctx, 15*time.Minute)
 	defer cancel()
 
 	const defaultTokenLimit = 10_000_000

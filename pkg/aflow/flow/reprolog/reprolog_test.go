@@ -33,7 +33,7 @@ func TestEntriesToLogPrograms(t *testing.T) {
 		{P: p2, Proc: 1, ID: 102},
 	}
 
-	progs, idMap := EntriesToLogPrograms(entries)
+	progs, idMap := EntriesToLogPrograms(entries, []*prog.LogEntry{entries[0]})
 	require.Len(t, progs, 2)
 	require.Len(t, idMap, 2)
 
@@ -45,11 +45,13 @@ func TestEntriesToLogPrograms(t *testing.T) {
 	require.Equal(t, 0, progs[0].Proc)
 	require.Equal(t, 101, progs[0].ExecID)
 	require.Equal(t, []string{"test$res0"}, progs[0].Calls)
+	require.True(t, progs[0].TestedFailed)
 
 	require.Equal(t, 0, progs[1].Position)
 	require.Equal(t, 1, progs[1].Proc)
 	require.Equal(t, 102, progs[1].ExecID)
 	require.Equal(t, []string{"test$res0"}, progs[1].Calls)
+	require.False(t, progs[1].TestedFailed)
 
 	filtered := FilterEntriesByUUIDs(entries, idMap, []string{progs[1].UUID})
 	require.Len(t, filtered, 1)
@@ -73,7 +75,7 @@ test$res0()
 `)
 
 	entries := target.ParseLog(rawLog, prog.NonStrict)
-	progs, idMap := EntriesToLogPrograms(entries)
+	progs, idMap := EntriesToLogPrograms(entries, nil)
 	require.Len(t, progs, 2)
 	require.Len(t, entries, 2)
 	require.Len(t, idMap, 2)
@@ -92,7 +94,7 @@ test$res0()
 	require.Equal(t, entries[1], filtered[1])
 
 	// Test nil entry handling in EntriesToLogPrograms.
-	progsWithNil, idMapWithNil := EntriesToLogPrograms([]*prog.LogEntry{nil, entries[0], {P: nil}})
+	progsWithNil, idMapWithNil := EntriesToLogPrograms([]*prog.LogEntry{nil, entries[0], {P: nil}}, nil)
 	require.Len(t, progsWithNil, 1)
 	require.Len(t, idMapWithNil, 1)
 }
@@ -104,14 +106,17 @@ func TestPrepareLogContext(t *testing.T) {
 			Position:        1,
 			TimeBeforeCrash: "5s",
 			Proc:            0,
+			ExecID:          100,
 			Calls:           []string{"call1", "call2"},
 			Prog:            "call1()\ncall2()\n",
+			TestedFailed:    true,
 		},
 		{
 			UUID:            "uuid-2",
 			Position:        0,
 			TimeBeforeCrash: "0s",
 			Proc:            1,
+			ExecID:          200,
 			Calls:           []string{"call3"},
 			Prog:            "call3()\n",
 		},
@@ -120,10 +125,14 @@ func TestPrepareLogContext(t *testing.T) {
 	res, err := prepareLogContextFunc(&aflow.Context{}, prepareLogContextArgs{Programs: programs})
 	require.NoError(t, err)
 	require.Equal(t, []string{"uuid-1", "uuid-2"}, res.ValidProgIDs)
+	require.Equal(t, []string{"uuid-1"}, res.TestedProgIDs)
 	require.Contains(t, res.LogOverview, "uuid-1")
 	require.Contains(t, res.LogOverview, "Position 1 (5s before crash)")
+	require.Contains(t, res.LogOverview, "ExecID 100")
+	require.Contains(t, res.LogOverview, "[ALREADY TESTED STANDALONE: FAILED TO REPRODUCE]")
 	require.Contains(t, res.LogOverview, "uuid-2")
 	require.Contains(t, res.LogOverview, "Position 0 (0s before crash)")
+	require.Contains(t, res.LogOverview, "ExecID 200")
 	require.Contains(t, res.LogOverview, "call1, call2")
 }
 
@@ -176,6 +185,7 @@ func TestLogTools(t *testing.T) {
 						Position:        1,
 						TimeBeforeCrash: "10s",
 						Proc:            0,
+						ExecID:          10,
 						Calls:           []string{"openat", "read"},
 						LineMatches:     []string{"openat()"},
 					},
@@ -289,7 +299,7 @@ func TestEntriesToLogProgramsTiming(t *testing.T) {
 		{P: p, Proc: 1, ID: 2, Time: 0, HasTime: true},
 		{P: p, Proc: 2, ID: 3, HasTime: false},
 	}
-	progs, _ := EntriesToLogPrograms(entries)
+	progs, _ := EntriesToLogPrograms(entries, nil)
 	require.Len(t, progs, 3)
 	require.Equal(t, "15s", progs[0].TimeBeforeCrash)
 	require.Equal(t, 2, progs[0].Position)
@@ -322,22 +332,41 @@ func TestFormatDuration(t *testing.T) {
 
 func TestValidateFilterAgentOutputs(t *testing.T) {
 	state := filterAgentState{
-		ValidProgIDs: []string{"uuid-1", "uuid-2"},
+		ValidProgIDs:  []string{"uuid-1", "uuid-2"},
+		TestedProgIDs: []string{"uuid-1"},
 	}
 
 	t.Run("Valid", func(t *testing.T) {
 		got, err := validateFilterAgentOutputs(nil, state, filterAgentOutputs{
-			SelectedProgIDs: []string{"uuid-1"},
+			SelectedProgIDs: []string{"uuid-2"},
 			Reasoning:       "test reason",
 		})
 		require.NoError(t, err)
-		require.Equal(t, []string{"uuid-1"}, got.SelectedProgIDs)
+		require.Equal(t, []string{"uuid-2"}, got.SelectedProgIDs)
 		require.Equal(t, "test reason", got.Reasoning)
+	})
+
+	t.Run("TestedSingleRejected", func(t *testing.T) {
+		_, err := validateFilterAgentOutputs(nil, state, filterAgentOutputs{
+			SelectedProgIDs: []string{"uuid-1"},
+			Reasoning:       "test reason",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "ALREADY tested in isolation")
+	})
+
+	t.Run("TestedMultipleAccepted", func(t *testing.T) {
+		got, err := validateFilterAgentOutputs(nil, state, filterAgentOutputs{
+			SelectedProgIDs: []string{"uuid-1", "uuid-2"},
+			Reasoning:       "test reason",
+		})
+		require.NoError(t, err)
+		require.Equal(t, []string{"uuid-1", "uuid-2"}, got.SelectedProgIDs)
 	})
 
 	t.Run("EmptyReasoning", func(t *testing.T) {
 		_, err := validateFilterAgentOutputs(nil, state, filterAgentOutputs{
-			SelectedProgIDs: []string{"uuid-1"},
+			SelectedProgIDs: []string{"uuid-2"},
 			Reasoning:       "",
 		})
 		require.Error(t, err)

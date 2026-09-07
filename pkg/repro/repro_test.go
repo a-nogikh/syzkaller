@@ -470,3 +470,48 @@ func TestCanRunLLM(t *testing.T) {
 	require.False(t, ctx.canRunLLM([]*prog.LogEntry{{}})) // only 1 entry
 	require.True(t, ctx.canRunLLM([]*prog.LogEntry{{}, {}}))
 }
+
+func TestIsDelayedCrash(t *testing.T) {
+	tests := []struct {
+		title     string
+		crashType crash.Type
+		want      bool
+	}{
+		{
+			title: "BUG: unable to handle kernel paging request",
+			want:  false,
+		},
+		{
+			title:     "any title",
+			crashType: crash.Hang,
+			want:      true,
+		},
+		{
+			title: "unregister_netdevice: waiting for DEV to become free",
+			want:  true,
+		},
+		{
+			title: "INFO: rcu detected stall in worker_thread",
+			want:  true,
+		},
+		{
+			title: "INFO: task hung in __gfs2_lookup",
+			want:  true,
+		},
+		{
+			title: "waiting for lo to become free",
+			want:  true,
+		},
+		{
+			title: "KASAN: slab-use-after-free Read in foo",
+			want:  false,
+		},
+	}
+	for _, tt := range tests {
+		ctx := &reproContext{
+			crashTitle: tt.title,
+			crashType:  tt.crashType,
+		}
+		require.Equal(t, tt.want, ctx.isDelayedCrash(), tt.title)
+	}
+}

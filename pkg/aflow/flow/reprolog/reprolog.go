@@ -141,8 +141,7 @@ func FilterEntriesByUUIDs(entries []*prog.LogEntry, idMap map[string]*prog.LogEn
 }
 
 type prepareLogContextArgs struct {
-	Programs      []ai.LogProgram
-	TestedProgIDs []string
+	Programs []ai.LogProgram
 }
 
 type prepareLogContextResult struct {
@@ -155,20 +154,11 @@ var actionPrepareLogContext = aflow.NewFuncAction("prepare-log-context", prepare
 
 func prepareLogContextFunc(ctx *aflow.Context, args prepareLogContextArgs) (prepareLogContextResult, error) {
 	validIDs := make([]string, 0, len(args.Programs))
-	testedSet := make(map[string]bool, len(args.TestedProgIDs))
-	for _, id := range args.TestedProgIDs {
-		testedSet[id] = true
-	}
+	var testedIDs []string
 	for _, p := range args.Programs {
 		validIDs = append(validIDs, p.UUID)
 		if p.TestedFailed {
-			testedSet[p.UUID] = true
-		}
-	}
-	var testedIDs []string
-	for _, id := range validIDs {
-		if testedSet[id] {
-			testedIDs = append(testedIDs, id)
+			testedIDs = append(testedIDs, p.UUID)
 		}
 	}
 
@@ -189,7 +179,7 @@ func prepareLogContextFunc(ctx *aflow.Context, args prepareLogContextArgs) (prep
 			timing = fmt.Sprintf(" (%s before crash)", p.TimeBeforeCrash)
 		}
 		testedTag := ""
-		if p.TestedFailed || testedSet[p.UUID] {
+		if p.TestedFailed {
 			testedTag = " [ALREADY TESTED STANDALONE: FAILED TO REPRODUCE]"
 		}
 		fmt.Fprintf(&overview, "- UUID: %s [Position %d%s, Proc %d, ExecID %d]%s: %s\n",
@@ -226,6 +216,7 @@ type getLogProgramResult struct {
 	ExecID          int      `jsonschema:"The execution ID of the program." json:",omitempty"`
 	Calls           []string `jsonschema:"The list of system calls executed by the program."`
 	Prog            string   `jsonschema:"The full serialized syzlang text of the program with blobs replaced."`
+	TestedFailed    bool     `json:",omitempty" jsonschema:"Whether program failed standalone repro."`
 }
 
 var ToolGetLogProgram = aflow.NewFuncTool("get-log-program", getLogProgramFunc, `
@@ -245,6 +236,7 @@ func getLogProgramFunc(ctx *aflow.Context, state logToolState, args getLogProgra
 				ExecID:          p.ExecID,
 				Calls:           p.Calls,
 				Prog:            replaceBlobs(ctx, p.Prog),
+				TestedFailed:    p.TestedFailed,
 			}, nil
 		}
 	}
@@ -260,8 +252,10 @@ type searchMatch struct {
 	Position        int      `jsonschema:"0-based position counted backwards from crash (0 = last program before crash)."`
 	TimeBeforeCrash string   `jsonschema:"Approximate time before crash (e.g. '3.5s')." json:",omitempty"`
 	Proc            int      `jsonschema:"The parallel process ID that executed the program."`
+	ExecID          int      `jsonschema:"The execution ID of the program." json:",omitempty"`
 	Calls           []string `jsonschema:"List of syscall names in the program."`
 	LineMatches     []string `jsonschema:"Lines with large binary blobs replaced."`
+	TestedFailed    bool     `json:",omitempty" jsonschema:"Whether program failed standalone repro."`
 }
 
 type searchLogProgramsResult struct {
@@ -308,8 +302,10 @@ func searchLogProgramsFunc(ctx *aflow.Context, state logToolState,
 				Position:        p.Position,
 				TimeBeforeCrash: p.TimeBeforeCrash,
 				Proc:            p.Proc,
+				ExecID:          p.ExecID,
 				Calls:           p.Calls,
 				LineMatches:     lineMatches,
+				TestedFailed:    p.TestedFailed,
 			})
 		}
 	}
@@ -351,6 +347,7 @@ type programSummary struct {
 	Proc            int      `jsonschema:"The process ID that executed the program."`
 	ExecID          int      `jsonschema:"The execution ID of the program." json:",omitempty"`
 	Calls           []string `jsonschema:"List of system calls in the program."`
+	TestedFailed    bool     `json:",omitempty" jsonschema:"Whether program failed standalone repro."`
 }
 
 type listLogProgramsResult struct {
@@ -402,6 +399,7 @@ func listLogProgramsFunc(_ *aflow.Context, state logToolState,
 			Proc:            p.Proc,
 			ExecID:          p.ExecID,
 			Calls:           p.Calls,
+			TestedFailed:    p.TestedFailed,
 		})
 	}
 
@@ -419,7 +417,8 @@ type filterAgentOutputs struct {
 }
 
 type filterAgentState struct {
-	ValidProgIDs []string
+	ValidProgIDs  []string
+	TestedProgIDs []string
 }
 
 func validateFilterAgentOutputs(_ *aflow.Context, state filterAgentState,
@@ -436,6 +435,14 @@ func validateFilterAgentOutputs(_ *aflow.Context, state filterAgentState,
 	if len(invalid) > 0 {
 		return filterAgentOutputs{}, aflow.BadCallError(
 			"unknown program UUIDs: %v. Only select UUIDs that exist in the execution log", invalid)
+	}
+	if len(args.SelectedProgIDs) == 1 && slices.Contains(state.TestedProgIDs, args.SelectedProgIDs[0]) {
+		return filterAgentOutputs{}, aflow.BadCallError(
+			"program %s was ALREADY tested in isolation and failed to reproduce the crash. "+
+				"Do NOT select it alone. It likely requires a prerequisite setup program (e.g. filesystem mount, "+
+				"device creation, memory mapping, socket configuration) or concurrent execution with another program. "+
+				"Identify and include the earlier setup program(s) or concurrent programs along with it in SelectedProgIDs.",
+			args.SelectedProgIDs[0])
 	}
 	return args, nil
 }
@@ -486,12 +493,26 @@ Understanding Log Metadata & Placeholders:
 
 Analyzing Crash Reports and Console Logs:
 - Check the Crash Report and Recent Console Log for:
-  * Task names: comm="syz.X.Y" directly indicates Proc X and ExecID Y! Use this to locate the program.
+  * Task names: comm="syz.X.Y" directly indicates Proc X and ExecID Y. NOTE: ExecID Y was ALREADY tested
+    in isolation and failed to reproduce the crash! Do NOT select ExecID Y alone. Look for earlier setup
+    programs on Proc X or other Procs that initialized the necessary kernel state.
   * Subsystem error messages or warnings right before the crash (e.g. filesystem errors, driver probe
     failures, memory allocation warnings, RCU stalls).
   * The faulting function and call stack to identify the subsystem (e.g., fs/jffs2, drivers/media).
 - If the Crash Report is empty or generic ("no output/lost connection"), rely on the Recent Console Log
   to determine which subsystem or Proc was active immediately before the kernel hung or disconnected.
+
+ALREADY TESTED STANDALONE PROGRAMS (CRITICAL):
+- Before invoking you, syzkaller ALREADY tested individual candidate programs in isolation (specifically the program
+  matching comm="syz.X.Y" or the last program of each proc).
+- Standalone execution of those programs FAILED to reproduce the crash!
+- Any program marked with '[ALREADY TESTED STANDALONE: FAILED TO REPRODUCE]' CANNOT cause the crash on its own:
+  * DO NOT select that program alone in SelectedProgIDs! Selecting it alone will fail validation.
+  * If that program is the trigger (e.g. its syscalls match the crash stack trace), it REQUIRES prerequisite
+    setup program(s) (e.g. mounting a filesystem image, opening/creating a device node, creating an mmap mapping/folio,
+    configuring network namespaces/sockets/bpf, or initializing state) or concurrent execution on another Proc.
+  * You MUST identify and include those earlier setup or concurrent programs along with the trigger program!
+  * Syzkaller tests all selected programs together in chronological order during reproduction.
 
 SETUP VS. TRIGGER SEQUENCES (CRITICAL):
 Many kernel vulnerabilities require a multi-program sequence:

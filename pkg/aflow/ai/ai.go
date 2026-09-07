@@ -186,15 +186,14 @@ type LogProgram struct {
 }
 
 type ReproLogFilterArgs struct {
-	BugTitle      string `json:",omitempty"`
-	CrashReport   string
-	ConsoleLog    string `json:",omitempty"`
-	Programs      []LogProgram
-	TestedProgIDs []string `json:",omitempty"`
-	KernelSrc     string
-	Syzkaller     string
-	TargetOS      string
-	TargetArch    string
+	BugTitle    string `json:",omitempty"`
+	CrashReport string
+	ConsoleLog  string `json:",omitempty"`
+	Programs    []LogProgram
+	KernelSrc   string
+	Syzkaller   string
+	TargetOS    string
+	TargetArch  string
 }
 
 type ReproLogFilterResult struct {
