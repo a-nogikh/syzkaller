@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestCache(t *testing.T) {
@@ -225,4 +227,70 @@ func TestRetrieveObject_InvalidID(t *testing.T) {
 	_, err = RetrieveObject[X](ctx, "../invalid")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid cached ID (not local)")
+}
+
+func TestCacheConcurrent(t *testing.T) {
+	c, err := newTestCache(t, t.TempDir(), 1<<40, time.Now)
+	require.NoError(t, err)
+
+	var popCount atomic.Int64
+	started, gate := make(chan struct{}), make(chan struct{})
+	var eg errgroup.Group
+	eg.Go(func() error {
+		_, err := c.Create("build", "k", func(dir string) error {
+			popCount.Add(1)
+			close(started)
+			<-gate
+			return osutil.WriteFile(filepath.Join(dir, "f"), []byte("data"))
+		})
+		return err
+	})
+	<-started
+	eg.Go(func() error {
+		_, err := c.Create("build", "k", func(dir string) error {
+			popCount.Add(1)
+			return nil
+		})
+		return err
+	})
+	close(gate)
+	require.NoError(t, eg.Wait())
+	require.Equal(t, int64(1), popCount.Load())
+}
+
+func TestCacheConcurrentErr(t *testing.T) {
+	c, err := newTestCache(t, t.TempDir(), 1<<40, time.Now)
+	require.NoError(t, err)
+
+	var popCount atomic.Int64
+	started, gate := make(chan struct{}), make(chan struct{})
+	var eg errgroup.Group
+	eg.Go(func() error {
+		_, err := c.Create("build", "k", func(dir string) error {
+			popCount.Add(1)
+			close(started)
+			<-gate
+			return fmt.Errorf("build failed")
+		})
+		return err
+	})
+	<-started
+	eg.Go(func() error {
+		_, err := c.Create("build", "k", func(dir string) error {
+			popCount.Add(1)
+			return nil
+		})
+		return err
+	})
+	close(gate)
+	require.Error(t, eg.Wait())
+	require.Equal(t, int64(2), popCount.Load())
+
+	// Verify subsequent attempt uses the cached entry.
+	_, err = c.Create("build", "k", func(dir string) error {
+		popCount.Add(1)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), popCount.Load())
 }

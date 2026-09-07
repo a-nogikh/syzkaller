@@ -29,6 +29,11 @@ type Cache struct {
 	mu          sync.Mutex
 	currentSize uint64
 	entries     map[string]*cacheEntry
+	pending     map[string]*pendingEntry
+}
+
+type pendingEntry struct {
+	done chan struct{}
 }
 
 type cacheEntry struct {
@@ -52,6 +57,7 @@ func newTestCache(t *testing.T, dir string, maxSize uint64, timeNow func() time.
 		timeNow: timeNow,
 		t:       t,
 		entries: make(map[string]*cacheEntry),
+		pending: make(map[string]*pendingEntry),
 	}
 	if err := c.init(); err != nil {
 		return nil, err
@@ -75,36 +81,34 @@ func (c *Cache) Create(typ, desc string, populate func(string) error) (string, e
 	id := hash.String(desc)
 	dir := filepath.Join(c.dir, typ, id)
 	metaFile := filepath.Join(dir, cacheMetaFile)
-	if c.entries[dir] == nil {
-		os.RemoveAll(dir)
-		if err := osutil.MkdirAll(dir); err != nil {
-			return "", err
+	for c.entries[dir] == nil {
+		if p := c.pending[dir]; p != nil {
+			c.mu.Unlock()
+			<-p.done
+			c.mu.Lock()
+			continue
 		}
-		if err := populate(dir); err != nil {
-			os.RemoveAll(dir)
-			return "", err
+		p := &pendingEntry{done: make(chan struct{})}
+		c.pending[dir] = p
+		c.mu.Unlock()
+
+		size, err := c.populateDir(dir, metaFile, desc, populate)
+
+		c.mu.Lock()
+		delete(c.pending, dir)
+		if err == nil {
+			c.entries[dir] = &cacheEntry{
+				dir:  dir,
+				size: size,
+			}
+			c.currentSize += size
+			c.logf("created entry %v, size %v, current size %v", dir, size, c.currentSize)
 		}
-		size, err := osutil.DiskUsage(dir)
+		close(p.done)
 		if err != nil {
 			return "", err
 		}
-		meta := cacheMeta{
-			Version:     currentCacheVersion,
-			Description: desc,
-			DiskUsage:   size,
-		}
-		if err := osutil.WriteJSON(metaFile, meta); err != nil {
-			os.RemoveAll(dir)
-			return "", err
-		}
-		c.entries[dir] = &cacheEntry{
-			dir:  dir,
-			size: size,
-		}
-		c.currentSize += size
-		c.logf("created entry %v, size %v, current size %v", dir, size, c.currentSize)
 	}
-	// Note the entry was used now.
 	now := c.timeNow()
 	if err := os.Chtimes(metaFile, now, now); err != nil {
 		return "", err
@@ -118,6 +122,32 @@ func (c *Cache) Create(typ, desc string, populate func(string) error) (string, e
 		return "", err
 	}
 	return dir, nil
+}
+
+func (c *Cache) populateDir(dir, metaFile, desc string, populate func(string) error) (uint64, error) {
+	os.RemoveAll(dir)
+	if err := osutil.MkdirAll(dir); err != nil {
+		return 0, err
+	}
+	if err := populate(dir); err != nil {
+		os.RemoveAll(dir)
+		return 0, err
+	}
+	size, err := osutil.DiskUsage(dir)
+	if err != nil {
+		os.RemoveAll(dir)
+		return 0, err
+	}
+	meta := cacheMeta{
+		Version:     currentCacheVersion,
+		Description: desc,
+		DiskUsage:   size,
+	}
+	if err := osutil.WriteJSON(metaFile, meta); err != nil {
+		os.RemoveAll(dir)
+		return 0, err
+	}
+	return size, nil
 }
 
 func cacheCreateObject[T any](c *Cache, typ, desc string, populate func() (T, error)) (string, T, error) {
