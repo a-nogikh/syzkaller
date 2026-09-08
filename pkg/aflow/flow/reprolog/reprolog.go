@@ -452,7 +452,8 @@ var ErrCrashFound = errors.New("target crash reproduced successfully")
 
 type testCandidateProgramsArgs struct {
 	ProgIDs        []string `jsonschema:"Program UUIDs from execution log to execute together in chronological order."`
-	TimeoutSeconds int      `json:",omitempty" jsonschema:"Optional test timeout in seconds (default 30, max 120)."`
+	TimeoutSeconds int      `json:",omitempty" jsonschema:"Optional test timeout in seconds (default/min 45, max 300)."`
+	Rationale      string   `json:",omitempty" jsonschema:"Optional kernel state or race hypothesis being tested."`
 }
 
 type testCandidateProgramsResult struct {
@@ -465,6 +466,8 @@ type testCandidateProgramsResult struct {
 
 type testToolState struct {
 	BugTitle     string
+	CrashReport  string
+	Programs     []ai.LogProgram
 	ValidProgIDs []string
 }
 
@@ -472,9 +475,10 @@ var ToolTestCandidatePrograms = aflow.NewFuncTool("test-candidate-programs", tes
 Execute candidate programs from the log inside an instrumented test VM to test whether they reproduce the crash.
 You can specify multiple program UUIDs (e.g. [SetupProgramUUID, TriggerProgramUUID]) to execute multi-program sequences.
 If the program crashes the kernel with the target bug, reproduction succeeds and completes automatically.
-If the program does NOT crash, a sub-agent will inspect the serial console and executor output to summarize any syscall
-errors (such as -ENOENT, -ENODEV, or failed mounts) to help you identify missing setup programs.
-You have a budget of up to 3 candidate tests.
+If the program does NOT crash, a sub-agent with knowledge of the crash call trace and your test rationale will inspect
+the serial console and executor output to summarize syscall return codes (e.g. -ENOENT, -ENODEV) and kernel errors.
+Optionally specify 'Rationale' to explain what kernel state or race you are testing so the sub-agent can evaluate it.
+You have a budget of up to 10 candidate tests (timeout 45s - 300s / up to 5 minutes each).
 `)
 
 func testCandidateProgramsFunc(ctx *aflow.Context, state testToolState,
@@ -503,9 +507,9 @@ func testCandidateProgramsFunc(ctx *aflow.Context, state testToolState,
 
 	timeout := time.Duration(args.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = 45 * time.Second
 	}
-	timeout = min(max(timeout, 10*time.Second), 120*time.Second)
+	timeout = min(max(timeout, 45*time.Second), 300*time.Second)
 
 	res, err := tester.TestPrograms(ctx.Context, args.ProgIDs, timeout)
 	if err != nil {
@@ -532,7 +536,9 @@ func testCandidateProgramsFunc(ctx *aflow.Context, state testToolState,
 		}, nil
 	}
 
-	summary, err := summarizeSerialOutput(ctx, state.BugTitle, res.RawOutput)
+	crashSite := extractCrashSiteInfo(state.CrashReport)
+	progSummary := formatTestedProgramsSummary(args.ProgIDs, state.Programs)
+	summary, err := summarizeSerialOutput(ctx, state.BugTitle, crashSite, progSummary, args.Rationale, res.RawOutput)
 	if err != nil {
 		summary = fallbackSummarizeLog(res.RawOutput)
 	}
@@ -544,38 +550,136 @@ func testCandidateProgramsFunc(ctx *aflow.Context, state testToolState,
 	}, nil
 }
 
-func summarizeSerialOutput(ctx *aflow.Context, bugTitle string, output []byte) (string, error) {
+func extractCrashSiteInfo(report string) string {
+	if report == "" {
+		return "No crash report available."
+	}
+	lines := strings.Split(report, "\n")
+	var selected []string
+	inTrace := false
+	traceLines := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "BUG:") || strings.HasPrefix(trimmed, "WARNING:") ||
+			strings.HasPrefix(trimmed, "INFO:") || strings.HasPrefix(trimmed, "Write of size") ||
+			strings.HasPrefix(trimmed, "Read of size") {
+			selected = append(selected, trimmed)
+			continue
+		}
+		if strings.HasPrefix(trimmed, "Call Trace:") {
+			inTrace = true
+			selected = append(selected, trimmed)
+			continue
+		}
+		if inTrace {
+			if strings.Contains(line, "dump_stack") || strings.Contains(line, "kasan_report") ||
+				strings.Contains(line, "print_report") || strings.Contains(line, "check_region") ||
+				strings.Contains(line, "print_address") {
+				continue
+			}
+			selected = append(selected, trimmed)
+			traceLines++
+			if traceLines >= 6 {
+				break
+			}
+		}
+	}
+	if len(selected) == 0 {
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" {
+				selected = append(selected, trimmed)
+				if len(selected) >= 8 {
+					break
+				}
+			}
+		}
+	}
+	return strings.Join(selected, "\n")
+}
+
+func formatTestedProgramsSummary(progIDs []string, programs []ai.LogProgram) string {
+	progMap := make(map[string]ai.LogProgram, len(programs))
+	for _, p := range programs {
+		progMap[p.UUID] = p
+	}
+	var lines []string
+	for i, id := range progIDs {
+		p, ok := progMap[id]
+		if !ok {
+			lines = append(lines, fmt.Sprintf("- Program #%d (UUID %s)", i+1, id))
+			continue
+		}
+		calls := strings.Join(p.Calls, ", ")
+		if len(calls) > 200 {
+			calls = calls[:197] + "..."
+		}
+		timing := ""
+		if p.TimeBeforeCrash != "" {
+			timing = fmt.Sprintf(", %s before crash", p.TimeBeforeCrash)
+		}
+		lines = append(lines, fmt.Sprintf("- Program #%d (UUID %s, Proc %d, Position %d%s): %s",
+			i+1, p.UUID, p.Proc, p.Position, timing, calls))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func windowLogOutput(output []byte) string {
+	const halfLog = 16 << 10 // 16 KB
+	if len(output) <= 2*halfLog {
+		return strings.ToValidUTF8(string(output), "")
+	}
+	head := output[:halfLog]
+	tail := output[len(output)-halfLog:]
+	if idx := bytes.IndexByte(tail, '\n'); idx != -1 && idx < 200 {
+		tail = tail[idx+1:]
+	}
+	truncatedBytes := len(output) - len(head) - len(tail)
+	return fmt.Sprintf("%s\n... [%d bytes omitted] ...\n%s",
+		strings.ToValidUTF8(string(head), ""),
+		truncatedBytes,
+		strings.ToValidUTF8(string(tail), ""))
+}
+
+func summarizeSerialOutput(ctx *aflow.Context, bugTitle, crashSite, progSummary, rationale string,
+	output []byte) (string, error) {
 	if len(output) == 0 {
 		return "Program completed without crashing. No console output recorded.", nil
 	}
-	const maxLog = 32 << 10 // 32 KB
-	tail := output
-	if len(tail) > maxLog {
-		tail = tail[len(tail)-maxLog:]
-		if idx := bytes.IndexByte(tail, '\n'); idx != -1 && idx < 200 {
-			tail = tail[idx+1:]
-		}
-	}
-	cleanLog := strings.ToValidUTF8(string(tail), "")
+	cleanLog := windowLogOutput(output)
 
 	if ctx == nil {
 		return fallbackSummarizeLog(output), nil
 	}
 
-	prompt := fmt.Sprintf(`Target bug being investigated: %s
-A syzkaller test program was executed in the Linux VM and did NOT trigger a kernel crash.
-Below is the tail of the serial console and executor log from that execution:
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Target bug being investigated: %s\n", bugTitle)
+	if crashSite != "" {
+		fmt.Fprintf(&sb, "\nCrash Site & Call Trace:\n%s\n", crashSite)
+	}
+	if progSummary != "" {
+		fmt.Fprintf(&sb, "\nTested Programs & Syscalls:\n%s\n", progSummary)
+	}
+	if rationale != "" {
+		fmt.Fprintf(&sb, "\nAgent's Test Hypothesis:\n%s\n", rationale)
+	}
+	fmt.Fprintf(&sb, `
+Below is the serial console and executor log from that execution in the test VM:
 
 --- CONSOLE LOG START ---
 %s
 --- CONSOLE LOG END ---
 
 Analyze the log and provide a concise 2-4 sentence technical summary:
-1. Did any syscalls fail with errors (e.g. -ENOENT, -ENODEV, -EPERM, -EINVAL, or mount/open failures)?
-2. Did the kernel print any relevant warnings, dmesg lines, or driver messages?
+1. Did any syscalls fail with errors (e.g. -ENOENT, -ENODEV, -EPERM, -EINVAL, or mount failures)?
+2. Did the kernel print warnings, dmesg lines, or driver messages related to the crash?
 3. What prerequisite setup or device configuration appears to be missing?
-Focus only on actionable clues for why the crash was not triggered. Keep the summary under 100 words.`,
-		bugTitle, cleanLog)
+Focus only on actionable clues for why the crash was not triggered. Keep the summary under 100 words.`, cleanLog)
+
+	prompt := sb.String()
 
 	span := &trajectory.Span{
 		Type: trajectory.SpanAgent,
@@ -686,9 +790,10 @@ func validateFilterAgentOutputs(_ *aflow.Context, state filterAgentState,
 }
 
 var reproLogFilterAgent = &aflow.LLMAgent{
-	Name:     "repro-log-filter",
-	Model:    aflow.CoreModel,
-	TaskType: aflow.FormalReasoningTask,
+	Name:          "repro-log-filter",
+	Model:         aflow.CoreModel,
+	TaskType:      aflow.FormalReasoningTask,
+	MaxIterations: 35,
 	Tools: aflow.Tools(
 		grepper.Tool,
 		codesearcher.ToolReadFile,
@@ -721,10 +826,13 @@ Investigation Tools:
 3. Interactive Candidate Testing inside VM:
    - Use 'test-candidate-programs' to execute candidate programs from the log inside an instrumented test VM.
    - You can provide multiple program UUIDs (e.g. [SetupUUID, TriggerUUID]) to test multi-program sequences.
+   - You can specify 'TimeoutSeconds' (45s to 300s / 5 minutes). For potential race conditions, hung tasks,
+     or timing-dependent bugs, use longer timeouts (e.g. 120s to 300s) to give the programs enough time.
+   - Provide a brief 'Rationale' explaining what kernel state, setup, or race you expect this test to verify.
    - If the target crash reproduces during candidate testing, reproduction succeeds and completes automatically!
-   - If the test does not crash, a sub-agent will analyze the serial console and executor output to summarize
-     syscall return codes, failed mounts, or missing devices (-ENOENT, -ENODEV).
-   - You have a budget of up to 3 candidate tests. Use them to test your strongest hypotheses.
+   - If the test does not crash, a sub-agent with access to the crash call trace and your test rationale will analyze
+     the serial console and executor output to summarize syscall return codes, failed mounts, or missing devices.
+   - You have a budget of up to 10 candidate tests. Use them to test your hypotheses.
 
 Understanding Log Metadata & Placeholders:
 - 'Position': The program's position counted backwards from the crash point
@@ -776,6 +884,15 @@ its prerequisite setup.
 Concurrency, Hung Tasks & Deadlocks:
 - Concurrency / Races: Look for programs executed around the same time across different Procs accessing
   the same objects, devices, or memory areas.
+- Concurrency races are NOT a reason to give up!
+  * When syzkaller replays programs, it runs them in parallel threads in an infinite loop.
+  * If you identify the suspect racing programs (e.g. 1-2 programs), syzkaller will loop ONLY those programs,
+    amplifying the race collision rate by 100x-300x compared to replaying the entire 300-program log.
+  * When testing candidate programs for a suspected race with 'test-candidate-programs', use longer timeouts
+    (e.g. 120s to 300s).
+  * Even if 'test-candidate-programs' does not hit the race window within its test budget, do NOT give up if you
+    have identified the plausible racing candidate programs! Return them in 'SelectedProgIDs' so syzkaller's
+    reproduction engine can stress-test and loop them.
 - Hung Tasks ("INFO: task hung in ..."): khungtaskd detects tasks blocked for >120 seconds. Check
   comm="syz.X.Y" in the trace for the stuck task. Search for programs on Proc X or programs manipulating
   the lock/resource the task is waiting on.
@@ -784,16 +901,18 @@ Concurrency, Hung Tasks & Deadlocks:
   that acquire conflicting locks or manipulate the same subsystem concurrently on other Procs.
 
 GIVING UP (WHEN A BUG IS NOT REPRODUCIBLE FROM LOG):
-Some crashes in the execution log cannot be reproduced via clean replay:
-- The bug may require specific physical hardware or network configurations not present in the VM.
-- The bug may be a watchdog timeout, hang, or stall requiring hundreds of seconds of external delay.
-- The root cause may be state corruption that occurred long before the captured log window.
-- The bug may have an extremely elusive race window that requires thousands of iterations.
-If after analyzing the log, kernel code, and testing candidates you determine that the bug CANNOT be reproduced
-from this log, you SHOULD give up:
+Giving up is ONLY appropriate when the bug fundamentally cannot be reproduced from the log programs:
+- External host actions or environment teardown (e.g. the console log shows the host triggered an external
+  poweroff/reboot: 'The system is going down NOW!', 'reboot: Power down').
+- Missing prerequisite state occurred before the log window began (e.g. a lockdep cycle where an earlier lock edge
+  was acquired long before the 300-program log started, and no matching program exists in the log).
+- Missing physical hardware or external network infrastructure completely unsupported by the VM environment.
+DO NOT give up merely because a bug is a race condition or elusive concurrency issue! If you have identified the
+racing candidate programs, return them in 'SelectedProgIDs' instead of giving up.
+If after analyzing the log and kernel code you determine the bug fundamentally cannot be reproduced:
 - Set 'GiveUp: true'
 - Set 'SelectedProgIDs: []'
-- In 'Reasoning', clearly explain why the bug cannot be reproduced from this log.
+- In 'Reasoning', clearly explain why reproduction is impossible from this log.
 Do NOT guess or hallucinate unrelated syscalls just to populate SelectedProgIDs.
 
 Efficient Investigation Strategy:

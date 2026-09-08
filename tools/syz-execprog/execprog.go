@@ -290,7 +290,7 @@ func (ctx *Context) doneGlob(req *queue.Request, res *queue.Result) bool {
 
 func (ctx *Context) Done(req *queue.Request, res *queue.Result) bool {
 	if res.Info != nil {
-		ctx.printCallResults(res.Info)
+		ctx.printCallResults(req.Prog, res.Info)
 		if ctx.hints {
 			ctx.printHints(req.Prog, res.Info)
 		}
@@ -305,7 +305,8 @@ func (ctx *Context) Done(req *queue.Request, res *queue.Result) bool {
 	return true
 }
 
-func (ctx *Context) printCallResults(info *flatrpc.ProgInfo) {
+func (ctx *Context) printCallResults(p *prog.Prog, info *flatrpc.ProgInfo) {
+	firstIter := len(ctx.progs) > 0 && ctx.completed.Load() < uint64(len(ctx.progs))
 	for i, inf := range info.Calls {
 		if inf.Flags&flatrpc.CallFlagExecuted == 0 {
 			continue
@@ -319,6 +320,13 @@ func (ctx *Context) printCallResults(info *flatrpc.ProgInfo) {
 		}
 		if inf.Flags&flatrpc.CallFlagFaultInjected != 0 {
 			flags += " faulted"
+		}
+		if firstIter {
+			callName := fmt.Sprintf("call #%v", i)
+			if p != nil && i < len(p.Calls) {
+				callName = fmt.Sprintf("call #%v %s", i, p.Calls[i].Meta.Name)
+			}
+			log.Logf(0, "%s: errno %v%s", callName, inf.Error, flags)
 		}
 		log.Logf(1, "CALL %v: signal %v, coverage %v errno %v%v",
 			i, len(inf.Signal), len(inf.Cover), inf.Error, flags)

@@ -483,8 +483,9 @@ func (r *reproRunner) TestPrograms(ctx context.Context, progIDs []string,
 		return nil, aflow.BadCallError("none of the specified program UUIDs found in execution log")
 	}
 
-	if r.ctx.isDelayedCrash() && timeout < 100*time.Second {
-		timeout = 100 * time.Second
+	timeout = max(timeout, 45*time.Second)
+	if r.ctx.isDelayedCrash() {
+		timeout = max(timeout, 100*time.Second)
 	}
 
 	r.ctx.reproLogf(2, "AI testing candidate sequence of %d programs (attempt %d/%d, timeout %s)",
@@ -576,7 +577,7 @@ func (ctx *reproContext) extractProgLLM(entries, tested []*prog.LogEntry) (*Resu
 	runner := &reproRunner{
 		ctx:     ctx,
 		idMap:   idMap,
-		maxRuns: 3,
+		maxRuns: 10,
 	}
 	aiCtx = reprolog.ContextWithProgramTester(aiCtx, runner)
 

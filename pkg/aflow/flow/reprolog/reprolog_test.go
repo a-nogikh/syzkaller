@@ -405,14 +405,16 @@ func TestValidateFilterAgentOutputs(t *testing.T) {
 }
 
 type mockTester struct {
-	result *TestProgramsResult
-	err    error
-	called []string
+	result  *TestProgramsResult
+	err     error
+	called  []string
+	timeout time.Duration
 }
 
 func (m *mockTester) TestPrograms(ctx context.Context, progIDs []string,
 	timeout time.Duration) (*TestProgramsResult, error) {
 	m.called = progIDs
+	m.timeout = timeout
 	return m.result, m.err
 }
 
@@ -477,6 +479,147 @@ func TestToolTestCandidatePrograms(t *testing.T) {
 		require.False(t, res.Crashed)
 		require.Contains(t, res.ExecutionSummary, "errno 2")
 		require.Equal(t, 10.0, res.DurationSeconds)
+	})
+
+	t.Run("TimeoutClamped", func(t *testing.T) {
+		mock := &mockTester{
+			result: &TestProgramsResult{Duration: 1 * time.Second},
+		}
+		bgCtx := ContextWithProgramTester(context.Background(), mock)
+		ctx := aflow.NewTestContext(t)
+		ctx.Context = bgCtx
+
+		// Below min (45s) -> clamped to 45s.
+		_, err := testCandidateProgramsFunc(ctx, state, testCandidateProgramsArgs{
+			ProgIDs:        []string{"uuid-1"},
+			TimeoutSeconds: 5,
+		})
+		require.NoError(t, err)
+		require.Equal(t, 45*time.Second, mock.timeout)
+
+		// Above max (300s) -> clamped to 300s.
+		_, err = testCandidateProgramsFunc(ctx, state, testCandidateProgramsArgs{
+			ProgIDs:        []string{"uuid-1"},
+			TimeoutSeconds: 500,
+		})
+		require.NoError(t, err)
+		require.Equal(t, 300*time.Second, mock.timeout)
+
+		// Default (0s) -> 45s.
+		_, err = testCandidateProgramsFunc(ctx, state, testCandidateProgramsArgs{
+			ProgIDs:        []string{"uuid-1"},
+			TimeoutSeconds: 0,
+		})
+		require.NoError(t, err)
+		require.Equal(t, 45*time.Second, mock.timeout)
+	})
+
+	t.Run("RationaleAndSummaryContext", func(t *testing.T) {
+		mock := &mockTester{
+			result: &TestProgramsResult{
+				Crashed:   false,
+				RawOutput: []byte("call #0 syz_mount_image: errno 22\n"),
+				Duration:  10 * time.Second,
+			},
+		}
+		bgCtx := ContextWithProgramTester(context.Background(), mock)
+		ctx := aflow.NewTestContext(t)
+		ctx.Context = bgCtx
+
+		richState := testToolState{
+			BugTitle:    "KASAN: slab-use-after-free in foo",
+			CrashReport: "BUG: KASAN: slab-use-after-free in foo+0x10 fs/foo.c:20\nCall Trace:\n foo+0x10 fs/foo.c:20\n",
+			Programs: []ai.LogProgram{
+				{
+					UUID:     "uuid-1",
+					Proc:     0,
+					Position: 0,
+					Calls:    []string{"syz_mount_image$jfs", "openat"},
+				},
+			},
+			ValidProgIDs: []string{"uuid-1"},
+		}
+		res, err := testCandidateProgramsFunc(ctx, richState, testCandidateProgramsArgs{
+			ProgIDs:   []string{"uuid-1"},
+			Rationale: "testing mount of corrupt JFS image",
+		})
+		require.NoError(t, err)
+		require.False(t, res.Crashed)
+		require.Contains(t, res.ExecutionSummary, "errno 22")
+	})
+}
+
+func TestExtractCrashSiteInfo(t *testing.T) {
+	t.Run("Empty", func(t *testing.T) {
+		require.Equal(t, "No crash report available.", extractCrashSiteInfo(""))
+	})
+
+	t.Run("StandardReport", func(t *testing.T) {
+		report := `BUG: KASAN: slab-use-after-free in gadgetfs_kill_sb+0x43/0x110 drivers/usb/gadget/legacy/inode.c:2113
+Write of size 4 at addr ffff888127c12040 by task syz.7.626/8827
+CPU: 0 UID: 0 PID: 8827 Comm: syz.7.626
+Call Trace:
+ <TASK>
+ dump_stack_lvl+0xe8/0x150 lib/dump_stack.c:120
+ print_address_description+0x55/0x1e0 mm/kasan/report.c:378
+ kasan_report+0x117/0x150 mm/kasan/report.c:595
+ gadgetfs_kill_sb+0x43/0x110 drivers/usb/gadget/legacy/inode.c:2113
+ deactivate_locked_super+0xbc/0x110 fs/super.c:603
+ cleanup_mnt+0x437/0x4d0 fs/namespace.c:1317
+ do_exit+0x70f/0x22c0 kernel/exit.c:1008
+`
+		got := extractCrashSiteInfo(report)
+		require.Contains(t, got, "BUG: KASAN: slab-use-after-free in gadgetfs_kill_sb")
+		require.Contains(t, got, "Write of size 4")
+		require.Contains(t, got, "gadgetfs_kill_sb+0x43/0x110")
+		require.Contains(t, got, "deactivate_locked_super")
+		require.NotContains(t, got, "dump_stack_lvl")
+		require.NotContains(t, got, "kasan_report")
+	})
+}
+
+func TestFormatTestedProgramsSummary(t *testing.T) {
+	progs := []ai.LogProgram{
+		{
+			UUID:            "uuid-setup",
+			Proc:            0,
+			Position:        2,
+			TimeBeforeCrash: "4.2s",
+			Calls:           []string{"syz_mount_image$ext4", "mkdir"},
+		},
+		{
+			UUID:            "uuid-trigger",
+			Proc:            0,
+			Position:        0,
+			TimeBeforeCrash: "0.1s",
+			Calls:           []string{"openat", "write", "close"},
+		},
+	}
+
+	summary := formatTestedProgramsSummary([]string{"uuid-setup", "uuid-trigger"}, progs)
+	require.Contains(t, summary, "UUID uuid-setup, Proc 0, Position 2")
+	require.Contains(t, summary, "syz_mount_image$ext4, mkdir")
+	require.Contains(t, summary, "UUID uuid-trigger, Proc 0, Position 0")
+	require.Contains(t, summary, "openat, write, close")
+}
+
+func TestWindowLogOutput(t *testing.T) {
+	t.Run("SmallLogNotTruncated", func(t *testing.T) {
+		small := []byte("hello world log line\n")
+		require.Equal(t, "hello world log line\n", windowLogOutput(small))
+	})
+
+	t.Run("LargeLogWindowed", func(t *testing.T) {
+		large := make([]byte, 64<<10) // 64 KB
+		for i := range large {
+			large[i] = 'A'
+		}
+		copy(large[:5], "START")
+		copy(large[len(large)-5:], "FINAL")
+		got := windowLogOutput(large)
+		require.Contains(t, got, "START")
+		require.Contains(t, got, "FINAL")
+		require.Contains(t, got, "omitted")
 	})
 }
 
