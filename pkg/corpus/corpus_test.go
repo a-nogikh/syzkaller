@@ -234,3 +234,175 @@ func TestCallCoverPreserved(t *testing.T) {
 	callCover := corpus.CallCover()
 	require.Equal(t, cover.FromRaw([]uint64{10, 30}), callCover[prog.ExtraCallName].Cover)
 }
+
+func TestFullCoverSaved(t *testing.T) {
+	target := getTarget(t, targets.TestOS, targets.TestArch64)
+	corpus := NewCorpus(context.Background())
+	rs := rand.NewSource(0)
+
+	inp := generateInput(target, rs, 1)
+	inp.Cover = []uint64{10}
+	inp.FullCover = []uint64{10, 20, 30}
+	corpus.Save(inp)
+
+	items := corpus.Items()
+	require.Len(t, items, 1)
+	require.Equal(t, []uint64{10}, items[0].Cover)
+	require.Equal(t, cover.FromRaw([]uint64{10, 20, 30}), cover.FromRaw(items[0].FullCover))
+
+	// Re-save with additional full coverage.
+	inp.FullCover = []uint64{30, 40}
+	corpus.Save(inp)
+
+	items = corpus.Items()
+	require.Len(t, items, 1)
+	require.Equal(t, cover.FromRaw([]uint64{10, 20, 30, 40}), cover.FromRaw(items[0].FullCover))
+}
+
+func TestFocusAreaIgnorePCs(t *testing.T) {
+	// Focus area with only IgnorePCs (catch-all except ignored).
+	faIgnore := FocusArea{
+		Name:      "test_ignore",
+		IgnorePCs: map[uint64]struct{}{10: {}, 20: {}},
+		Weight:    1.0,
+	}
+	require.Equal(t, 0, faIgnore.inAreaPCs([]uint64{10, 20}))
+	require.Equal(t, 1, faIgnore.inAreaPCs([]uint64{10, 20, 30}))
+	require.Equal(t, 2, faIgnore.inAreaPCs([]uint64{30, 40}))
+
+	// Focus area with both CoverPCs and IgnorePCs.
+	faBoth := FocusArea{
+		Name:      "test_both",
+		CoverPCs:  map[uint64]struct{}{10: {}, 20: {}, 30: {}},
+		IgnorePCs: map[uint64]struct{}{10: {}},
+		Weight:    1.0,
+	}
+	// 10 is ignored, 40 is not in CoverPCs -> only 20 and 30 count.
+	require.Equal(t, 2, faBoth.inAreaPCs([]uint64{10, 20, 30, 40}))
+}
+
+func TestFocusAreaProgPrio(t *testing.T) {
+	hot := map[uint64]struct{}{}
+	for pc := range uint64(100) {
+		hot[pc] = struct{}{}
+	}
+	// Item builds a corpus item covering PCs [from, to) and carrying sigLen signal elements.
+	item := func(from, to uint64, sigLen int) *Item {
+		var cover []uint64
+		for pc := from; pc < to; pc++ {
+			cover = append(cover, pc)
+		}
+		raw := make([]uint64, sigLen)
+		for i := range raw {
+			raw[i] = uint64(i)
+		}
+		return &Item{FullCover: cover, Signal: signal.FromRaw(raw, 0)}
+	}
+
+	// A statically configured area weighs programs by the plain number of in-area PCs.
+	static := FocusArea{Name: "static", IgnorePCs: hot}
+	require.Equal(t, 100, static.progPrio(item(0, 200, 7)))
+	require.Equal(t, 20, static.progPrio(item(100, 120, 7)))
+
+	// A dynamic area weighs them by the density of the in-area PCs, so a program that
+	// mostly covers hot code loses to a smaller, but much more focused one.
+	dynamic := FocusArea{Name: "dynamic", IgnorePCs: hot, Dynamic: true}
+	// 200 PCs, 100 of them cold -> 100*100/200.
+	require.Equal(t, 50, dynamic.progPrio(item(0, 200, 7)))
+	// 20 PCs, all of them cold -> 20*20/20.
+	require.Equal(t, 20, dynamic.progPrio(item(100, 120, 7)))
+	// 1000 PCs, 900 of them cold, still wins on the sheer amount of cold coverage.
+	require.Equal(t, 810, dynamic.progPrio(item(0, 1000, 7)))
+	// Programs that cover no cold PCs at all are excluded.
+	require.Equal(t, 0, dynamic.progPrio(item(0, 100, 7)))
+	// A program with a tiny cold share must not be rounded down to 0 (it would be excluded).
+	require.Equal(t, 1, dynamic.progPrio(item(0, 101, 7)))
+
+	// An area without any filters accepts everything, so it must reproduce the weighting
+	// of the main corpus list (the signal length) rather than count coverage.
+	unfiltered := FocusArea{Name: "baseline", Dynamic: true}
+	require.Equal(t, 7, unfiltered.progPrio(item(0, 200, 7)))
+	require.Equal(t, 7, unfiltered.progPrio(item(0, 5000, 7)))
+	require.Equal(t, 3, unfiltered.progPrio(item(0, 200, 3)))
+}
+
+func TestDynamicCompensatoryAreas(t *testing.T) {
+	target := getTarget(t, targets.TestOS, targets.TestArch64)
+	corpus := NewCorpus(context.Background())
+	rs := rand.NewSource(0)
+
+	// inp1 touches only hot PCs [10, 20].
+	inp1 := generateRangedInput(target, rs, 1, 1)
+	inp1.Cover = []uint64{10}
+	inp1.FullCover = []uint64{10, 20}
+	corpus.Save(inp1)
+
+	// inp2 touches hot PCs [10, 20] and cold PC 30.
+	inp2 := generateRangedInput(target, rs, 2, 2)
+	inp2.Cover = []uint64{10}
+	inp2.FullCover = []uint64{10, 20, 30}
+	corpus.Save(inp2)
+
+	// inp3 touches only cold PC 40.
+	inp3 := generateRangedInput(target, rs, 3, 3)
+	inp3.Cover = []uint64{40}
+	inp3.FullCover = []uint64{40}
+	corpus.Save(inp3)
+
+	// Add compensatory area that ignores hot PCs [10, 20].
+	corpus.SetCompensatoryAreas([]FocusArea{
+		{
+			Name:      "compensatory",
+			IgnorePCs: map[uint64]struct{}{10: {}, 20: {}},
+			Weight:    1.0,
+		},
+	})
+
+	// inp1 should not be in the compensatory area, while inp2 and inp3 should.
+	require.Len(t, corpus.focusAreas, 1)
+	require.Len(t, corpus.focusAreas[0].progs, 2)
+	require.Empty(t, corpus.BaseFocusAreas())
+
+	// Minimization preserves compensatory area programs.
+	corpus.Minimize(true)
+	require.Len(t, corpus.focusAreas, 1)
+	require.Len(t, corpus.focusAreas[0].progs, 2)
+
+	// Clearing / removing compensatory areas.
+	corpus.SetCompensatoryAreas(nil)
+	require.Empty(t, corpus.focusAreas)
+
+	// If a compensatory area has no eligible programs, it is omitted.
+	corpus.SetCompensatoryAreas([]FocusArea{
+		{
+			Name:      "compensatory_empty",
+			IgnorePCs: map[uint64]struct{}{10: {}, 20: {}, 30: {}, 40: {}},
+			Weight:    1.0,
+		},
+	})
+	require.Empty(t, corpus.focusAreas)
+
+	// Configured focus area with reduced positive filter.
+	corpusWithBase := NewFocusedCorpus(context.Background(), nil, []FocusArea{
+		{
+			Name:     "subsystem",
+			CoverPCs: map[uint64]struct{}{10: {}, 20: {}, 30: {}},
+			Weight:   2.0,
+		},
+	})
+	corpusWithBase.Save(inp1)
+	corpusWithBase.Save(inp2)
+	require.Len(t, corpusWithBase.focusAreas[0].progs, 2)
+
+	// Add compensatory area with reduced positive filter (cold PC 30 only).
+	corpusWithBase.SetCompensatoryAreas([]FocusArea{
+		{
+			Name:     "subsystem [compensatory]",
+			CoverPCs: map[uint64]struct{}{30: {}},
+			Weight:   2.0,
+		},
+	})
+	// Only inp2 covers cold PC 30; inp1 only covered hot PCs 10 and 20.
+	require.Len(t, corpusWithBase.focusAreas, 2)
+	require.Len(t, corpusWithBase.focusAreas[1].progs, 1)
+}

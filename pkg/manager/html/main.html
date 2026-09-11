@@ -20,6 +20,34 @@ Use of this source code is governed by Apache 2 LICENSE that can be found in the
 	</tbody>
 </table>
 
+{{if .FocusAreas}}
+<table class="list_table">
+	<caption>Focus Areas:</caption>
+	<thead>
+	<tr>
+		<th>Name</th>
+		<th>Type</th>
+		<th>Weight</th>
+		<th>Corpus Programs</th>
+		<th>Target PCs</th>
+		<th>Details</th>
+	</tr>
+	</thead>
+	<tbody>
+	{{range $fa := $.FocusAreas}}
+	<tr>
+		<td class="stat_name">{{$fa.Name}}</td>
+		<td>{{$fa.Type}}</td>
+		<td class="stat">{{$fa.Weight}}</td>
+		<td class="stat">{{$fa.Programs}}</td>
+		<td class="stat">{{$fa.TargetPCs}}</td>
+		<td>{{$fa.Details}}</td>
+	</tr>
+	{{end}}
+	</tbody>
+</table>
+{{end}}
+
 {{if .FilterSubsystems}}
 <div>
 	<b>Active subsystems:</b>

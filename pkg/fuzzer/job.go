@@ -91,7 +91,8 @@ type triageJob struct {
 	fuzzer   *Fuzzer
 	queue    queue.Executor
 	// Set of calls that gave potential new coverage.
-	calls map[int]*triageCall
+	calls     map[int]*triageCall
+	fullCover cover.Cover
 
 	info *JobInfo
 }
@@ -214,13 +215,35 @@ func (job *triageJob) handleCall(call int, info *triageCall) {
 			})
 		}
 	}
+	fullCover := job.fullCover
+	if p != job.p {
+		res := job.execute(&queue.Request{
+			Prog:     p,
+			ExecOpts: setFlags(flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagCollectSignal),
+			Stat:     job.fuzzer.statExecTriage,
+		}, progInTriage)
+		var cov cover.Cover
+		if res.Info != nil {
+			for _, callInfo := range res.Info.Calls {
+				if callInfo != nil {
+					cov.Merge(callInfo.Cover)
+				}
+			}
+		}
+		if len(cov) > 0 {
+			fullCover = cov
+		} else {
+			fullCover = info.cover
+		}
+	}
 	job.fuzzer.Logf(2, "added new input for %v to the corpus: %s", callName, p)
 	input := corpus.NewInput{
-		Prog:     p,
-		Call:     call,
-		Signal:   info.stableSignal,
-		Cover:    info.cover.Serialize(),
-		RawCover: info.rawCover,
+		Prog:      p,
+		Call:      call,
+		Signal:    info.stableSignal,
+		Cover:     info.cover.Serialize(),
+		RawCover:  info.rawCover,
+		FullCover: fullCover.Serialize(),
 	}
 	job.fuzzer.Config.Corpus.Save(input)
 }
@@ -293,6 +316,11 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 		}
 		for i, callInfo := range result.Info.Calls {
 			deflakeCall(i, callInfo)
+			if callInfo != nil {
+				// Note: Extra coverage is intentionally not merged here, it comes from
+				// background threads and is not attributable to the program itself.
+				job.fullCover.Merge(callInfo.Cover)
+			}
 		}
 		deflakeCall(-1, result.Info.Extra)
 	}

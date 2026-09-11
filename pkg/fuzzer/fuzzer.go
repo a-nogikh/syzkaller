@@ -41,6 +41,8 @@ type Fuzzer struct {
 	ctMu         sync.RWMutex
 	ctRegenerate chan struct{}
 
+	sampler *pcSampler
+
 	execQueues
 }
 
@@ -52,9 +54,10 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
 		}
 	}
 	f := &Fuzzer{
-		Stats:  newStats(target),
-		Config: cfg,
-		Cover:  newCover(),
+		Stats:   newStats(target),
+		Config:  cfg,
+		Cover:   newCover(),
+		sampler: newPCSampler(time.Now()),
 
 		ctx:         ctx,
 		rnd:         rnd,
@@ -68,6 +71,9 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
 	f.execQueues = newExecQueues(f)
 	f.updateChoiceTable(nil)
 	go f.choiceTableUpdater()
+	if cfg.Coverage && cfg.CompReevalInterval > 0 {
+		go f.compensatoryReevaluator()
+	}
 	if cfg.Debug {
 		go f.logCurrentStats()
 	}
@@ -189,6 +195,11 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
 			fuzzer.handleCallInfo(req, info, call)
 		}
 		fuzzer.handleCallInfo(req, res.Info.Extra, -1)
+		if req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover != 0 &&
+			req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectComps == 0 &&
+			flags&progInTriage == 0 && req.Stat != fuzzer.statExecCollide {
+			fuzzer.sampler.collect(res.Info)
+		}
 	}
 
 	// Corpus candidates may have flaky coverage, so we give them a second chance.
@@ -212,20 +223,21 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
 }
 
 type Config struct {
-	Debug          bool
-	Corpus         *corpus.Corpus
-	Logf           func(level int, msg string, args ...any)
-	Snapshot       bool
-	Coverage       bool
-	FaultInjection bool
-	Comparisons    bool
-	Collide        bool
-	EnabledCalls   map[*prog.Syscall]bool
-	NoMutateCalls  map[int]bool
-	FetchRawCover  bool
-	NewInputFilter func(call string) bool
-	PatchTest      bool
-	ModeKFuzzTest  bool
+	Debug              bool
+	Corpus             *corpus.Corpus
+	Logf               func(level int, msg string, args ...any)
+	Snapshot           bool
+	Coverage           bool
+	FaultInjection     bool
+	Comparisons        bool
+	Collide            bool
+	EnabledCalls       map[*prog.Syscall]bool
+	NoMutateCalls      map[int]bool
+	FetchRawCover      bool
+	NewInputFilter     func(call string) bool
+	PatchTest          bool
+	ModeKFuzzTest      bool
+	CompReevalInterval time.Duration
 }
 
 func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *flatrpc.CallInfo, call int, triage *map[int]*triageCall) {
@@ -298,11 +310,20 @@ func (fuzzer *Fuzzer) genFuzz() *queue.Request {
 	if req == nil {
 		req = genProgRequest(fuzzer, rnd)
 	}
+	isCollide := false
 	if fuzzer.Config.Collide && rnd.Intn(3) == 0 {
+		isCollide = true
 		req = &queue.Request{
 			Prog: randomCollide(req.Prog, rnd),
 			Stat: fuzzer.statExecCollide,
 		}
+	}
+	// Sample a small share of executions to profile which PCs the fuzzer actually spends
+	// its time on. This relies on the executor deduplicating coverage, otherwise a single
+	// loop-heavy program would dominate the whole window.
+	if !isCollide && fuzzer.Config.Coverage && !fuzzer.Config.FetchRawCover &&
+		rnd.Float64() < pcSampleRate {
+		req.ExecOpts.ExecFlags |= flatrpc.ExecFlagCollectCover
 	}
 	fuzzer.prepare(req, 0, 0)
 	return req
@@ -492,4 +513,63 @@ func DefaultExecOpts(cfg *mgrconfig.Config, features flatrpc.Feature, debug bool
 		ExecFlags:  exec,
 		SandboxArg: cfg.SandboxArg,
 	}
+}
+
+func (fuzzer *Fuzzer) compensatoryReevaluator() {
+	interval := fuzzer.Config.CompReevalInterval
+	if interval == 0 {
+		interval = 1 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-fuzzer.ctx.Done():
+			return
+		case <-ticker.C:
+			fuzzer.ReevaluateCompensatoryAreas()
+		}
+	}
+}
+
+func (fuzzer *Fuzzer) ReevaluateCompensatoryAreas() {
+	fuzzer.ReevaluateCompensatoryAreasWithParams(defaultMinExecs, defaultMinDuration,
+		defaultMinAreaHits, defaultAttentionCutoff)
+}
+
+func (fuzzer *Fuzzer) ReevaluateCompensatoryAreasWithParams(minExecs int, minDuration time.Duration,
+	minAreaHits int, attentionCutoff float64) {
+	if fuzzer.Config.Corpus == nil {
+		return
+	}
+	now := time.Now()
+	hits, _, execs, duration, ok := fuzzer.sampler.trySnapshotAndReset(now, minExecs, minDuration)
+	if !ok {
+		fuzzer.Logf(1, "compensatory areas: deferring reevaluation (accumulated %d/%d executions over %v/%v)",
+			execs, minExecs, duration.Round(time.Second), minDuration)
+		return
+	}
+
+	if len(hits) == 0 {
+		fuzzer.Logf(1, "compensatory areas: no sampled PC hits, clearing dynamic areas")
+		fuzzer.Config.Corpus.SetCompensatoryAreas(nil)
+		return
+	}
+	baseAreas := fuzzer.Config.Corpus.BaseFocusAreas()
+	logFunc := func(msg string, args ...any) {
+		fuzzer.Logf(1, msg, args...)
+	}
+	compAreas := calculateCompensatoryAreas(baseAreas, hits, minAreaHits, attentionCutoff, logFunc)
+	fuzzer.Config.Corpus.SetCompensatoryAreas(compAreas)
+
+	active := fuzzer.Config.Corpus.FocusAreaInfo()
+	var dynamicCount int
+	for _, fa := range active {
+		if fa.Dynamic {
+			dynamicCount++
+		}
+	}
+	fuzzer.Logf(1, "compensatory areas: reevaluation complete (%d dynamic areas active from %d executions over %v)",
+		dynamicCount, execs, duration.Round(time.Second))
 }

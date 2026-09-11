@@ -49,7 +49,12 @@ func (corpus *Corpus) Minimize(cover bool) {
 		corpus.progsMap[inp.Sig] = inp
 		corpus.saveProgram(inp.Prog, len(inp.Signal))
 		for area := range inp.areas {
-			area.saveProgram(inp.Prog, area.inAreaPCs(inp.Cover))
+			prio := area.progPrio(inp)
+			if prio > 0 {
+				area.saveProgram(inp.Prog, prio)
+			} else {
+				delete(inp.areas, area)
+			}
 		}
 	}
 }

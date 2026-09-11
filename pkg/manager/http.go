@@ -186,6 +186,9 @@ func (serv *HTTPServer) httpMain(w http.ResponseWriter, r *http.Request) {
 			Link:  stat.Link,
 		})
 	}
+	if c := serv.Corpus.Load(); c != nil {
+		data.FocusAreas = serv.collectFocusAreas(c)
+	}
 
 	if serv.CrashStore != nil {
 		list, err := serv.CrashStore.BugList()
@@ -1124,6 +1127,7 @@ func executeTemplate(w http.ResponseWriter, templ *template.Template, data any) 
 type UISummaryData struct {
 	UIPageHeader
 	Stats               []UIStat
+	FocusAreas          []UIFocusArea
 	Crashes             []UICrashType
 	PatchedOnly         *UIDiffTable
 	AffectsBoth         *UIDiffTable
@@ -1132,6 +1136,48 @@ type UISummaryData struct {
 	ShowCore            bool
 	FilterSubsystems    []string
 	AvailableSubsystems []string
+}
+
+type UIFocusArea struct {
+	Name      string
+	Type      string
+	Weight    string
+	Programs  int
+	TargetPCs int
+	Details   string
+}
+
+func (serv *HTTPServer) collectFocusAreas(c *corpus.Corpus) []UIFocusArea {
+	totalCover := c.CoverLen()
+	var ret []UIFocusArea
+	for _, fa := range c.FocusAreaInfo() {
+		areaType := "configured"
+		details := "base focus area"
+		targetPCs := fa.CoverPCs
+		if targetPCs == 0 {
+			targetPCs = totalCover
+		}
+		if fa.Dynamic {
+			areaType = "compensatory (dynamic)"
+			if fa.IgnorePCs > 0 {
+				targetPCs = max(0, totalCover-fa.IgnorePCs)
+				details = fmt.Sprintf("ignored %d hot PCs (negative filter)", fa.IgnorePCs)
+			} else if fa.CoverPCs > 0 {
+				details = fmt.Sprintf("reduced to %d cold PCs (positive filter)", fa.CoverPCs)
+			} else {
+				details = "baseline corpus (all programs)"
+			}
+		}
+		ret = append(ret, UIFocusArea{
+			Name:      fa.Name,
+			Type:      areaType,
+			Weight:    fmt.Sprintf("%.1f", fa.Weight),
+			Programs:  fa.Progs,
+			TargetPCs: targetPCs,
+			Details:   details,
+		})
+	}
+	return ret
 }
 
 func (data UISummaryData) FilterAddURL(sub string) string {
