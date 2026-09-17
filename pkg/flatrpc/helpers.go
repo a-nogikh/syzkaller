@@ -42,6 +42,7 @@ type ExecOpts = ExecOptsRawT
 type ProgInfo = ProgInfoRawT
 type ExecResult = ExecResultRawT
 type StateResult = StateResultRawT
+type SyscallEntry = SyscallEntryRawT
 
 func init() {
 	var req ExecRequest
@@ -108,4 +109,19 @@ func (hdr *SnapshotHeaderT) UpdateState(state SnapshotState) {
 
 func (hdr *SnapshotHeaderT) LoadState() SnapshotState {
 	return SnapshotState(atomic.LoadUint64((*uint64)(unsafe.Pointer(&hdr.State))))
+}
+
+func BuildSyscallEntries(target *prog.Target) []*SyscallEntry {
+	entries := make([]*SyscallEntry, len(target.Syscalls))
+	for i, call := range target.Syscalls {
+		entries[i] = &SyscallEntry{
+			Name:         call.Name,
+			Nr:           int64(call.NR),
+			Timeout:      call.Attrs.Timeout,
+			ProgTimeout:  call.Attrs.ProgTimeout,
+			IgnoreReturn: call.Attrs.IgnoreReturn,
+			RemoteCover:  call.Attrs.RemoteCover,
+		}
+	}
+	return entries
 }

@@ -49,6 +49,15 @@ table ConnectRequestRaw {
 	syz_revision		:string;
 }
 
+table SyscallEntryRaw {
+	name			:string;
+	nr			:int64;
+	timeout			:uint64;
+	prog_timeout		:uint64;
+	ignore_return		:bool;
+	remote_cover		:bool;
+}
+
 table ConnectReplyRaw {
 	debug			:bool;
 	cover			:bool;
@@ -64,6 +73,7 @@ table ConnectReplyRaw {
 	features		:Feature;
 	// Fuzzer reads these files inside of the VM and returns contents in InfoRequest.files.
 	files			:[string];
+	syscalls		:[SyscallEntryRaw];
 }
 
 table InfoRequestRaw {
@@ -303,6 +313,7 @@ table SnapshotHandshake {
 	features		:Feature;
 	env_flags		:ExecEnv;
 	sandbox_arg		:int64;
+	syscalls		:[SyscallEntryRaw];
 }
 
 table SnapshotRequest {

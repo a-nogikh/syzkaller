@@ -340,6 +340,13 @@ static const uint64 arg_csum_chunk_const = 1;
 
 typedef intptr_t(SYSCALLAPI* syscall_t)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t);
 
+struct call_attrs_t {
+	uint64_t timeout;
+	uint64_t prog_timeout;
+	bool ignore_return;
+	bool remote_cover;
+};
+
 struct call_t {
 	const char* name;
 	int sys_nr;
@@ -418,6 +425,11 @@ static res_t results[kMaxCommands];
 
 const uint64 kInMagic = 0xbadc0ffeebadface;
 
+struct handshake_syscall {
+	int sys_nr;
+	call_attrs_t attrs;
+};
+
 struct handshake_req {
 	uint64 magic;
 	bool use_cover_edges;
@@ -428,6 +440,7 @@ struct handshake_req {
 	uint64 syscall_timeout_ms;
 	uint64 program_timeout_ms;
 	uint64 slowdown_scale;
+	uint64 num_syscalls;
 	bool return_error;
 };
 
@@ -498,7 +511,73 @@ static void parse_handshake(const handshake_req& req);
 
 static void mmap_input();
 
+struct pseudo_syscall_t {
+	const char* name;
+	syscall_t call;
+};
+
 #include "syscalls.h"
+
+static const call_t* syscalls_table = nullptr;
+static size_t syscalls_count = 0;
+
+static syscall_t find_pseudo_syscall(const char* name)
+{
+	const char* dollar = strchr(name, '$');
+	size_t len = dollar ? static_cast<size_t>(dollar - name) : strlen(name);
+	for (size_t i = 0; pseudo_syscalls[i].name; i++) {
+		if (strncmp(pseudo_syscalls[i].name, name, len) == 0 && pseudo_syscalls[i].name[len] == 0)
+			return pseudo_syscalls[i].call;
+	}
+	return nullptr;
+}
+
+static void load_syscalls(uint64 count)
+{
+	auto* table = new call_t[count]();
+	const char* ptr = reinterpret_cast<const char*>(input_data);
+	for (size_t i = 0; i < count; i++) {
+		handshake_syscall hdr;
+		memcpy(&hdr, ptr, sizeof(hdr));
+		ptr += sizeof(hdr);
+		size_t name_len = strlen(ptr) + 1;
+		char* name = new char[name_len];
+		memcpy(name, ptr, name_len);
+		ptr += name_len;
+		table[i].name = name;
+		table[i].sys_nr = hdr.sys_nr;
+		table[i].attrs = hdr.attrs;
+		table[i].call = find_pseudo_syscall(name);
+	}
+	syscalls_table = table;
+	syscalls_count = count;
+}
+
+static void load_syscalls(const flatbuffers::Vector<flatbuffers::Offset<rpc::SyscallEntryRaw>>* entries)
+{
+	if (!entries)
+		return;
+	size_t count = entries->size();
+	auto* table = new call_t[count]();
+	for (size_t i = 0; i < count; i++) {
+		const auto* sc = entries->Get(i);
+		const char* src_name = sc->name() ? sc->name()->c_str() : "";
+		size_t name_len = strlen(src_name) + 1;
+		char* name = new char[name_len];
+		memcpy(name, src_name, name_len);
+		table[i].name = name;
+		table[i].sys_nr = sc->nr();
+		table[i].attrs = {
+		    .timeout = sc->timeout(),
+		    .prog_timeout = sc->prog_timeout(),
+		    .ignore_return = sc->ignore_return(),
+		    .remote_cover = sc->remote_cover(),
+		};
+		table[i].call = find_pseudo_syscall(name);
+	}
+	syscalls_table = table;
+	syscalls_count = count;
+}
 
 #if GOOS_linux
 #ifndef MAP_FIXED_NOREPLACE
@@ -852,6 +931,8 @@ void parse_handshake(const handshake_req& req)
 	flag_delay_kcov_mmap = (bool)(req.flags & rpc::ExecEnv::DelayKcovMmap);
 	flag_nic_vf = (bool)(req.flags & rpc::ExecEnv::EnableNicVF);
 	flag_return_error = req.return_error;
+	if (req.num_syscalls > 0)
+		load_syscalls(req.num_syscalls);
 }
 
 void receive_execute()
@@ -1081,9 +1162,9 @@ void execute_one()
 		}
 
 		// Normal syscall.
-		if (call_num >= ARRAY_SIZE(syscalls))
+		if (call_num >= syscalls_count)
 			failmsg("invalid syscall number", "call_num=%llu", call_num);
-		const call_t* call = &syscalls[call_num];
+		const call_t* call = &syscalls_table[call_num];
 		if (prog_extra_timeout < call->attrs.prog_timeout)
 			prog_extra_timeout = call->attrs.prog_timeout * slowdown_scale;
 		if (call->attrs.remote_cover)
@@ -1544,7 +1625,7 @@ void* worker_thread(void* arg)
 
 void execute_call(thread_t* th)
 {
-	const call_t* call = &syscalls[th->call_num];
+	const call_t* call = &syscalls_table[th->call_num];
 	debug("#%d [%llums] -> %s(",
 	      th->id, current_time_ms() - start_time_ms, call->name);
 	for (int i = 0; i < th->num_args; i++) {

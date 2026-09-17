@@ -23,6 +23,10 @@ struct ConnectRequestRaw;
 struct ConnectRequestRawBuilder;
 struct ConnectRequestRawT;
 
+struct SyscallEntryRaw;
+struct SyscallEntryRawBuilder;
+struct SyscallEntryRawT;
+
 struct ConnectReplyRaw;
 struct ConnectReplyRawBuilder;
 struct ConnectReplyRawT;
@@ -1029,6 +1033,133 @@ inline ::flatbuffers::Offset<ConnectRequestRaw> CreateConnectRequestRawDirect(
 
 ::flatbuffers::Offset<ConnectRequestRaw> CreateConnectRequestRaw(::flatbuffers::FlatBufferBuilder &_fbb, const ConnectRequestRawT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
 
+struct SyscallEntryRawT : public ::flatbuffers::NativeTable {
+  typedef SyscallEntryRaw TableType;
+  std::string name{};
+  int64_t nr = 0;
+  uint64_t timeout = 0;
+  uint64_t prog_timeout = 0;
+  bool ignore_return = false;
+  bool remote_cover = false;
+};
+
+struct SyscallEntryRaw FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef SyscallEntryRawT NativeTableType;
+  typedef SyscallEntryRawBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_NAME = 4,
+    VT_NR = 6,
+    VT_TIMEOUT = 8,
+    VT_PROG_TIMEOUT = 10,
+    VT_IGNORE_RETURN = 12,
+    VT_REMOTE_COVER = 14
+  };
+  const ::flatbuffers::String *name() const {
+    return GetPointer<const ::flatbuffers::String *>(VT_NAME);
+  }
+  int64_t nr() const {
+    return GetField<int64_t>(VT_NR, 0);
+  }
+  uint64_t timeout() const {
+    return GetField<uint64_t>(VT_TIMEOUT, 0);
+  }
+  uint64_t prog_timeout() const {
+    return GetField<uint64_t>(VT_PROG_TIMEOUT, 0);
+  }
+  bool ignore_return() const {
+    return GetField<uint8_t>(VT_IGNORE_RETURN, 0) != 0;
+  }
+  bool remote_cover() const {
+    return GetField<uint8_t>(VT_REMOTE_COVER, 0) != 0;
+  }
+  bool Verify(::flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_NAME) &&
+           verifier.VerifyString(name()) &&
+           VerifyField<int64_t>(verifier, VT_NR, 8) &&
+           VerifyField<uint64_t>(verifier, VT_TIMEOUT, 8) &&
+           VerifyField<uint64_t>(verifier, VT_PROG_TIMEOUT, 8) &&
+           VerifyField<uint8_t>(verifier, VT_IGNORE_RETURN, 1) &&
+           VerifyField<uint8_t>(verifier, VT_REMOTE_COVER, 1) &&
+           verifier.EndTable();
+  }
+  SyscallEntryRawT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  void UnPackTo(SyscallEntryRawT *_o, const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
+  static ::flatbuffers::Offset<SyscallEntryRaw> Pack(::flatbuffers::FlatBufferBuilder &_fbb, const SyscallEntryRawT* _o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+};
+
+struct SyscallEntryRawBuilder {
+  typedef SyscallEntryRaw Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_name(::flatbuffers::Offset<::flatbuffers::String> name) {
+    fbb_.AddOffset(SyscallEntryRaw::VT_NAME, name);
+  }
+  void add_nr(int64_t nr) {
+    fbb_.AddElement<int64_t>(SyscallEntryRaw::VT_NR, nr, 0);
+  }
+  void add_timeout(uint64_t timeout) {
+    fbb_.AddElement<uint64_t>(SyscallEntryRaw::VT_TIMEOUT, timeout, 0);
+  }
+  void add_prog_timeout(uint64_t prog_timeout) {
+    fbb_.AddElement<uint64_t>(SyscallEntryRaw::VT_PROG_TIMEOUT, prog_timeout, 0);
+  }
+  void add_ignore_return(bool ignore_return) {
+    fbb_.AddElement<uint8_t>(SyscallEntryRaw::VT_IGNORE_RETURN, static_cast<uint8_t>(ignore_return), 0);
+  }
+  void add_remote_cover(bool remote_cover) {
+    fbb_.AddElement<uint8_t>(SyscallEntryRaw::VT_REMOTE_COVER, static_cast<uint8_t>(remote_cover), 0);
+  }
+  explicit SyscallEntryRawBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<SyscallEntryRaw> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<SyscallEntryRaw>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<SyscallEntryRaw> CreateSyscallEntryRaw(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::String> name = 0,
+    int64_t nr = 0,
+    uint64_t timeout = 0,
+    uint64_t prog_timeout = 0,
+    bool ignore_return = false,
+    bool remote_cover = false) {
+  SyscallEntryRawBuilder builder_(_fbb);
+  builder_.add_prog_timeout(prog_timeout);
+  builder_.add_timeout(timeout);
+  builder_.add_nr(nr);
+  builder_.add_name(name);
+  builder_.add_remote_cover(remote_cover);
+  builder_.add_ignore_return(ignore_return);
+  return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<SyscallEntryRaw> CreateSyscallEntryRawDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const char *name = nullptr,
+    int64_t nr = 0,
+    uint64_t timeout = 0,
+    uint64_t prog_timeout = 0,
+    bool ignore_return = false,
+    bool remote_cover = false) {
+  auto name__ = name ? _fbb.CreateString(name) : 0;
+  return rpc::CreateSyscallEntryRaw(
+      _fbb,
+      name__,
+      nr,
+      timeout,
+      prog_timeout,
+      ignore_return,
+      remote_cover);
+}
+
+::flatbuffers::Offset<SyscallEntryRaw> CreateSyscallEntryRaw(::flatbuffers::FlatBufferBuilder &_fbb, const SyscallEntryRawT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
+
 struct ConnectReplyRawT : public ::flatbuffers::NativeTable {
   typedef ConnectReplyRaw TableType;
   bool debug = false;
@@ -1043,6 +1174,11 @@ struct ConnectReplyRawT : public ::flatbuffers::NativeTable {
   std::vector<std::string> race_frames{};
   rpc::Feature features = static_cast<rpc::Feature>(0);
   std::vector<std::string> files{};
+  std::vector<std::unique_ptr<rpc::SyscallEntryRawT>> syscalls{};
+  ConnectReplyRawT() = default;
+  ConnectReplyRawT(const ConnectReplyRawT &o);
+  ConnectReplyRawT(ConnectReplyRawT&&) FLATBUFFERS_NOEXCEPT = default;
+  ConnectReplyRawT &operator=(ConnectReplyRawT o) FLATBUFFERS_NOEXCEPT;
 };
 
 struct ConnectReplyRaw FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -1060,7 +1196,8 @@ struct ConnectReplyRaw FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_LEAK_FRAMES = 20,
     VT_RACE_FRAMES = 22,
     VT_FEATURES = 24,
-    VT_FILES = 26
+    VT_FILES = 26,
+    VT_SYSCALLS = 28
   };
   bool debug() const {
     return GetField<uint8_t>(VT_DEBUG, 0) != 0;
@@ -1098,6 +1235,9 @@ struct ConnectReplyRaw FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *files() const {
     return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>> *>(VT_FILES);
   }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<rpc::SyscallEntryRaw>> *syscalls() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<rpc::SyscallEntryRaw>> *>(VT_SYSCALLS);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint8_t>(verifier, VT_DEBUG, 1) &&
@@ -1118,6 +1258,9 @@ struct ConnectReplyRaw FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_FILES) &&
            verifier.VerifyVector(files()) &&
            verifier.VerifyVectorOfStrings(files()) &&
+           VerifyOffset(verifier, VT_SYSCALLS) &&
+           verifier.VerifyVector(syscalls()) &&
+           verifier.VerifyVectorOfTables(syscalls()) &&
            verifier.EndTable();
   }
   ConnectReplyRawT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -1165,6 +1308,9 @@ struct ConnectReplyRawBuilder {
   void add_files(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> files) {
     fbb_.AddOffset(ConnectReplyRaw::VT_FILES, files);
   }
+  void add_syscalls(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<rpc::SyscallEntryRaw>>> syscalls) {
+    fbb_.AddOffset(ConnectReplyRaw::VT_SYSCALLS, syscalls);
+  }
   explicit ConnectReplyRawBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1189,9 +1335,11 @@ inline ::flatbuffers::Offset<ConnectReplyRaw> CreateConnectReplyRaw(
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> leak_frames = 0,
     ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> race_frames = 0,
     rpc::Feature features = static_cast<rpc::Feature>(0),
-    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> files = 0) {
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<::flatbuffers::String>>> files = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<rpc::SyscallEntryRaw>>> syscalls = 0) {
   ConnectReplyRawBuilder builder_(_fbb);
   builder_.add_features(features);
+  builder_.add_syscalls(syscalls);
   builder_.add_files(files);
   builder_.add_race_frames(race_frames);
   builder_.add_leak_frames(leak_frames);
@@ -1219,10 +1367,12 @@ inline ::flatbuffers::Offset<ConnectReplyRaw> CreateConnectReplyRawDirect(
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *leak_frames = nullptr,
     const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *race_frames = nullptr,
     rpc::Feature features = static_cast<rpc::Feature>(0),
-    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *files = nullptr) {
+    const std::vector<::flatbuffers::Offset<::flatbuffers::String>> *files = nullptr,
+    const std::vector<::flatbuffers::Offset<rpc::SyscallEntryRaw>> *syscalls = nullptr) {
   auto leak_frames__ = leak_frames ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*leak_frames) : 0;
   auto race_frames__ = race_frames ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*race_frames) : 0;
   auto files__ = files ? _fbb.CreateVector<::flatbuffers::Offset<::flatbuffers::String>>(*files) : 0;
+  auto syscalls__ = syscalls ? _fbb.CreateVector<::flatbuffers::Offset<rpc::SyscallEntryRaw>>(*syscalls) : 0;
   return rpc::CreateConnectReplyRaw(
       _fbb,
       debug,
@@ -1236,7 +1386,8 @@ inline ::flatbuffers::Offset<ConnectReplyRaw> CreateConnectReplyRawDirect(
       leak_frames__,
       race_frames__,
       features,
-      files__);
+      files__,
+      syscalls__);
 }
 
 ::flatbuffers::Offset<ConnectReplyRaw> CreateConnectReplyRaw(::flatbuffers::FlatBufferBuilder &_fbb, const ConnectReplyRawT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -2741,6 +2892,11 @@ struct SnapshotHandshakeT : public ::flatbuffers::NativeTable {
   rpc::Feature features = static_cast<rpc::Feature>(0);
   rpc::ExecEnv env_flags = static_cast<rpc::ExecEnv>(0);
   int64_t sandbox_arg = 0;
+  std::vector<std::unique_ptr<rpc::SyscallEntryRawT>> syscalls{};
+  SnapshotHandshakeT() = default;
+  SnapshotHandshakeT(const SnapshotHandshakeT &o);
+  SnapshotHandshakeT(SnapshotHandshakeT&&) FLATBUFFERS_NOEXCEPT = default;
+  SnapshotHandshakeT &operator=(SnapshotHandshakeT o) FLATBUFFERS_NOEXCEPT;
 };
 
 struct SnapshotHandshake FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2754,7 +2910,8 @@ struct SnapshotHandshake FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table 
     VT_PROGRAM_TIMEOUT_MS = 12,
     VT_FEATURES = 14,
     VT_ENV_FLAGS = 16,
-    VT_SANDBOX_ARG = 18
+    VT_SANDBOX_ARG = 18,
+    VT_SYSCALLS = 20
   };
   bool cover_edges() const {
     return GetField<uint8_t>(VT_COVER_EDGES, 0) != 0;
@@ -2780,6 +2937,9 @@ struct SnapshotHandshake FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table 
   int64_t sandbox_arg() const {
     return GetField<int64_t>(VT_SANDBOX_ARG, 0);
   }
+  const ::flatbuffers::Vector<::flatbuffers::Offset<rpc::SyscallEntryRaw>> *syscalls() const {
+    return GetPointer<const ::flatbuffers::Vector<::flatbuffers::Offset<rpc::SyscallEntryRaw>> *>(VT_SYSCALLS);
+  }
   bool Verify(::flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint8_t>(verifier, VT_COVER_EDGES, 1) &&
@@ -2790,6 +2950,9 @@ struct SnapshotHandshake FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table 
            VerifyField<uint64_t>(verifier, VT_FEATURES, 8) &&
            VerifyField<uint64_t>(verifier, VT_ENV_FLAGS, 8) &&
            VerifyField<int64_t>(verifier, VT_SANDBOX_ARG, 8) &&
+           VerifyOffset(verifier, VT_SYSCALLS) &&
+           verifier.VerifyVector(syscalls()) &&
+           verifier.VerifyVectorOfTables(syscalls()) &&
            verifier.EndTable();
   }
   SnapshotHandshakeT *UnPack(const ::flatbuffers::resolver_function_t *_resolver = nullptr) const;
@@ -2825,6 +2988,9 @@ struct SnapshotHandshakeBuilder {
   void add_sandbox_arg(int64_t sandbox_arg) {
     fbb_.AddElement<int64_t>(SnapshotHandshake::VT_SANDBOX_ARG, sandbox_arg, 0);
   }
+  void add_syscalls(::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<rpc::SyscallEntryRaw>>> syscalls) {
+    fbb_.AddOffset(SnapshotHandshake::VT_SYSCALLS, syscalls);
+  }
   explicit SnapshotHandshakeBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -2845,17 +3011,44 @@ inline ::flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshake(
     int32_t program_timeout_ms = 0,
     rpc::Feature features = static_cast<rpc::Feature>(0),
     rpc::ExecEnv env_flags = static_cast<rpc::ExecEnv>(0),
-    int64_t sandbox_arg = 0) {
+    int64_t sandbox_arg = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<::flatbuffers::Offset<rpc::SyscallEntryRaw>>> syscalls = 0) {
   SnapshotHandshakeBuilder builder_(_fbb);
   builder_.add_sandbox_arg(sandbox_arg);
   builder_.add_env_flags(env_flags);
   builder_.add_features(features);
+  builder_.add_syscalls(syscalls);
   builder_.add_program_timeout_ms(program_timeout_ms);
   builder_.add_syscall_timeout_ms(syscall_timeout_ms);
   builder_.add_slowdown(slowdown);
   builder_.add_kernel_64_bit(kernel_64_bit);
   builder_.add_cover_edges(cover_edges);
   return builder_.Finish();
+}
+
+inline ::flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshakeDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    bool cover_edges = false,
+    bool kernel_64_bit = false,
+    int32_t slowdown = 0,
+    int32_t syscall_timeout_ms = 0,
+    int32_t program_timeout_ms = 0,
+    rpc::Feature features = static_cast<rpc::Feature>(0),
+    rpc::ExecEnv env_flags = static_cast<rpc::ExecEnv>(0),
+    int64_t sandbox_arg = 0,
+    const std::vector<::flatbuffers::Offset<rpc::SyscallEntryRaw>> *syscalls = nullptr) {
+  auto syscalls__ = syscalls ? _fbb.CreateVector<::flatbuffers::Offset<rpc::SyscallEntryRaw>>(*syscalls) : 0;
+  return rpc::CreateSnapshotHandshake(
+      _fbb,
+      cover_edges,
+      kernel_64_bit,
+      slowdown,
+      syscall_timeout_ms,
+      program_timeout_ms,
+      features,
+      env_flags,
+      sandbox_arg,
+      syscalls__);
 }
 
 ::flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshake(::flatbuffers::FlatBufferBuilder &_fbb, const SnapshotHandshakeT *_o, const ::flatbuffers::rehasher_function_t *_rehasher = nullptr);
@@ -3038,6 +3231,81 @@ inline ::flatbuffers::Offset<ConnectRequestRaw> CreateConnectRequestRaw(::flatbu
       _syz_revision);
 }
 
+inline SyscallEntryRawT *SyscallEntryRaw::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
+  auto _o = std::unique_ptr<SyscallEntryRawT>(new SyscallEntryRawT());
+  UnPackTo(_o.get(), _resolver);
+  return _o.release();
+}
+
+inline void SyscallEntryRaw::UnPackTo(SyscallEntryRawT *_o, const ::flatbuffers::resolver_function_t *_resolver) const {
+  (void)_o;
+  (void)_resolver;
+  { auto _e = name(); if (_e) _o->name = _e->str(); }
+  { auto _e = nr(); _o->nr = _e; }
+  { auto _e = timeout(); _o->timeout = _e; }
+  { auto _e = prog_timeout(); _o->prog_timeout = _e; }
+  { auto _e = ignore_return(); _o->ignore_return = _e; }
+  { auto _e = remote_cover(); _o->remote_cover = _e; }
+}
+
+inline ::flatbuffers::Offset<SyscallEntryRaw> SyscallEntryRaw::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const SyscallEntryRawT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  return CreateSyscallEntryRaw(_fbb, _o, _rehasher);
+}
+
+inline ::flatbuffers::Offset<SyscallEntryRaw> CreateSyscallEntryRaw(::flatbuffers::FlatBufferBuilder &_fbb, const SyscallEntryRawT *_o, const ::flatbuffers::rehasher_function_t *_rehasher) {
+  (void)_rehasher;
+  (void)_o;
+  struct _VectorArgs { ::flatbuffers::FlatBufferBuilder *__fbb; const SyscallEntryRawT* __o; const ::flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+  auto _name = _o->name.empty() ? 0 : _fbb.CreateString(_o->name);
+  auto _nr = _o->nr;
+  auto _timeout = _o->timeout;
+  auto _prog_timeout = _o->prog_timeout;
+  auto _ignore_return = _o->ignore_return;
+  auto _remote_cover = _o->remote_cover;
+  return rpc::CreateSyscallEntryRaw(
+      _fbb,
+      _name,
+      _nr,
+      _timeout,
+      _prog_timeout,
+      _ignore_return,
+      _remote_cover);
+}
+
+inline ConnectReplyRawT::ConnectReplyRawT(const ConnectReplyRawT &o)
+      : debug(o.debug),
+        cover(o.cover),
+        cover_edges(o.cover_edges),
+        kernel_64_bit(o.kernel_64_bit),
+        procs(o.procs),
+        slowdown(o.slowdown),
+        syscall_timeout_ms(o.syscall_timeout_ms),
+        program_timeout_ms(o.program_timeout_ms),
+        leak_frames(o.leak_frames),
+        race_frames(o.race_frames),
+        features(o.features),
+        files(o.files) {
+  syscalls.reserve(o.syscalls.size());
+  for (const auto &syscalls_ : o.syscalls) { syscalls.emplace_back((syscalls_) ? new rpc::SyscallEntryRawT(*syscalls_) : nullptr); }
+}
+
+inline ConnectReplyRawT &ConnectReplyRawT::operator=(ConnectReplyRawT o) FLATBUFFERS_NOEXCEPT {
+  std::swap(debug, o.debug);
+  std::swap(cover, o.cover);
+  std::swap(cover_edges, o.cover_edges);
+  std::swap(kernel_64_bit, o.kernel_64_bit);
+  std::swap(procs, o.procs);
+  std::swap(slowdown, o.slowdown);
+  std::swap(syscall_timeout_ms, o.syscall_timeout_ms);
+  std::swap(program_timeout_ms, o.program_timeout_ms);
+  std::swap(leak_frames, o.leak_frames);
+  std::swap(race_frames, o.race_frames);
+  std::swap(features, o.features);
+  std::swap(files, o.files);
+  std::swap(syscalls, o.syscalls);
+  return *this;
+}
+
 inline ConnectReplyRawT *ConnectReplyRaw::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<ConnectReplyRawT>(new ConnectReplyRawT());
   UnPackTo(_o.get(), _resolver);
@@ -3059,6 +3327,7 @@ inline void ConnectReplyRaw::UnPackTo(ConnectReplyRawT *_o, const ::flatbuffers:
   { auto _e = race_frames(); if (_e) { _o->race_frames.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->race_frames[_i] = _e->Get(_i)->str(); } } else { _o->race_frames.resize(0); } }
   { auto _e = features(); _o->features = _e; }
   { auto _e = files(); if (_e) { _o->files.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->files[_i] = _e->Get(_i)->str(); } } else { _o->files.resize(0); } }
+  { auto _e = syscalls(); if (_e) { _o->syscalls.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->syscalls[_i]) { _e->Get(_i)->UnPackTo(_o->syscalls[_i].get(), _resolver); } else { _o->syscalls[_i] = std::unique_ptr<rpc::SyscallEntryRawT>(_e->Get(_i)->UnPack(_resolver)); }; } } else { _o->syscalls.resize(0); } }
 }
 
 inline ::flatbuffers::Offset<ConnectReplyRaw> ConnectReplyRaw::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const ConnectReplyRawT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -3081,6 +3350,7 @@ inline ::flatbuffers::Offset<ConnectReplyRaw> CreateConnectReplyRaw(::flatbuffer
   auto _race_frames = _o->race_frames.size() ? _fbb.CreateVectorOfStrings(_o->race_frames) : 0;
   auto _features = _o->features;
   auto _files = _o->files.size() ? _fbb.CreateVectorOfStrings(_o->files) : 0;
+  auto _syscalls = _o->syscalls.size() ? _fbb.CreateVector<::flatbuffers::Offset<rpc::SyscallEntryRaw>> (_o->syscalls.size(), [](size_t i, _VectorArgs *__va) { return CreateSyscallEntryRaw(*__va->__fbb, __va->__o->syscalls[i].get(), __va->__rehasher); }, &_va ) : 0;
   return rpc::CreateConnectReplyRaw(
       _fbb,
       _debug,
@@ -3094,7 +3364,8 @@ inline ::flatbuffers::Offset<ConnectReplyRaw> CreateConnectReplyRaw(::flatbuffer
       _leak_frames,
       _race_frames,
       _features,
-      _files);
+      _files,
+      _syscalls);
 }
 
 inline InfoRequestRawT::InfoRequestRawT(const InfoRequestRawT &o)
@@ -3709,6 +3980,32 @@ inline ::flatbuffers::Offset<SnapshotHeader> CreateSnapshotHeader(::flatbuffers:
       _output_size);
 }
 
+inline SnapshotHandshakeT::SnapshotHandshakeT(const SnapshotHandshakeT &o)
+      : cover_edges(o.cover_edges),
+        kernel_64_bit(o.kernel_64_bit),
+        slowdown(o.slowdown),
+        syscall_timeout_ms(o.syscall_timeout_ms),
+        program_timeout_ms(o.program_timeout_ms),
+        features(o.features),
+        env_flags(o.env_flags),
+        sandbox_arg(o.sandbox_arg) {
+  syscalls.reserve(o.syscalls.size());
+  for (const auto &syscalls_ : o.syscalls) { syscalls.emplace_back((syscalls_) ? new rpc::SyscallEntryRawT(*syscalls_) : nullptr); }
+}
+
+inline SnapshotHandshakeT &SnapshotHandshakeT::operator=(SnapshotHandshakeT o) FLATBUFFERS_NOEXCEPT {
+  std::swap(cover_edges, o.cover_edges);
+  std::swap(kernel_64_bit, o.kernel_64_bit);
+  std::swap(slowdown, o.slowdown);
+  std::swap(syscall_timeout_ms, o.syscall_timeout_ms);
+  std::swap(program_timeout_ms, o.program_timeout_ms);
+  std::swap(features, o.features);
+  std::swap(env_flags, o.env_flags);
+  std::swap(sandbox_arg, o.sandbox_arg);
+  std::swap(syscalls, o.syscalls);
+  return *this;
+}
+
 inline SnapshotHandshakeT *SnapshotHandshake::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {
   auto _o = std::unique_ptr<SnapshotHandshakeT>(new SnapshotHandshakeT());
   UnPackTo(_o.get(), _resolver);
@@ -3726,6 +4023,7 @@ inline void SnapshotHandshake::UnPackTo(SnapshotHandshakeT *_o, const ::flatbuff
   { auto _e = features(); _o->features = _e; }
   { auto _e = env_flags(); _o->env_flags = _e; }
   { auto _e = sandbox_arg(); _o->sandbox_arg = _e; }
+  { auto _e = syscalls(); if (_e) { _o->syscalls.resize(_e->size()); for (::flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { if(_o->syscalls[_i]) { _e->Get(_i)->UnPackTo(_o->syscalls[_i].get(), _resolver); } else { _o->syscalls[_i] = std::unique_ptr<rpc::SyscallEntryRawT>(_e->Get(_i)->UnPack(_resolver)); }; } } else { _o->syscalls.resize(0); } }
 }
 
 inline ::flatbuffers::Offset<SnapshotHandshake> SnapshotHandshake::Pack(::flatbuffers::FlatBufferBuilder &_fbb, const SnapshotHandshakeT* _o, const ::flatbuffers::rehasher_function_t *_rehasher) {
@@ -3744,6 +4042,7 @@ inline ::flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshake(::flatbu
   auto _features = _o->features;
   auto _env_flags = _o->env_flags;
   auto _sandbox_arg = _o->sandbox_arg;
+  auto _syscalls = _o->syscalls.size() ? _fbb.CreateVector<::flatbuffers::Offset<rpc::SyscallEntryRaw>> (_o->syscalls.size(), [](size_t i, _VectorArgs *__va) { return CreateSyscallEntryRaw(*__va->__fbb, __va->__o->syscalls[i].get(), __va->__rehasher); }, &_va ) : 0;
   return rpc::CreateSnapshotHandshake(
       _fbb,
       _cover_edges,
@@ -3753,7 +4052,8 @@ inline ::flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshake(::flatbu
       _program_timeout_ms,
       _features,
       _env_flags,
-      _sandbox_arg);
+      _sandbox_arg,
+      _syscalls);
 }
 
 inline SnapshotRequestT *SnapshotRequest::UnPack(const ::flatbuffers::resolver_function_t *_resolver) const {

@@ -31,9 +31,6 @@ import (
 type SyscallData struct {
 	Name     string
 	CallName string
-	NR       int32
-	NeedCall bool
-	Attrs    []uint64
 }
 
 type Define struct {
@@ -65,7 +62,6 @@ type CallPropDescription struct {
 type TemplateData struct {
 	Notice    string
 	OSes      []OSData
-	CallAttrs []string
 	CallProps []CallPropDescription
 }
 
@@ -167,11 +163,6 @@ func main() {
 		}
 	}
 
-	attrs := reflect.TypeFor[prog.SyscallAttrs]()
-	for field := range attrs.Fields() {
-		data.CallAttrs = append(data.CallAttrs, prog.CppName(field.Name))
-	}
-
 	props := prog.CallProps{}
 	props.ForeachProp(func(name, _ string, value reflect.Value) {
 		data.CallProps = append(data.CallProps, CallPropDescription{
@@ -271,31 +262,12 @@ func generateExecutorSyscalls(target *targets.Target, syscalls []*prog.Syscall, 
 		data.ForkServer = 1
 	}
 	defines := make(map[string]string)
+	seenCalls := make(map[string]bool)
 	for _, c := range syscalls {
-		var attrVals []uint64
-		attrs := reflect.ValueOf(c.Attrs)
-		last := -1
-		for i := range attrs.NumField() {
-			attr := attrs.Field(i)
-			val := uint64(0)
-			switch attr.Type().Kind() {
-			case reflect.Bool:
-				if attr.Bool() {
-					val = 1
-				}
-			case reflect.Uint64:
-				val = attr.Uint()
-			case reflect.String:
-				continue
-			default:
-				panic("unsupported syscall attribute type")
-			}
-			attrVals = append(attrVals, val)
-			if val != 0 {
-				last = i
-			}
+		if call, ok := newSyscallData(target, c); ok && !seenCalls[call.Name] {
+			seenCalls[call.Name] = true
+			data.Calls = append(data.Calls, call)
 		}
-		data.Calls = append(data.Calls, newSyscallData(target, c, attrVals[:last+1]))
 		// Some syscalls might not be present on the compiling machine, so we
 		// generate definitions for them.
 		if target.HasCallNumber(c.CallName) && target.NeedSyscallDefine(c.NR) {
@@ -313,20 +285,21 @@ func generateExecutorSyscalls(target *targets.Target, syscalls []*prog.Syscall, 
 	return data
 }
 
-func newSyscallData(target *targets.Target, sc *prog.Syscall, attrs []uint64) SyscallData {
-	callName, patchCallName := target.SyscallTrampolines[sc.Name]
+func newSyscallData(target *targets.Target, sc *prog.Syscall) (SyscallData, bool) {
+	callName, patchCallName := target.SyscallTrampolines[sc.CallName]
 	if !patchCallName {
 		callName = sc.CallName
 	}
-	return SyscallData{
-		Name:     sc.Name,
-		CallName: callName,
-		NR:       int32(sc.NR),
-		NeedCall: (!target.HasCallNumber(sc.CallName) || patchCallName) &&
-			// These are declared in the compiler for internal purposes.
-			!strings.HasPrefix(sc.Name, "syz_builtin"),
-		Attrs: attrs,
+	needCall := (!target.HasCallNumber(sc.CallName) || patchCallName) &&
+		// These are declared in the compiler for internal purposes.
+		!strings.HasPrefix(sc.CallName, "syz_builtin")
+	if !needCall {
+		return SyscallData{}, false
 	}
+	return SyscallData{
+		Name:     sc.CallName,
+		CallName: callName,
+	}, true
 }
 
 func writeTemplate(file string, templ *template.Template, data any) {
@@ -379,10 +352,6 @@ func init() {
 
 var defsTempl = template.Must(template.New("defs").Parse(`// {{.Notice}}
 
-struct call_attrs_t { {{range $attr := $.CallAttrs}}
-	uint64_t {{$attr}};{{end}}
-};
-
 struct call_props_t { {{range $attr := $.CallProps}}
 	{{$attr.Type}} {{$attr.Name}};{{end}}
 };
@@ -411,16 +380,16 @@ struct call_props_t { {{range $attr := $.CallProps}}
 {{end}}
 `))
 
-// nolint: lll
 var syscallsTempl = template.Must(template.New("syscalls").Parse(`// {{.Notice}}
 // clang-format off
 {{range $os := $.OSes}}
 #if GOOS_{{$os.GOOS}}
 {{range $arch := $os.Archs}}
 #if GOARCH_{{$arch.GOARCH}}
-const call_t syscalls[] = {
-{{range $c := $arch.Calls}}    {"{{$c.Name}}", {{$c.NR}}{{if or $c.Attrs $c.NeedCall}}, { {{- range $attr := $c.Attrs}}{{$attr}}, {{end}}}{{end}}{{if $c.NeedCall}}, (syscall_t){{$c.CallName}}{{end}}},
-{{end}}};
+const pseudo_syscall_t pseudo_syscalls[] = {
+{{range $c := $arch.Calls}}    {"{{$c.Name}}", (syscall_t){{$c.CallName}}},
+{{end}}    {nullptr, nullptr},
+};
 #endif
 {{end}}
 #endif

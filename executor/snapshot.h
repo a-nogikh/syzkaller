@@ -133,6 +133,7 @@ static void SnapshotSetup(char** argv, int argc)
 	    .slowdown_scale = static_cast<uint64>(msg->slowdown()),
 	};
 	parse_handshake(req);
+	load_syscalls(msg->syscalls());
 #if SYZ_HAVE_FEATURES
 	setup_sysctl();
 	setup_cgroups();

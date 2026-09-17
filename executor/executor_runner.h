@@ -93,6 +93,8 @@ public:
 	uint32 slowdown = 0;
 	uint32 syscall_timeout_ms = 0;
 	uint32 program_timeout_ms = 0;
+	uint64 num_syscalls = 0;
+	std::vector<char> syscalls_data;
 
 private:
 	friend std::ostream& operator<<(std::ostream& ss, const ProcOpts& opts)
@@ -112,7 +114,7 @@ class Proc
 {
 public:
 	Proc(Connection& conn, const char* bin, ProcIDPool& proc_id_pool, int& restarting, const bool& corpus_triaged, int max_signal_fd,
-	     int cover_filter_fd, ProcOpts opts)
+	     int cover_filter_fd, const ProcOpts& opts)
 	    : conn_(conn),
 	      bin_(bin),
 	      proc_id_pool_(proc_id_pool),
@@ -225,7 +227,7 @@ private:
 	const bool& corpus_triaged_;
 	const int max_signal_fd_;
 	const int cover_filter_fd_;
-	const ProcOpts opts_;
+	const ProcOpts& opts_;
 	State state_ = State::Started;
 	std::optional<Subprocess> process_;
 	ShmemFile req_shmem_;
@@ -376,6 +378,11 @@ private:
 		req_type_ = msg_->type;
 		exec_env_ = msg_->exec_opts->env_flags() & ~rpc::ExecEnv::ResetState;
 		sandbox_arg_ = msg_->exec_opts->sandbox_arg();
+		if (opts_.num_syscalls > 0) {
+			if (opts_.syscalls_data.size() > kMaxInput)
+				fail("syscalls data too large");
+			memcpy(req_shmem_.Mem(), opts_.syscalls_data.data(), opts_.syscalls_data.size());
+		}
 		handshake_req req = {
 		    .magic = kInMagic,
 		    .use_cover_edges = opts_.use_cover_edges,
@@ -386,6 +393,7 @@ private:
 		    .syscall_timeout_ms = opts_.syscall_timeout_ms,
 		    .program_timeout_ms = ProgramTimeoutMs(),
 		    .slowdown_scale = opts_.slowdown,
+		    .num_syscalls = opts_.num_syscalls,
 		    .return_error = IsSet(msg_->flags, rpc::RequestFlag::ReturnError),
 		};
 		if (write(req_pipe_, &req, sizeof(req)) != sizeof(req)) {
@@ -722,6 +730,19 @@ private:
 		proc_opts_.slowdown = conn_reply.slowdown;
 		proc_opts_.syscall_timeout_ms = conn_reply.syscall_timeout_ms;
 		proc_opts_.program_timeout_ms = conn_reply.program_timeout_ms;
+		proc_opts_.num_syscalls = conn_reply.syscalls.size();
+		for (const auto& src : conn_reply.syscalls) {
+			handshake_syscall hdr = {};
+			hdr.sys_nr = static_cast<int>(src->nr);
+			hdr.attrs.timeout = src->timeout;
+			hdr.attrs.prog_timeout = src->prog_timeout;
+			hdr.attrs.ignore_return = src->ignore_return;
+			hdr.attrs.remote_cover = src->remote_cover;
+			const char* raw = reinterpret_cast<const char*>(&hdr);
+			proc_opts_.syscalls_data.insert(proc_opts_.syscalls_data.end(), raw, raw + sizeof(hdr));
+			proc_opts_.syscalls_data.insert(proc_opts_.syscalls_data.end(), src->name.c_str(),
+							src->name.c_str() + src->name.size() + 1);
+		}
 		if (conn_reply.cover)
 			max_signal_.emplace();
 

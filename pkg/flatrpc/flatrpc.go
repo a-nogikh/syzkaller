@@ -738,19 +738,193 @@ func ConnectRequestRawEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	return builder.EndObject()
 }
 
+type SyscallEntryRawT struct {
+	Name         string `json:"name"`
+	Nr           int64  `json:"nr"`
+	Timeout      uint64 `json:"timeout"`
+	ProgTimeout  uint64 `json:"prog_timeout"`
+	IgnoreReturn bool   `json:"ignore_return"`
+	RemoteCover  bool   `json:"remote_cover"`
+}
+
+func (t *SyscallEntryRawT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+	if t == nil {
+		return 0
+	}
+	nameOffset := flatbuffers.UOffsetT(0)
+	if t.Name != "" {
+		nameOffset = builder.CreateString(t.Name)
+	}
+	SyscallEntryRawStart(builder)
+	SyscallEntryRawAddName(builder, nameOffset)
+	SyscallEntryRawAddNr(builder, t.Nr)
+	SyscallEntryRawAddTimeout(builder, t.Timeout)
+	SyscallEntryRawAddProgTimeout(builder, t.ProgTimeout)
+	SyscallEntryRawAddIgnoreReturn(builder, t.IgnoreReturn)
+	SyscallEntryRawAddRemoteCover(builder, t.RemoteCover)
+	return SyscallEntryRawEnd(builder)
+}
+
+func (rcv *SyscallEntryRaw) UnPackTo(t *SyscallEntryRawT) {
+	t.Name = string(rcv.Name())
+	t.Nr = rcv.Nr()
+	t.Timeout = rcv.Timeout()
+	t.ProgTimeout = rcv.ProgTimeout()
+	t.IgnoreReturn = rcv.IgnoreReturn()
+	t.RemoteCover = rcv.RemoteCover()
+}
+
+func (rcv *SyscallEntryRaw) UnPack() *SyscallEntryRawT {
+	if rcv == nil {
+		return nil
+	}
+	t := &SyscallEntryRawT{}
+	rcv.UnPackTo(t)
+	return t
+}
+
+type SyscallEntryRaw struct {
+	_tab flatbuffers.Table
+}
+
+func GetRootAsSyscallEntryRaw(buf []byte, offset flatbuffers.UOffsetT) *SyscallEntryRaw {
+	n := flatbuffers.GetUOffsetT(buf[offset:])
+	x := &SyscallEntryRaw{}
+	x.Init(buf, n+offset)
+	return x
+}
+
+func FinishSyscallEntryRawBuffer(builder *flatbuffers.Builder, offset flatbuffers.UOffsetT) {
+	builder.Finish(offset)
+}
+
+func GetSizePrefixedRootAsSyscallEntryRaw(buf []byte, offset flatbuffers.UOffsetT) *SyscallEntryRaw {
+	n := flatbuffers.GetUOffsetT(buf[offset+flatbuffers.SizeUint32:])
+	x := &SyscallEntryRaw{}
+	x.Init(buf, n+offset+flatbuffers.SizeUint32)
+	return x
+}
+
+func FinishSizePrefixedSyscallEntryRawBuffer(builder *flatbuffers.Builder, offset flatbuffers.UOffsetT) {
+	builder.FinishSizePrefixed(offset)
+}
+
+func (rcv *SyscallEntryRaw) Init(buf []byte, i flatbuffers.UOffsetT) {
+	rcv._tab.Bytes = buf
+	rcv._tab.Pos = i
+}
+
+func (rcv *SyscallEntryRaw) Table() flatbuffers.Table {
+	return rcv._tab
+}
+
+func (rcv *SyscallEntryRaw) Name() []byte {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
+	if o != 0 {
+		return rcv._tab.ByteVector(o + rcv._tab.Pos)
+	}
+	return nil
+}
+
+func (rcv *SyscallEntryRaw) Nr() int64 {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
+	if o != 0 {
+		return rcv._tab.GetInt64(o + rcv._tab.Pos)
+	}
+	return 0
+}
+
+func (rcv *SyscallEntryRaw) MutateNr(n int64) bool {
+	return rcv._tab.MutateInt64Slot(6, n)
+}
+
+func (rcv *SyscallEntryRaw) Timeout() uint64 {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
+	if o != 0 {
+		return rcv._tab.GetUint64(o + rcv._tab.Pos)
+	}
+	return 0
+}
+
+func (rcv *SyscallEntryRaw) MutateTimeout(n uint64) bool {
+	return rcv._tab.MutateUint64Slot(8, n)
+}
+
+func (rcv *SyscallEntryRaw) ProgTimeout() uint64 {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	if o != 0 {
+		return rcv._tab.GetUint64(o + rcv._tab.Pos)
+	}
+	return 0
+}
+
+func (rcv *SyscallEntryRaw) MutateProgTimeout(n uint64) bool {
+	return rcv._tab.MutateUint64Slot(10, n)
+}
+
+func (rcv *SyscallEntryRaw) IgnoreReturn() bool {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
+	if o != 0 {
+		return rcv._tab.GetBool(o + rcv._tab.Pos)
+	}
+	return false
+}
+
+func (rcv *SyscallEntryRaw) MutateIgnoreReturn(n bool) bool {
+	return rcv._tab.MutateBoolSlot(12, n)
+}
+
+func (rcv *SyscallEntryRaw) RemoteCover() bool {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
+	if o != 0 {
+		return rcv._tab.GetBool(o + rcv._tab.Pos)
+	}
+	return false
+}
+
+func (rcv *SyscallEntryRaw) MutateRemoteCover(n bool) bool {
+	return rcv._tab.MutateBoolSlot(14, n)
+}
+
+func SyscallEntryRawStart(builder *flatbuffers.Builder) {
+	builder.StartObject(6)
+}
+func SyscallEntryRawAddName(builder *flatbuffers.Builder, name flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(0, flatbuffers.UOffsetT(name), 0)
+}
+func SyscallEntryRawAddNr(builder *flatbuffers.Builder, nr int64) {
+	builder.PrependInt64Slot(1, nr, 0)
+}
+func SyscallEntryRawAddTimeout(builder *flatbuffers.Builder, timeout uint64) {
+	builder.PrependUint64Slot(2, timeout, 0)
+}
+func SyscallEntryRawAddProgTimeout(builder *flatbuffers.Builder, progTimeout uint64) {
+	builder.PrependUint64Slot(3, progTimeout, 0)
+}
+func SyscallEntryRawAddIgnoreReturn(builder *flatbuffers.Builder, ignoreReturn bool) {
+	builder.PrependBoolSlot(4, ignoreReturn, false)
+}
+func SyscallEntryRawAddRemoteCover(builder *flatbuffers.Builder, remoteCover bool) {
+	builder.PrependBoolSlot(5, remoteCover, false)
+}
+func SyscallEntryRawEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+	return builder.EndObject()
+}
+
 type ConnectReplyRawT struct {
-	Debug            bool     `json:"debug"`
-	Cover            bool     `json:"cover"`
-	CoverEdges       bool     `json:"cover_edges"`
-	Kernel64Bit      bool     `json:"kernel_64_bit"`
-	Procs            int32    `json:"procs"`
-	Slowdown         int32    `json:"slowdown"`
-	SyscallTimeoutMs int32    `json:"syscall_timeout_ms"`
-	ProgramTimeoutMs int32    `json:"program_timeout_ms"`
-	LeakFrames       []string `json:"leak_frames"`
-	RaceFrames       []string `json:"race_frames"`
-	Features         Feature  `json:"features"`
-	Files            []string `json:"files"`
+	Debug            bool                `json:"debug"`
+	Cover            bool                `json:"cover"`
+	CoverEdges       bool                `json:"cover_edges"`
+	Kernel64Bit      bool                `json:"kernel_64_bit"`
+	Procs            int32               `json:"procs"`
+	Slowdown         int32               `json:"slowdown"`
+	SyscallTimeoutMs int32               `json:"syscall_timeout_ms"`
+	ProgramTimeoutMs int32               `json:"program_timeout_ms"`
+	LeakFrames       []string            `json:"leak_frames"`
+	RaceFrames       []string            `json:"race_frames"`
+	Features         Feature             `json:"features"`
+	Files            []string            `json:"files"`
+	Syscalls         []*SyscallEntryRawT `json:"syscalls"`
 }
 
 func (t *ConnectReplyRawT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
@@ -796,6 +970,19 @@ func (t *ConnectReplyRawT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffse
 		}
 		filesOffset = builder.EndVector(filesLength)
 	}
+	syscallsOffset := flatbuffers.UOffsetT(0)
+	if t.Syscalls != nil {
+		syscallsLength := len(t.Syscalls)
+		syscallsOffsets := make([]flatbuffers.UOffsetT, syscallsLength)
+		for j := 0; j < syscallsLength; j++ {
+			syscallsOffsets[j] = t.Syscalls[j].Pack(builder)
+		}
+		ConnectReplyRawStartSyscallsVector(builder, syscallsLength)
+		for j := syscallsLength - 1; j >= 0; j-- {
+			builder.PrependUOffsetT(syscallsOffsets[j])
+		}
+		syscallsOffset = builder.EndVector(syscallsLength)
+	}
 	ConnectReplyRawStart(builder)
 	ConnectReplyRawAddDebug(builder, t.Debug)
 	ConnectReplyRawAddCover(builder, t.Cover)
@@ -809,6 +996,7 @@ func (t *ConnectReplyRawT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffse
 	ConnectReplyRawAddRaceFrames(builder, raceFramesOffset)
 	ConnectReplyRawAddFeatures(builder, t.Features)
 	ConnectReplyRawAddFiles(builder, filesOffset)
+	ConnectReplyRawAddSyscalls(builder, syscallsOffset)
 	return ConnectReplyRawEnd(builder)
 }
 
@@ -836,6 +1024,13 @@ func (rcv *ConnectReplyRaw) UnPackTo(t *ConnectReplyRawT) {
 	t.Files = make([]string, filesLength)
 	for j := 0; j < filesLength; j++ {
 		t.Files[j] = string(rcv.Files(j))
+	}
+	syscallsLength := rcv.SyscallsLength()
+	t.Syscalls = make([]*SyscallEntryRawT, syscallsLength)
+	for j := 0; j < syscallsLength; j++ {
+		x := SyscallEntryRaw{}
+		rcv.Syscalls(&x, j)
+		t.Syscalls[j] = x.UnPack()
 	}
 }
 
@@ -1042,8 +1237,28 @@ func (rcv *ConnectReplyRaw) FilesLength() int {
 	return 0
 }
 
+func (rcv *ConnectReplyRaw) Syscalls(obj *SyscallEntryRaw, j int) bool {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(28))
+	if o != 0 {
+		x := rcv._tab.Vector(o)
+		x += flatbuffers.UOffsetT(j) * 4
+		x = rcv._tab.Indirect(x)
+		obj.Init(rcv._tab.Bytes, x)
+		return true
+	}
+	return false
+}
+
+func (rcv *ConnectReplyRaw) SyscallsLength() int {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(28))
+	if o != 0 {
+		return rcv._tab.VectorLen(o)
+	}
+	return 0
+}
+
 func ConnectReplyRawStart(builder *flatbuffers.Builder) {
-	builder.StartObject(12)
+	builder.StartObject(13)
 }
 func ConnectReplyRawAddDebug(builder *flatbuffers.Builder, debug bool) {
 	builder.PrependBoolSlot(0, debug, false)
@@ -1088,6 +1303,12 @@ func ConnectReplyRawAddFiles(builder *flatbuffers.Builder, files flatbuffers.UOf
 	builder.PrependUOffsetTSlot(11, flatbuffers.UOffsetT(files), 0)
 }
 func ConnectReplyRawStartFilesVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+	return builder.StartVector(4, numElems, 4)
+}
+func ConnectReplyRawAddSyscalls(builder *flatbuffers.Builder, syscalls flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(12, flatbuffers.UOffsetT(syscalls), 0)
+}
+func ConnectReplyRawStartSyscallsVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(4, numElems, 4)
 }
 func ConnectReplyRawEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
@@ -3677,19 +3898,33 @@ func SnapshotHeaderEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 }
 
 type SnapshotHandshakeT struct {
-	CoverEdges       bool    `json:"cover_edges"`
-	Kernel64Bit      bool    `json:"kernel_64_bit"`
-	Slowdown         int32   `json:"slowdown"`
-	SyscallTimeoutMs int32   `json:"syscall_timeout_ms"`
-	ProgramTimeoutMs int32   `json:"program_timeout_ms"`
-	Features         Feature `json:"features"`
-	EnvFlags         ExecEnv `json:"env_flags"`
-	SandboxArg       int64   `json:"sandbox_arg"`
+	CoverEdges       bool                `json:"cover_edges"`
+	Kernel64Bit      bool                `json:"kernel_64_bit"`
+	Slowdown         int32               `json:"slowdown"`
+	SyscallTimeoutMs int32               `json:"syscall_timeout_ms"`
+	ProgramTimeoutMs int32               `json:"program_timeout_ms"`
+	Features         Feature             `json:"features"`
+	EnvFlags         ExecEnv             `json:"env_flags"`
+	SandboxArg       int64               `json:"sandbox_arg"`
+	Syscalls         []*SyscallEntryRawT `json:"syscalls"`
 }
 
 func (t *SnapshotHandshakeT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	if t == nil {
 		return 0
+	}
+	syscallsOffset := flatbuffers.UOffsetT(0)
+	if t.Syscalls != nil {
+		syscallsLength := len(t.Syscalls)
+		syscallsOffsets := make([]flatbuffers.UOffsetT, syscallsLength)
+		for j := 0; j < syscallsLength; j++ {
+			syscallsOffsets[j] = t.Syscalls[j].Pack(builder)
+		}
+		SnapshotHandshakeStartSyscallsVector(builder, syscallsLength)
+		for j := syscallsLength - 1; j >= 0; j-- {
+			builder.PrependUOffsetT(syscallsOffsets[j])
+		}
+		syscallsOffset = builder.EndVector(syscallsLength)
 	}
 	SnapshotHandshakeStart(builder)
 	SnapshotHandshakeAddCoverEdges(builder, t.CoverEdges)
@@ -3700,6 +3935,7 @@ func (t *SnapshotHandshakeT) Pack(builder *flatbuffers.Builder) flatbuffers.UOff
 	SnapshotHandshakeAddFeatures(builder, t.Features)
 	SnapshotHandshakeAddEnvFlags(builder, t.EnvFlags)
 	SnapshotHandshakeAddSandboxArg(builder, t.SandboxArg)
+	SnapshotHandshakeAddSyscalls(builder, syscallsOffset)
 	return SnapshotHandshakeEnd(builder)
 }
 
@@ -3712,6 +3948,13 @@ func (rcv *SnapshotHandshake) UnPackTo(t *SnapshotHandshakeT) {
 	t.Features = rcv.Features()
 	t.EnvFlags = rcv.EnvFlags()
 	t.SandboxArg = rcv.SandboxArg()
+	syscallsLength := rcv.SyscallsLength()
+	t.Syscalls = make([]*SyscallEntryRawT, syscallsLength)
+	for j := 0; j < syscallsLength; j++ {
+		x := SyscallEntryRaw{}
+		rcv.Syscalls(&x, j)
+		t.Syscalls[j] = x.UnPack()
+	}
 }
 
 func (rcv *SnapshotHandshake) UnPack() *SnapshotHandshakeT {
@@ -3854,8 +4097,28 @@ func (rcv *SnapshotHandshake) MutateSandboxArg(n int64) bool {
 	return rcv._tab.MutateInt64Slot(18, n)
 }
 
+func (rcv *SnapshotHandshake) Syscalls(obj *SyscallEntryRaw, j int) bool {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
+	if o != 0 {
+		x := rcv._tab.Vector(o)
+		x += flatbuffers.UOffsetT(j) * 4
+		x = rcv._tab.Indirect(x)
+		obj.Init(rcv._tab.Bytes, x)
+		return true
+	}
+	return false
+}
+
+func (rcv *SnapshotHandshake) SyscallsLength() int {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
+	if o != 0 {
+		return rcv._tab.VectorLen(o)
+	}
+	return 0
+}
+
 func SnapshotHandshakeStart(builder *flatbuffers.Builder) {
-	builder.StartObject(8)
+	builder.StartObject(9)
 }
 func SnapshotHandshakeAddCoverEdges(builder *flatbuffers.Builder, coverEdges bool) {
 	builder.PrependBoolSlot(0, coverEdges, false)
@@ -3880,6 +4143,12 @@ func SnapshotHandshakeAddEnvFlags(builder *flatbuffers.Builder, envFlags ExecEnv
 }
 func SnapshotHandshakeAddSandboxArg(builder *flatbuffers.Builder, sandboxArg int64) {
 	builder.PrependInt64Slot(7, sandboxArg, 0)
+}
+func SnapshotHandshakeAddSyscalls(builder *flatbuffers.Builder, syscalls flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(8, flatbuffers.UOffsetT(syscalls), 0)
+}
+func SnapshotHandshakeStartSyscallsVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+	return builder.StartVector(4, numElems, 4)
 }
 func SnapshotHandshakeEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	return builder.EndObject()
