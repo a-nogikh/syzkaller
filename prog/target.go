@@ -16,6 +16,15 @@ import (
 	"github.com/google/syzkaller/pkg/hash"
 )
 
+// TargetDesc contains compiled target descriptions.
+type TargetDesc struct {
+	Syscalls  []*Syscall
+	Resources []*ResourceDesc
+	Consts    []ConstValue
+	Flags     []FlagDesc
+	Types     []Type
+}
+
 // Target describes target OS/arch pair.
 type Target struct {
 	OS         string
@@ -27,11 +36,7 @@ type Target struct {
 	DataOffset uint64
 	BigEndian  bool
 
-	Syscalls  []*Syscall
-	Resources []*ResourceDesc
-	Consts    []ConstValue
-	Flags     []FlagDesc
-	Types     []Type
+	TargetDesc
 
 	// MakeDataMmap creates calls that mmaps target data memory range.
 	MakeDataMmap func() []*Call
@@ -139,6 +144,25 @@ func (target *Target) Extend(syscalls []*Syscall, types []Type, resources []*Res
 	target.Resources = append(target.Resources, resources...)
 	// Updates the system call map and restores any links.
 	target.initTarget()
+}
+
+// NewTarget constructs and initializes a new Target dynamically from compiled descriptions.
+func NewTarget(base *Target, desc *TargetDesc) *Target {
+	target := &Target{
+		OS:         base.OS,
+		Arch:       base.Arch,
+		Revision:   base.Revision,
+		PtrSize:    base.PtrSize,
+		PageSize:   base.PageSize,
+		NumPages:   base.NumPages,
+		DataOffset: base.DataOffset,
+		BigEndian:  base.BigEndian,
+		TargetDesc: *desc,
+		fillArch:   func(*Target) {},
+		initArch:   base.initArch,
+	}
+	target.init.Do(target.lazyInit)
+	return target
 }
 
 func (target *Target) lazyInit() {

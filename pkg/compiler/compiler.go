@@ -6,7 +6,9 @@
 package compiler
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -36,10 +38,28 @@ type Prog struct {
 	Resources []*prog.ResourceDesc
 	Syscalls  []*prog.Syscall
 	Types     []prog.Type
+	Flags     []prog.FlagDesc
 	// Set of unsupported syscalls/flags.
 	Unsupported map[string]bool
 	// Returned if consts was nil.
 	fileConsts map[string]*ConstInfo
+}
+
+func (p *Prog) TargetDesc(consts map[string]uint64) *prog.TargetDesc {
+	constArr := make([]prog.ConstValue, 0, len(consts))
+	for name, val := range consts {
+		constArr = append(constArr, prog.ConstValue{Name: name, Value: val})
+	}
+	slices.SortFunc(constArr, func(a, b prog.ConstValue) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+	return &prog.TargetDesc{
+		Syscalls:  p.Syscalls,
+		Resources: p.Resources,
+		Types:     p.Types,
+		Consts:    constArr,
+		Flags:     p.Flags,
+	}
 }
 
 func createCompiler(desc *ast.Description, target *targets.Target, eh ast.ErrorHandler) *compiler {
@@ -91,6 +111,18 @@ func Compile(desc *ast.Description, consts map[string]uint64, target *targets.Ta
 		}
 		return &Prog{fileConsts: fileConsts}
 	}
+	var flags []prog.FlagDesc
+	for _, decl := range desc.Nodes {
+		switch n := decl.(type) {
+		case *ast.IntFlags:
+			var flag prog.FlagDesc
+			flag.Name = n.Name.Name
+			for _, val := range n.Values {
+				flag.Values = append(flag.Values, val.Ident)
+			}
+			flags = append(flags, flag)
+		}
+	}
 	if comp.target.SyscallNumbers {
 		comp.assignSyscallNumbers(consts)
 	}
@@ -106,6 +138,7 @@ func Compile(desc *ast.Description, consts map[string]uint64, target *targets.Ta
 		Resources:   comp.genResources(),
 		Syscalls:    syscalls,
 		Types:       types,
+		Flags:       flags,
 		Unsupported: comp.unsupported,
 	}
 	if comp.errors != 0 {

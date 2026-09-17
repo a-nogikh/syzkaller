@@ -16,13 +16,7 @@ import (
 	"github.com/google/syzkaller/sys/targets"
 )
 
-type Desc struct {
-	Syscalls  []*prog.Syscall
-	Resources []*prog.ResourceDesc
-	Consts    []prog.ConstValue
-	Flags     []prog.FlagDesc
-	Types     []prog.Type
-}
+type Desc = prog.TargetDesc
 
 func Register(os, arch, revision string, init func(*prog.Target), files embed.FS) {
 	// Does not call targets.Get b/c it does slow lazy initialization of targets.
@@ -48,15 +42,9 @@ func fill(target *prog.Target, files embed.FS) {
 	if err != nil {
 		panic(err)
 	}
-	desc := new(Desc)
-	if err := gob.NewDecoder(flate.NewReader(bytes.NewReader(data))).Decode(desc); err != nil {
+	if err := gob.NewDecoder(flate.NewReader(bytes.NewReader(data))).Decode(&target.TargetDesc); err != nil {
 		panic(err)
 	}
-	target.Syscalls = desc.Syscalls
-	target.Resources = desc.Resources
-	target.Consts = desc.Consts
-	target.Flags = desc.Flags
-	target.Types = desc.Types
 }
 
 func Serialize(desc *Desc) ([]byte, error) {
