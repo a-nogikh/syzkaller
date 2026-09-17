@@ -191,31 +191,10 @@ type Job struct {
 }
 
 func processJob(job *Job, descriptions *ast.Description, constFile *compiler.ConstFile) {
-	var flags []prog.FlagDesc
-	for _, decl := range descriptions.Nodes {
-		switch n := decl.(type) {
-		case *ast.IntFlags:
-			var flag prog.FlagDesc
-			flag.Name = n.Name.Name
-			for _, val := range n.Values {
-				flag.Values = append(flag.Values, val.Ident)
-			}
-			flags = append(flags, flag)
-		}
-	}
-
 	eh := func(pos ast.Pos, msg string) {
 		job.Errors = append(job.Errors, fmt.Sprintf("%v: %v\n", pos, msg))
 	}
 	consts := constFile.Arch(job.Target.Arch)
-	constArr := make([]prog.ConstValue, 0, len(consts))
-	for name, val := range consts {
-		constArr = append(constArr, prog.ConstValue{Name: name, Value: val})
-	}
-	slices.SortFunc(constArr, func(a, b prog.ConstValue) int {
-		return cmp.Compare(a.Name, b.Name)
-	})
-
 	prg := compiler.Compile(descriptions, consts, job.Target, eh)
 	if prg == nil {
 		return
@@ -224,14 +203,7 @@ func processJob(job *Job, descriptions *ast.Description, constFile *compiler.Con
 		job.Unsupported[what] = true
 	}
 
-	desc := &generated.Desc{
-		Syscalls:  prg.Syscalls,
-		Resources: prg.Resources,
-		Types:     prg.Types,
-		Consts:    constArr,
-		Flags:     flags,
-	}
-	data, err := generated.Serialize(desc)
+	data, err := generated.Serialize(prg.TargetDesc(consts))
 	if err != nil {
 		tool.Fail(err)
 	}
