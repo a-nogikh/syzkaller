@@ -363,6 +363,7 @@ func (serv *server) handleRunnerConn(ctx context.Context, runner *Runner, conn *
 		Files:    serv.checker.RequiredFiles(),
 		Timeouts: serv.timeouts,
 		Callback: serv.handleMachineInfo,
+		Syscalls: flatrpc.BuildSyscallEntries(serv.target),
 	}
 	opts.LeakFrames, opts.RaceFrames = serv.mgr.BugFrames()
 	if serv.checkDone.Load() {

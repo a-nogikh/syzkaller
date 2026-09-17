@@ -35,6 +35,10 @@ func TestConn(t *testing.T) {
 		RaceFrames: []string{"bar", "baz"},
 		Features:   FeatureCoverage | FeatureLeak,
 		Files:      []string{"file1"},
+		Syscalls: []*SyscallEntry{
+			{Name: "read", Nr: 0},
+			{Name: "syz_foo$bar", Timeout: 10, ProgTimeout: 20, IgnoreReturn: true, RemoteCover: true},
+		},
 	}
 	executorMsg := &ExecutorMessage{
 		Msg: &ExecutorMessages{

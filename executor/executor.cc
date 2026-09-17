@@ -19,6 +19,7 @@
 #include <optional>
 
 #if !GOOS_windows
+#include <sys/mman.h>
 #include <unistd.h>
 #endif
 
@@ -340,6 +341,13 @@ static const uint64 arg_csum_chunk_const = 1;
 
 typedef intptr_t(SYSCALLAPI* syscall_t)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t);
 
+struct call_attrs_t {
+	uint64_t timeout;
+	uint64_t prog_timeout;
+	bool ignore_return;
+	bool remote_cover;
+};
+
 struct call_t {
 	const char* name;
 	int sys_nr;
@@ -418,6 +426,12 @@ static res_t results[kMaxCommands];
 
 const uint64 kInMagic = 0xbadc0ffeebadface;
 
+struct handshake_syscall {
+	int sys_nr;
+	bool pseudo_syscall;
+	call_attrs_t attrs;
+};
+
 struct handshake_req {
 	uint64 magic;
 	bool use_cover_edges;
@@ -428,6 +442,7 @@ struct handshake_req {
 	uint64 syscall_timeout_ms;
 	uint64 program_timeout_ms;
 	uint64 slowdown_scale;
+	uint64 num_syscalls;
 	bool return_error;
 };
 
@@ -498,7 +513,108 @@ static void parse_handshake(const handshake_req& req);
 
 static void mmap_input();
 
+struct pseudo_syscall_t {
+	const char* name;
+	syscall_t call;
+};
+
 #include "syscalls.h"
+
+// The syscall table is received from the host during handshake.
+// We use static storage b/c dynamic memory allocation disturbs the address space
+// of the test process. Linux targets have ~8K syscalls with ~250KB of names.
+const size_t kMaxSyscalls = 16 << 10;
+const size_t kMaxSyscallNamesSize = 1 << 20;
+// After loading, the table is made read-only so that fuzzed syscalls can't corrupt it
+// (previously the table was compiled-in and const). For that it needs to occupy whole pages;
+// 64KB alignment covers all page sizes we run on.
+struct alignas(64 << 10) syscall_table_t {
+	call_t calls[kMaxSyscalls];
+	char names[kMaxSyscallNamesSize];
+	size_t count;
+};
+static syscall_table_t syscall_table;
+static size_t syscall_names_size = 0;
+
+static syscall_t find_pseudo_syscall(const char* name)
+{
+	const char* dollar = strchr(name, '$');
+	size_t len = dollar ? static_cast<size_t>(dollar - name) : strlen(name);
+	for (size_t i = 0; pseudo_syscalls[i].name; i++) {
+		if (strncmp(pseudo_syscalls[i].name, name, len) == 0 && pseudo_syscalls[i].name[len] == 0)
+			return pseudo_syscalls[i].call;
+	}
+	return nullptr;
+}
+
+static void add_syscall(const char* name, int sys_nr, bool pseudo_syscall, const call_attrs_t& attrs)
+{
+	if (syscall_table.count >= kMaxSyscalls)
+		failmsg("too many syscalls", "max=%zu", kMaxSyscalls);
+	size_t name_len = strlen(name) + 1;
+	if (syscall_names_size + name_len > kMaxSyscallNamesSize)
+		failmsg("syscall names are too long", "max=%zu", kMaxSyscallNamesSize);
+	char* stored_name = syscall_table.names + syscall_names_size;
+	memcpy(stored_name, name, name_len);
+	syscall_names_size += name_len;
+	syscall_t call = nullptr;
+	if (pseudo_syscall) {
+		// The call must be implemented in the executor, otherwise we would
+		// silently execute syscall number 0 instead.
+		call = find_pseudo_syscall(stored_name);
+		if (!call)
+			failmsg("unknown pseudo-syscall", "name=%s", stored_name);
+	}
+	call_t& entry = syscall_table.calls[syscall_table.count++];
+	entry.name = stored_name;
+	entry.sys_nr = sys_nr;
+	entry.attrs = attrs;
+	entry.call = call;
+}
+
+static void check_syscalls_count(uint64 count)
+{
+	if (syscall_table.count != 0)
+		fail("syscall table is already loaded");
+	if (count == 0)
+		fail("empty syscall table");
+}
+
+static void seal_syscalls()
+{
+	if (mprotect(&syscall_table, sizeof(syscall_table), PROT_READ))
+		fail("failed to mprotect syscall table");
+}
+
+static void load_syscalls(uint64 count)
+{
+	check_syscalls_count(count);
+	const char* ptr = reinterpret_cast<const char*>(input_data);
+	for (size_t i = 0; i < count; i++) {
+		handshake_syscall hdr;
+		memcpy(&hdr, ptr, sizeof(hdr));
+		ptr += sizeof(hdr);
+		add_syscall(ptr, hdr.sys_nr, hdr.pseudo_syscall, hdr.attrs);
+		ptr += strlen(ptr) + 1;
+	}
+	seal_syscalls();
+}
+
+static void load_syscalls(const flatbuffers::Vector<flatbuffers::Offset<rpc::SyscallEntryRaw>>* entries)
+{
+	check_syscalls_count(entries ? entries->size() : 0);
+	for (size_t i = 0; i < entries->size(); i++) {
+		const auto* sc = entries->Get(i);
+		call_attrs_t attrs = {
+		    .timeout = sc->timeout(),
+		    .prog_timeout = sc->prog_timeout(),
+		    .ignore_return = sc->ignore_return(),
+		    .remote_cover = sc->remote_cover(),
+		};
+		add_syscall(sc->name() ? sc->name()->c_str() : "", sc->nr(), sc->pseudo_syscall(), attrs);
+	}
+	seal_syscalls();
+}
 
 #if GOOS_linux
 #ifndef MAP_FIXED_NOREPLACE
@@ -852,6 +968,7 @@ void parse_handshake(const handshake_req& req)
 	flag_delay_kcov_mmap = (bool)(req.flags & rpc::ExecEnv::DelayKcovMmap);
 	flag_nic_vf = (bool)(req.flags & rpc::ExecEnv::EnableNicVF);
 	flag_return_error = req.return_error;
+	load_syscalls(req.num_syscalls);
 }
 
 void receive_execute()
@@ -1081,9 +1198,9 @@ void execute_one()
 		}
 
 		// Normal syscall.
-		if (call_num >= ARRAY_SIZE(syscalls))
+		if (call_num >= syscall_table.count)
 			failmsg("invalid syscall number", "call_num=%llu", call_num);
-		const call_t* call = &syscalls[call_num];
+		const call_t* call = &syscall_table.calls[call_num];
 		if (prog_extra_timeout < call->attrs.prog_timeout)
 			prog_extra_timeout = call->attrs.prog_timeout * slowdown_scale;
 		if (call->attrs.remote_cover)
@@ -1544,7 +1661,7 @@ void* worker_thread(void* arg)
 
 void execute_call(thread_t* th)
 {
-	const call_t* call = &syscalls[th->call_num];
+	const call_t* call = &syscall_table.calls[th->call_num];
 	debug("#%d [%llums] -> %s(",
 	      th->id, current_time_ms() - start_time_ms, call->name);
 	for (int i = 0; i < th->num_args; i++) {
