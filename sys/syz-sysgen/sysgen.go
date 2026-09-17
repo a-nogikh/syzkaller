@@ -28,12 +28,9 @@ import (
 	"github.com/google/syzkaller/sys/targets"
 )
 
-type SyscallData struct {
-	Name     string
-	CallName string
-	NR       int32
-	NeedCall bool
-	Attrs    []uint64
+type PseudoSyscallData struct {
+	Name string
+	Func string
 }
 
 type Define struct {
@@ -42,14 +39,14 @@ type Define struct {
 }
 
 type ArchData struct {
-	Revision   string
-	ForkServer int
-	GOARCH     string
-	PageSize   uint64
-	NumPages   uint64
-	DataOffset uint64
-	Calls      []SyscallData
-	Defines    []Define
+	Revision       string
+	ForkServer     int
+	GOARCH         string
+	PageSize       uint64
+	NumPages       uint64
+	DataOffset     uint64
+	PseudoSyscalls []PseudoSyscallData
+	Defines        []Define
 }
 
 type OSData struct {
@@ -65,7 +62,6 @@ type CallPropDescription struct {
 type TemplateData struct {
 	Notice    string
 	OSes      []OSData
-	CallAttrs []string
 	CallProps []CallPropDescription
 }
 
@@ -167,11 +163,6 @@ func main() {
 		}
 	}
 
-	attrs := reflect.TypeFor[prog.SyscallAttrs]()
-	for field := range attrs.Fields() {
-		data.CallAttrs = append(data.CallAttrs, prog.CppName(field.Name))
-	}
-
 	props := prog.CallProps{}
 	props.ForeachProp(func(name, _ string, value reflect.Value) {
 		data.CallProps = append(data.CallProps, CallPropDescription{
@@ -271,38 +262,19 @@ func generateExecutorSyscalls(target *targets.Target, syscalls []*prog.Syscall, 
 		data.ForkServer = 1
 	}
 	defines := make(map[string]string)
+	seenCalls := make(map[string]bool)
 	for _, c := range syscalls {
-		var attrVals []uint64
-		attrs := reflect.ValueOf(c.Attrs)
-		last := -1
-		for i := range attrs.NumField() {
-			attr := attrs.Field(i)
-			val := uint64(0)
-			switch attr.Type().Kind() {
-			case reflect.Bool:
-				if attr.Bool() {
-					val = 1
-				}
-			case reflect.Uint64:
-				val = attr.Uint()
-			case reflect.String:
-				continue
-			default:
-				panic("unsupported syscall attribute type")
-			}
-			attrVals = append(attrVals, val)
-			if val != 0 {
-				last = i
-			}
+		if target.IsPseudoSyscall(c.CallName) && !seenCalls[c.CallName] {
+			seenCalls[c.CallName] = true
+			data.PseudoSyscalls = append(data.PseudoSyscalls, newPseudoSyscallData(target, c.CallName))
 		}
-		data.Calls = append(data.Calls, newSyscallData(target, c, attrVals[:last+1]))
 		// Some syscalls might not be present on the compiling machine, so we
 		// generate definitions for them.
 		if target.HasCallNumber(c.CallName) && target.NeedSyscallDefine(c.NR) {
 			defines[target.SyscallPrefix+c.CallName] = fmt.Sprintf("%d", c.NR)
 		}
 	}
-	slices.SortFunc(data.Calls, func(a, b SyscallData) int {
+	slices.SortFunc(data.PseudoSyscalls, func(a, b PseudoSyscallData) int {
 		return cmp.Compare(a.Name, b.Name)
 	})
 	// Get a sorted list of definitions.
@@ -313,19 +285,14 @@ func generateExecutorSyscalls(target *targets.Target, syscalls []*prog.Syscall, 
 	return data
 }
 
-func newSyscallData(target *targets.Target, sc *prog.Syscall, attrs []uint64) SyscallData {
-	callName, patchCallName := target.SyscallTrampolines[sc.Name]
-	if !patchCallName {
-		callName = sc.CallName
+func newPseudoSyscallData(target *targets.Target, callName string) PseudoSyscallData {
+	fn, ok := target.SyscallTrampolines[callName]
+	if !ok {
+		fn = callName
 	}
-	return SyscallData{
-		Name:     sc.Name,
-		CallName: callName,
-		NR:       int32(sc.NR),
-		NeedCall: (!target.HasCallNumber(sc.CallName) || patchCallName) &&
-			// These are declared in the compiler for internal purposes.
-			!strings.HasPrefix(sc.Name, "syz_builtin"),
-		Attrs: attrs,
+	return PseudoSyscallData{
+		Name: callName,
+		Func: fn,
 	}
 }
 
@@ -379,10 +346,6 @@ func init() {
 
 var defsTempl = template.Must(template.New("defs").Parse(`// {{.Notice}}
 
-struct call_attrs_t { {{range $attr := $.CallAttrs}}
-	uint64_t {{$attr}};{{end}}
-};
-
 struct call_props_t { {{range $attr := $.CallProps}}
 	{{$attr.Type}} {{$attr.Name}};{{end}}
 };
@@ -411,16 +374,16 @@ struct call_props_t { {{range $attr := $.CallProps}}
 {{end}}
 `))
 
-// nolint: lll
 var syscallsTempl = template.Must(template.New("syscalls").Parse(`// {{.Notice}}
 // clang-format off
 {{range $os := $.OSes}}
 #if GOOS_{{$os.GOOS}}
 {{range $arch := $os.Archs}}
 #if GOARCH_{{$arch.GOARCH}}
-const call_t syscalls[] = {
-{{range $c := $arch.Calls}}    {"{{$c.Name}}", {{$c.NR}}{{if or $c.Attrs $c.NeedCall}}, { {{- range $attr := $c.Attrs}}{{$attr}}, {{end}}}{{end}}{{if $c.NeedCall}}, (syscall_t){{$c.CallName}}{{end}}},
-{{end}}};
+const pseudo_syscall_t pseudo_syscalls[] = {
+{{range $c := $arch.PseudoSyscalls}}    {"{{$c.Name}}", (syscall_t){{$c.Func}}},
+{{end}}    {nullptr, nullptr},
+};
 #endif
 {{end}}
 #endif

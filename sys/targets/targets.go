@@ -67,6 +67,18 @@ func (target *Target) HasCallNumber(callName string) bool {
 	return target.SyscallNumbers && !strings.HasPrefix(callName, "syz_")
 }
 
+// IsPseudoSyscall returns whether the call is implemented by a C function
+// (a pseudo-syscall, a function-based OS interface or a syscall trampoline)
+// rather than by a raw syscall invocation.
+func (target *Target) IsPseudoSyscall(callName string) bool {
+	if strings.HasPrefix(callName, "syz_builtin") {
+		// These are declared in the compiler for internal purposes and are never executed.
+		return false
+	}
+	_, trampoline := target.SyscallTrampolines[callName]
+	return !target.HasCallNumber(callName) || trampoline
+}
+
 type osCommon struct {
 	// What OS can build native binaries for this OS.
 	// If not set, defaults to itself (i.e. native build).

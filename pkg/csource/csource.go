@@ -344,8 +344,7 @@ func (ctx *context) generateCalls(p prog.ExecProg, trace, addComments bool,
 }
 
 func isNative(sysTarget *targets.Target, callName string) bool {
-	_, trampoline := sysTarget.SyscallTrampolines[callName]
-	return sysTarget.HasCallNumber(callName) && !trampoline
+	return !sysTarget.IsPseudoSyscall(callName)
 }
 
 func (ctx *context) emitCall(w *bytes.Buffer, call prog.ExecCall, ci int, haveCopyout, trace bool) {

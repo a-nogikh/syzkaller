@@ -173,6 +173,7 @@ func (serv *snapshotServer) snapshotSetup(inst *vm.Instance, builder *flatbuffer
 		Features:         serv.Server.Features(),
 		EnvFlags:         env,
 		SandboxArg:       serv.cfg.SandboxArg,
+		Syscalls:         flatrpc.BuildSyscallEntries(serv.cfg.Target),
 	}
 	builder.Reset()
 	builder.Finish(msg.Pack(builder))
