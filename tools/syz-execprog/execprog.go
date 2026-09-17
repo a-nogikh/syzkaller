@@ -263,7 +263,7 @@ func (ctx *Context) Next() *queue.Request {
 	if ctx.hints {
 		req.ExecOpts.ExecFlags |= flatrpc.ExecFlagCollectComps
 	} else if ctx.signal || ctx.coverFile != "" {
-		req.ExecOpts.ExecFlags |= flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover
+		req.ExecOpts.ExecFlags |= flatrpc.ExecFlagCollectCover
 	}
 	req.OnDone(ctx.Done)
 	return req
@@ -320,8 +320,8 @@ func (ctx *Context) printCallResults(info *flatrpc.ProgInfo) {
 		if inf.Flags&flatrpc.CallFlagFaultInjected != 0 {
 			flags += " faulted"
 		}
-		log.Logf(1, "CALL %v: signal %v, coverage %v errno %v%v",
-			i, len(inf.Signal), len(inf.Cover), inf.Error, flags)
+		log.Logf(1, "CALL %v: coverage %v errno %v%v",
+			i, len(inf.Cover), inf.Error, flags)
 	}
 }
 
@@ -369,11 +369,11 @@ func (ctx *Context) dumpCallCoverage(coverFile string, info *flatrpc.CallInfo) {
 func (ctx *Context) dumpCoverage(info *flatrpc.ProgInfo) {
 	coverFile := fmt.Sprintf("%s_prog%v", ctx.coverFile, ctx.resultIndex.Add(1))
 	for i, inf := range info.Calls {
-		log.Logf(0, "call #%v: signal %v, coverage %v", i, len(inf.Signal), len(inf.Cover))
+		log.Logf(0, "call #%v: coverage %v", i, len(inf.Cover))
 		ctx.dumpCallCoverage(fmt.Sprintf("%v.%v", coverFile, i), inf)
 	}
 	if info.Extra != nil {
-		log.Logf(0, "extra: signal %v, coverage %v", len(info.Extra.Signal), len(info.Extra.Cover))
+		log.Logf(0, "extra: coverage %v", len(info.Extra.Cover))
 		ctx.dumpCallCoverage(fmt.Sprintf("%v.extra", coverFile), info.Extra)
 	}
 }

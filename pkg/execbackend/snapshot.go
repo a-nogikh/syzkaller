@@ -165,7 +165,6 @@ func (serv *snapshotServer) RunRequests(ctx context.Context, inst *vm.Instance,
 
 func (serv *snapshotServer) snapshotSetup(inst *vm.Instance, builder *flatbuffers.Builder, env flatrpc.ExecEnv) error {
 	msg := flatrpc.SnapshotHandshakeT{
-		CoverEdges:       serv.cfg.Experimental.CoverEdges,
 		Kernel64Bit:      serv.cfg.SysTarget.PtrSize == 8,
 		Slowdown:         int32(serv.cfg.Timeouts.Slowdown),
 		SyscallTimeoutMs: int32(serv.cfg.Timeouts.Syscall / time.Millisecond),
@@ -194,11 +193,11 @@ func (serv *snapshotServer) snapshotRun(inst *vm.Instance, builder *flatbuffers.
 		NumCalls:  int32(len(req.Prog.Calls)),
 		ProgData:  progData,
 	}
-	for _, call := range req.ReturnAllSignal {
+	for _, call := range req.ReturnAllCover {
 		if call < 0 {
-			msg.AllExtraSignal = true
+			msg.AllExtraCover = true
 		} else {
-			msg.AllCallSignal |= 1 << call
+			msg.AllCallCover |= 1 << call
 		}
 	}
 	builder.Reset()
@@ -224,7 +223,6 @@ func (serv *snapshotServer) snapshotRun(inst *vm.Instance, builder *flatbuffers.
 			res.Info.Extra = res.Info.ExtraRaw[0]
 			for _, info := range res.Info.ExtraRaw[1:] {
 				res.Info.Extra.Cover = append(res.Info.Extra.Cover, info.Cover...)
-				res.Info.Extra.Signal = append(res.Info.Extra.Signal, info.Signal...)
 			}
 			res.Info.ExtraRaw = nil
 		}

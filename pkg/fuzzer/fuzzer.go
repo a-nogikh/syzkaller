@@ -151,7 +151,7 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
 	// We do it before unblocking the waiting threads because
 	// it may result it concurrent modification of req.Prog.
 	var triage map[int]*triageCall
-	if req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectSignal > 0 && res.Info != nil && !dontTriage {
+	if req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover > 0 && res.Info != nil && !dontTriage {
 		for call, info := range res.Info.Calls {
 			fuzzer.triageProgCall(req.Prog, info, call, &triage)
 		}
@@ -217,6 +217,7 @@ type Config struct {
 	Logf           func(level int, msg string, args ...any)
 	Snapshot       bool
 	Coverage       bool
+	CovFilter      map[uint64]struct{}
 	FaultInjection bool
 	Comparisons    bool
 	Collide        bool
@@ -228,12 +229,26 @@ type Config struct {
 	ModeKFuzzTest  bool
 }
 
+func (fuzzer *Fuzzer) filterSignal(cover []uint64) []uint64 {
+	if fuzzer.Config.CovFilter == nil {
+		return cover
+	}
+	var filtered []uint64
+	for _, pc := range cover {
+		if _, ok := fuzzer.Config.CovFilter[pc]; ok {
+			filtered = append(filtered, pc)
+		}
+	}
+	return filtered
+}
+
 func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *flatrpc.CallInfo, call int, triage *map[int]*triageCall) {
 	if info == nil {
 		return
 	}
 	prio := signalPrio(p, info, call)
-	newMaxSignal := fuzzer.Cover.addRawMaxSignal(info.Signal, prio)
+	sig := fuzzer.filterSignal(info.Cover)
+	newMaxSignal := fuzzer.Cover.addRawMaxSignal(sig, prio)
 	if newMaxSignal.Empty() {
 		return
 	}
@@ -247,7 +262,7 @@ func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *flatrpc.CallInfo, call 
 	(*triage)[call] = &triageCall{
 		errno:     info.Error,
 		newSignal: newMaxSignal,
-		signals:   [deflakeNeedRuns]signal.Signal{signal.FromRaw(info.Signal, prio)},
+		signals:   [deflakeNeedRuns]signal.Signal{signal.FromRaw(sig, prio)},
 	}
 }
 
@@ -371,7 +386,7 @@ func (fuzzer *Fuzzer) AddCandidates(candidates []Candidate) {
 	for _, candidate := range candidates {
 		req := &queue.Request{
 			Prog:      candidate.Prog,
-			ExecOpts:  setFlags(flatrpc.ExecFlagCollectSignal),
+			ExecOpts:  setFlags(flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover),
 			Stat:      fuzzer.statExecCandidate,
 			Important: true,
 		}

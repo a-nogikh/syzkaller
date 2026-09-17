@@ -250,7 +250,6 @@ static OutputData* output_data;
 static std::optional<ShmemBuilder> output_builder;
 static uint32 output_size;
 static void mmap_output(uint32 size);
-static uint32 hash(uint32 a);
 static bool dedup(uint8 index, uint64 sig);
 
 static uint64 start_time_ms = 0;
@@ -276,7 +275,7 @@ static bool flag_delay_kcov_mmap;
 static bool flag_return_error;
 
 static bool flag_collect_cover;
-static bool flag_collect_signal;
+static bool flag_filter_cover;
 static bool flag_dedup_cover;
 static bool flag_threaded;
 
@@ -285,8 +284,8 @@ static bool flag_comparisons;
 
 static uint64 request_id;
 static rpc::RequestType request_type;
-static uint64 all_call_signal;
-static bool all_extra_signal;
+static uint64 all_call_cover;
+static bool all_extra_cover;
 
 // Tunable timeouts, received with execute_req.
 static uint64 syscall_timeout_ms;
@@ -327,7 +326,6 @@ const uint64 no_copyout = -1;
 static int running;
 static uint32 completed;
 static bool is_kernel_64_bit;
-static bool use_cover_edges;
 
 static uint8* input_data;
 
@@ -420,7 +418,6 @@ const uint64 kInMagic = 0xbadc0ffeebadface;
 
 struct handshake_req {
 	uint64 magic;
-	bool use_cover_edges;
 	bool is_kernel_64_bit;
 	rpc::ExecEnv flags;
 	uint64 pid;
@@ -436,8 +433,8 @@ struct execute_req {
 	uint64 id;
 	rpc::RequestType type;
 	uint64 exec_flags;
-	uint64 all_call_signal;
-	bool all_extra_signal;
+	uint64 all_call_cover;
+	bool all_extra_cover;
 	bool return_error;
 };
 
@@ -828,7 +825,6 @@ void parse_handshake(const handshake_req& req)
 	sandbox_arg = req.sandbox_arg;
 #endif
 	is_kernel_64_bit = req.is_kernel_64_bit;
-	use_cover_edges = req.use_cover_edges;
 	procid = req.pid;
 	syscall_timeout_ms = req.syscall_timeout_ms;
 	program_timeout_ms = req.program_timeout_ms;
@@ -869,19 +865,19 @@ void parse_execute(const execute_req& req)
 {
 	request_id = req.id;
 	request_type = req.type;
-	flag_collect_signal = req.exec_flags & (uint64)rpc::ExecFlag::CollectSignal;
 	flag_collect_cover = req.exec_flags & (uint64)rpc::ExecFlag::CollectCover;
+	flag_filter_cover = req.exec_flags & (uint64)rpc::ExecFlag::FilterCover;
 	flag_dedup_cover = req.exec_flags & (uint64)rpc::ExecFlag::DedupCover;
 	flag_comparisons = req.exec_flags & (uint64)rpc::ExecFlag::CollectComps;
 	flag_threaded = req.exec_flags & (uint64)rpc::ExecFlag::Threaded;
-	all_call_signal = req.all_call_signal;
-	all_extra_signal = req.all_extra_signal;
+	all_call_cover = req.all_call_cover;
+	all_extra_cover = req.all_extra_cover;
 	flag_return_error = req.return_error;
 
-	debug("[%llums] exec opts: reqid=%llu type=%llu procid=%llu threaded=%d cover=%d comps=%d dedup=%d signal=%d "
+	debug("[%llums] exec opts: reqid=%llu type=%llu procid=%llu threaded=%d cover=%d comps=%d dedup=%d filter=%d "
 	      " sandbox=%d/%d/%d/%d timeouts=%llu/%llu/%llu kernel_64_bit=%d\n",
 	      current_time_ms() - start_time_ms, request_id, (uint64)request_type, procid, flag_threaded, flag_collect_cover,
-	      flag_comparisons, flag_dedup_cover, flag_collect_signal, flag_sandbox_none, flag_sandbox_setuid,
+	      flag_comparisons, flag_dedup_cover, flag_filter_cover, flag_sandbox_none, flag_sandbox_setuid,
 	      flag_sandbox_namespace, flag_sandbox_android, syscall_timeout_ms, program_timeout_ms, slowdown_scale,
 	      is_kernel_64_bit);
 	if (syscall_timeout_ms == 0 || program_timeout_ms <= syscall_timeout_ms || slowdown_scale == 0)
@@ -891,7 +887,7 @@ void parse_execute(const execute_req& req)
 
 bool cover_collection_required()
 {
-	return flag_coverage && (flag_collect_signal || flag_collect_cover || flag_comparisons);
+	return flag_coverage && (flag_collect_cover || flag_comparisons);
 }
 
 void reply_execute(uint32 status)
@@ -907,10 +903,12 @@ void realloc_output_data()
 #if SYZ_EXECUTOR_USES_FORK_SERVER
 	if (flag_comparisons)
 		mmap_output(kMaxOutputComparisons);
-	else if (flag_collect_cover)
-		mmap_output(kMaxOutputCoverage);
-	else if (flag_collect_signal)
-		mmap_output(kMaxOutputSignal);
+	else if (flag_collect_cover) {
+		if (!flag_filter_cover || all_call_cover != 0 || all_extra_cover)
+			mmap_output(kMaxOutputCoverage);
+		else
+			mmap_output(kMaxOutputSignal);
+	}
 	if (close(kOutFd) < 0)
 		fail("failed to close kOutFd");
 #endif
@@ -1228,46 +1226,28 @@ thread_t* schedule_call(int call_index, int call_num, uint64 copyout_index, uint
 }
 
 template <typename cover_data_t>
-uint32 write_signal(flatbuffers::FlatBufferBuilder& fbb, int index, cover_t* cov, bool all)
-{
-	// Write out feedback signals.
-	// Currently it is code edges computed as xor of two subsequent basic block PCs.
-	fbb.StartVector<uint64_t>(0);
-	cover_data_t* cover_data = (cover_data_t*)(cov->data + cov->data_offset);
-	if ((char*)(cover_data + cov->size) > cov->data_end)
-		failmsg("too much cover", "cov=%u", cov->size);
-	uint32 nsig = 0;
-	cover_data_t prev_pc = 0;
-	bool prev_filter = true;
-	for (uint32 i = 0; i < cov->size; i++) {
-		cover_data_t pc = cover_data[i] + cov->pc_offset;
-		uint64 sig = pc;
-		if (use_cover_edges) {
-			// Only hash the lower 12 bits so the hash is independent of any module offsets.
-			const uint64 mask = (1 << 12) - 1;
-			sig ^= hash(prev_pc & mask) & mask;
-		}
-		bool filter = coverage_filter(pc);
-		// Ignore the edge only if both current and previous PCs are filtered out
-		// to capture all incoming and outcoming edges into the interesting code.
-		bool ignore = !filter && !prev_filter;
-		prev_pc = pc;
-		prev_filter = filter;
-		if (ignore || dedup(index, sig))
-			continue;
-		if (!all && max_signal && max_signal->Contains(sig))
-			continue;
-		fbb.PushElement(uint64(sig));
-		nsig++;
-	}
-	return fbb.EndVector(nsig);
-}
-
-template <typename cover_data_t>
-uint32 write_cover(flatbuffers::FlatBufferBuilder& fbb, cover_t* cov)
+uint32 write_cover(flatbuffers::FlatBufferBuilder& fbb, int index, cover_t* cov, bool all_cover)
 {
 	uint32 cover_size = cov->size;
 	cover_data_t* cover_data = (cover_data_t*)(cov->data + cov->data_offset);
+	if ((char*)(cover_data + cover_size) > cov->data_end)
+		failmsg("too much cover", "cov=%u", cover_size);
+
+	if (flag_filter_cover) {
+		fbb.StartVector<uint64_t>(0);
+		uint32 n = 0;
+		for (uint32 i = 0; i < cover_size; i++) {
+			cover_data_t pc = cover_data[i] + cov->pc_offset;
+			if (!coverage_filter(pc) || dedup(index, pc))
+				continue;
+			if (!all_cover && max_signal && max_signal->Contains(pc))
+				continue;
+			fbb.PushElement(uint64(pc));
+			n++;
+		}
+		return fbb.EndVector(n);
+	}
+
 	if (flag_dedup_cover) {
 		cover_data_t* end = cover_data + cover_size;
 		std::sort(cover_data, end);
@@ -1379,30 +1359,21 @@ void copyout_call_results(thread_t* th)
 	}
 }
 
-void write_output(int index, cover_t* cov, rpc::CallFlag flags, uint32 error, bool all_signal)
+void write_output(int index, cover_t* cov, rpc::CallFlag flags, uint32 error, bool all_cover)
 {
 	CoverAccessScope scope(cov);
 	auto& fbb = *output_builder;
 	const uint32 start_size = output_builder->GetSize();
 	(void)start_size;
-	uint32 signal_off = 0;
 	uint32 cover_off = 0;
 	uint32 comps_off = 0;
 	if (flag_comparisons) {
 		comps_off = write_comparisons(fbb, cov);
-	} else {
-		if (flag_collect_signal) {
-			if (is_kernel_64_bit)
-				signal_off = write_signal<uint64>(fbb, index, cov, all_signal);
-			else
-				signal_off = write_signal<uint32>(fbb, index, cov, all_signal);
-		}
-		if (flag_collect_cover) {
-			if (is_kernel_64_bit)
-				cover_off = write_cover<uint64>(fbb, cov);
-			else
-				cover_off = write_cover<uint32>(fbb, cov);
-		}
+	} else if (flag_collect_cover) {
+		if (is_kernel_64_bit)
+			cover_off = write_cover<uint64>(fbb, index, cov, all_cover);
+		else
+			cover_off = write_cover<uint32>(fbb, index, cov, all_cover);
 	}
 
 	rpc::CallInfoRawBuilder builder(*output_builder);
@@ -1410,8 +1381,6 @@ void write_output(int index, cover_t* cov, rpc::CallFlag flags, uint32 error, bo
 		flags |= rpc::CallFlag::CoverageOverflow;
 	builder.add_flags(flags);
 	builder.add_error(error);
-	if (signal_off)
-		builder.add_signal(signal_off);
 	if (cover_off)
 		builder.add_cover(cover_off);
 	if (comps_off)
@@ -1441,8 +1410,8 @@ void write_call_output(thread_t* th, bool finished)
 		if (th->fault_injected)
 			flags |= rpc::CallFlag::FaultInjected;
 	}
-	bool all_signal = th->call_index < 64 ? (all_call_signal & (1ull << th->call_index)) : false;
-	write_output(th->call_index, &th->cov, flags, reserrno, all_signal);
+	bool all_cover = th->call_index < 64 ? (all_call_cover & (1ull << th->call_index)) : false;
+	write_output(th->call_index, &th->cov, flags, reserrno, all_cover);
 }
 
 void write_extra_output()
@@ -1452,7 +1421,7 @@ void write_extra_output()
 	cover_collect(&extra_cov);
 	if (!extra_cov.size)
 		return;
-	write_output(-1, &extra_cov, rpc::CallFlag::NONE, 997, all_extra_signal);
+	write_output(-1, &extra_cov, rpc::CallFlag::NONE, 997, all_extra_cover);
 	cover_reset(&extra_cov);
 }
 
@@ -1600,19 +1569,6 @@ void execute_call(thread_t* th)
 	if (th->call_props.rerun > 0)
 		debug(" rerun=%d", th->call_props.rerun);
 	debug("\n");
-}
-
-static uint32 hash(uint32 a)
-{
-	// For test OS we disable hashing for determinism and testability.
-#if !GOOS_test
-	a = (a ^ 61) ^ (a >> 16);
-	a = a + (a << 3);
-	a = a ^ (a >> 4);
-	a = a * 0x27d4eb2d;
-	a = a ^ (a >> 15);
-#endif
-	return a;
 }
 
 const uint32 dedup_table_size = 8 << 10;

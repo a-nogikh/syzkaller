@@ -66,7 +66,6 @@ func TestNew(t *testing.T) {
 				cfg := defaultCfg
 				cfg.Experimental = mgrconfig.Experimental{
 					RemoteCover: false,
-					CoverEdges:  true,
 				}
 				return &cfg
 			},

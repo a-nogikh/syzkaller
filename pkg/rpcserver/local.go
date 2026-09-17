@@ -69,7 +69,6 @@ func setupLocal(ctx context.Context, cfg *LocalConfig) (*local, context.Context,
 	if cfg.VMArch == "" {
 		cfg.VMArch = cfg.Target.Arch
 	}
-	cfg.UseCoverEdges = true
 	cfg.FilterSignal = true
 	cfg.RPC = ":0"
 	cfg.PrintMachineCheck = log.V(1)

@@ -111,9 +111,8 @@ func createSuccessfulResults(source queue.Source, stop chan struct{}) {
 			res.Info = &flatrpc.ProgInfo{}
 			for range req.Prog.Calls {
 				res.Info.Calls = append(res.Info.Calls, &flatrpc.CallInfo{
-					Cover:  []uint64{1},
-					Signal: []uint64{1},
-					Comps:  []*flatrpc.Comparison{{Op1: 1, Op2: 2}},
+					Cover: []uint64{1},
+					Comps: []*flatrpc.Comparison{{Op1: 1, Op2: 2}},
 				})
 			}
 		case flatrpc.RequestTypeGlob:

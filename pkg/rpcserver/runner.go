@@ -28,7 +28,6 @@ type Runner struct {
 	source          *queue.Distributor
 	procs           int
 	cover           bool
-	coverEdges      bool
 	filterSignal    bool
 	debug           bool
 	debugTimeouts   bool
@@ -95,7 +94,6 @@ func (runner *Runner) Handshake(conn *flatrpc.Conn, cfg *handshakeConfig) (hands
 	connectReply := &flatrpc.ConnectReply{
 		Debug:            runner.debug,
 		Cover:            runner.cover,
-		CoverEdges:       runner.coverEdges,
 		Kernel64Bit:      runner.sysTarget.PtrSize == 8,
 		Procs:            int32(runner.procs),
 		Slowdown:         int32(cfg.Timeouts.Slowdown),
@@ -316,9 +314,9 @@ func (runner *Runner) sendRequest(req *queue.Request) error {
 	if req.ReturnError {
 		flags |= flatrpc.RequestFlagReturnError
 	}
-	allSignal := make([]int32, len(req.ReturnAllSignal))
-	for i, call := range req.ReturnAllSignal {
-		allSignal[i] = int32(call)
+	allCover := make([]int32, len(req.ReturnAllCover))
+	for i, call := range req.ReturnAllCover {
+		allCover[i] = int32(call)
 	}
 	opts := req.ExecOpts
 	if runner.debug {
@@ -366,13 +364,13 @@ func (runner *Runner) sendRequest(req *queue.Request) error {
 		Msg: &flatrpc.HostMessages{
 			Type: flatrpc.HostMessagesRawExecRequest,
 			Value: &flatrpc.ExecRequest{
-				Id:        id,
-				Type:      req.Type,
-				Avoid:     avoid,
-				Data:      data,
-				Flags:     flags,
-				ExecOpts:  &opts,
-				AllSignal: allSignal,
+				Id:       id,
+				Type:     req.Type,
+				Avoid:    avoid,
+				Data:     data,
+				Flags:    flags,
+				ExecOpts: &opts,
+				AllCover: allCover,
 			},
 		},
 	}
@@ -454,16 +452,15 @@ func (runner *Runner) handleExecResult(msg *flatrpc.ExecResult) error {
 		if len(msg.Info.ExtraRaw) != 0 {
 			msg.Info.Extra = msg.Info.ExtraRaw[0]
 			for _, info := range msg.Info.ExtraRaw[1:] {
-				// All processing in the fuzzer later will convert signal/cover to maps and dedup,
+				// All processing in the fuzzer later will convert cover to maps and dedup,
 				// so there is little point in deduping here.
 				msg.Info.Extra.Cover = append(msg.Info.Extra.Cover, info.Cover...)
-				msg.Info.Extra.Signal = append(msg.Info.Extra.Signal, info.Signal...)
 			}
 			msg.Info.ExtraRaw = nil
 			runner.convertCallInfo(msg.Info.Extra)
 		}
-		if !runner.cover && req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectSignal != 0 {
-			// Coverage collection is disabled, but signal was requested => use a substitute signal.
+		if !runner.cover && req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover != 0 {
+			// Coverage collection is disabled, but coverage was requested => use a substitute signal.
 			// Note that we do it after all the processing above in order to prevent it from being
 			// filtered out.
 			addFallbackSignal(req.Prog, msg.Info)
@@ -497,7 +494,6 @@ func (runner *Runner) handleExecResult(msg *flatrpc.ExecResult) error {
 
 func (runner *Runner) convertCallInfo(call *flatrpc.CallInfo) {
 	call.Cover = runner.canonicalizer.Canonicalize(call.Cover)
-	call.Signal = runner.canonicalizer.Canonicalize(call.Signal)
 
 	call.Comps = slices.DeleteFunc(call.Comps, func(cmp *flatrpc.Comparison) bool {
 		converted := runner.canonicalizer.Canonicalize([]uint64{cmp.Pc})
@@ -508,9 +504,9 @@ func (runner *Runner) convertCallInfo(call *flatrpc.CallInfo) {
 		return false
 	})
 
-	// Check signal belongs to kernel addresses.
+	// Check coverage belongs to kernel addresses.
 	// Mismatching addresses can mean either corrupted VM memory, or that the fuzzer somehow
-	// managed to inject output signal. If we see any bogus signal, drop whole signal
+	// managed to inject output coverage. If we see any bogus address, drop whole coverage
 	// (we don't want programs that can inject bogus coverage to end up in the corpus).
 	var kernelAddresses targets.KernelAddresses
 	if runner.filterSignal {
@@ -518,9 +514,8 @@ func (runner *Runner) convertCallInfo(call *flatrpc.CallInfo) {
 	}
 	textStart, textEnd := kernelAddresses.TextStart, kernelAddresses.TextEnd
 	if textStart != 0 {
-		for _, sig := range call.Signal {
-			if sig < textStart || sig > textEnd {
-				call.Signal = []uint64{}
+		for _, pc := range call.Cover {
+			if pc < textStart || pc > textEnd {
 				call.Cover = []uint64{}
 				break
 			}
@@ -658,6 +653,6 @@ func addFallbackSignal(p *prog.Prog, info *flatrpc.ProgInfo) {
 	}
 	p.FallbackSignal(callInfos)
 	for i, inf := range callInfos {
-		info.Calls[i].Signal = inf.Signal
+		info.Calls[i].Cover = inf.Signal
 	}
 }

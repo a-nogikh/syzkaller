@@ -56,7 +56,7 @@ func genProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *queue.Request {
 		fuzzer.ChoiceTable())
 	return &queue.Request{
 		Prog:     p,
-		ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
+		ExecOpts: setFlags(flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover),
 		Stat:     fuzzer.statExecGenerate,
 	}
 }
@@ -75,7 +75,7 @@ func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *queue.Request {
 	)
 	return &queue.Request{
 		Prog:     newP,
-		ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
+		ExecOpts: setFlags(flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover),
 		Stat:     fuzzer.statExecFuzz,
 	}
 }
@@ -238,9 +238,7 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 	prevTotalNewSignal := 0
 	for run := 1; ; run++ {
 		totalNewSignal := 0
-		indices := make([]int, 0, len(job.calls))
-		for call, info := range job.calls {
-			indices = append(indices, call)
+		for _, info := range job.calls {
 			totalNewSignal += len(info.newSignal)
 		}
 		if job.stopDeflake(run, needRuns, prevTotalNewSignal == totalNewSignal) {
@@ -248,11 +246,10 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 		}
 		prevTotalNewSignal = totalNewSignal
 		result := exec(&queue.Request{
-			Prog:            job.p,
-			ExecOpts:        setFlags(flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagCollectSignal),
-			ReturnAllSignal: indices,
-			Avoid:           avoid,
-			Stat:            job.fuzzer.statExecTriage,
+			Prog:     job.p,
+			ExecOpts: setFlags(flatrpc.ExecFlagCollectCover),
+			Avoid:    avoid,
+			Stat:     job.fuzzer.statExecTriage,
 		}, progInTriage)
 		if result.Stop() {
 			return true
@@ -281,10 +278,11 @@ func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result
 			// But also we already observed it and we know it's flaky, so at least doing
 			// cover.addRawMaxSignal for it looks useful.
 			prio := signalPrio(job.p, res, call)
-			newMaxSignal := job.fuzzer.Cover.addRawMaxSignal(res.Signal, prio)
+			sig := job.fuzzer.filterSignal(res.Cover)
+			newMaxSignal := job.fuzzer.Cover.addRawMaxSignal(sig, prio)
 			info.newSignal.Merge(newMaxSignal)
 			info.cover.Merge(res.Cover)
-			thisSignal := signal.FromRaw(res.Signal, prio)
+			thisSignal := signal.FromRaw(sig, prio)
 			for j := needRuns - 1; j > 0; j-- {
 				intersect := info.signals[j-1].Intersection(thisSignal)
 				info.signals[j].Merge(intersect)
@@ -365,10 +363,10 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
 		var mergedSignal signal.Signal
 		for range minimizeAttempts {
 			result := job.execute(&queue.Request{
-				Prog:            p1,
-				ExecOpts:        setFlags(flatrpc.ExecFlagCollectSignal),
-				ReturnAllSignal: []int{call1},
-				Stat:            job.fuzzer.statExecMinimize,
+				Prog:           p1,
+				ExecOpts:       setFlags(flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover),
+				ReturnAllCover: []int{call1},
+				Stat:           job.fuzzer.statExecMinimize,
 			}, 0)
 			if result.Stop() {
 				stop = true
@@ -409,9 +407,9 @@ func reexecutionSuccess(info *flatrpc.ProgInfo, oldErrno int32, call int) bool {
 		if oldErrno == 0 && info.Calls[call].Error != 0 {
 			return false
 		}
-		return len(info.Calls[call].Signal) != 0
+		return len(info.Calls[call].Cover) != 0
 	}
-	return info.Extra != nil && len(info.Extra.Signal) != 0
+	return info.Extra != nil && len(info.Extra.Cover) != 0
 }
 
 func getSignalAndCover(p *prog.Prog, info *flatrpc.ProgInfo, call int) signal.Signal {
@@ -422,7 +420,7 @@ func getSignalAndCover(p *prog.Prog, info *flatrpc.ProgInfo, call int) signal.Si
 	if inf == nil {
 		return nil
 	}
-	return signal.FromRaw(inf.Signal, signalPrio(p, inf, call))
+	return signal.FromRaw(inf.Cover, signalPrio(p, inf, call))
 }
 
 func signalPreview(s signal.Signal) string {
@@ -465,7 +463,7 @@ func (job *smashJob) run(fuzzer *Fuzzer) {
 			fuzzer.Config.Corpus.Programs())
 		result := fuzzer.execute(job.exec, &queue.Request{
 			Prog:     p,
-			ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
+			ExecOpts: setFlags(flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover),
 			Stat:     fuzzer.statExecSmash,
 		})
 		if result.Stop() {
@@ -578,7 +576,7 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
 			defer job.info.Execs.Add(1)
 			result := fuzzer.execute(job.exec, &queue.Request{
 				Prog:     p,
-				ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
+				ExecOpts: setFlags(flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover),
 				Stat:     fuzzer.statExecHint,
 			})
 			return !result.Stop()

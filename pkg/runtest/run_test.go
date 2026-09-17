@@ -147,16 +147,15 @@ func TestCover(t *testing.T) {
 }
 
 type CoverTest struct {
-	Is64Bit         bool
-	ExtraCoverage   bool
-	Input           []byte
-	MaxSignal       []uint64
-	CoverFilter     []uint64
-	ReturnAllSignal bool
-	Flags           flatrpc.ExecFlag
-	Cover           []uint64
-	Signal          []uint64
-	Comps           []*flatrpc.Comparison
+	Is64Bit        bool
+	ExtraCoverage  bool
+	Input          []byte
+	MaxSignal      []uint64
+	CoverFilter    []uint64
+	ReturnAllCover bool
+	Flags          flatrpc.ExecFlag
+	Cover          []uint64
+	Comps          []*flatrpc.Comparison
 }
 
 type Comparison struct {
@@ -180,41 +179,32 @@ func testCover(t *testing.T, target *prog.Target) {
 		{
 			Is64Bit: true,
 			Input:   makeCover64(),
-			Flags:   flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
+			Flags:   flatrpc.ExecFlagCollectCover,
 		},
 		{
 			Is64Bit: false,
 			Input:   makeCover32(),
-			Flags:   flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
+			Flags:   flatrpc.ExecFlagCollectCover,
 		},
 		// Single 64-bit PC.
-		{
-			Is64Bit: true,
-			Input:   makeCover64(0xc0dec0dec0112233),
-			Flags:   flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
-			Cover:   []uint64{0xc0dec0dec0112233},
-			Signal:  []uint64{0xc0dec0dec0112233},
-		},
-		// Single 32-bit PC.
-		{
-			Is64Bit: false,
-			Input:   makeCover32(0xc0112233),
-			Flags:   flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
-			Cover:   []uint64{0xc0112233},
-			Signal:  []uint64{0xc0112233},
-		},
-		// Ensure we don't sent cover/signal when not requested.
 		{
 			Is64Bit: true,
 			Input:   makeCover64(0xc0dec0dec0112233),
 			Flags:   flatrpc.ExecFlagCollectCover,
 			Cover:   []uint64{0xc0dec0dec0112233},
 		},
+		// Single 32-bit PC.
+		{
+			Is64Bit: false,
+			Input:   makeCover32(0xc0112233),
+			Flags:   flatrpc.ExecFlagCollectCover,
+			Cover:   []uint64{0xc0112233},
+		},
+		// Ensure we don't send cover when not requested.
 		{
 			Is64Bit: true,
 			Input:   makeCover64(0xc0dec0dec0112233),
-			Flags:   flatrpc.ExecFlagCollectSignal,
-			Signal:  []uint64{0xc0dec0dec0112233},
+			Flags:   0,
 		},
 		// Coverage deduplication.
 		{
@@ -232,25 +222,23 @@ func testCover(t *testing.T, target *prog.Target) {
 			Flags: flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagDedupCover,
 			Cover: []uint64{0xc0dec0dec0000011, 0xc0dec0dec0000022, 0xc0dec0dec0000033},
 		},
-		// Signal hashing.
 		{
 			Is64Bit: true,
-			Input: makeCover64(0xc0dec0dec0011001, 0xc0dec0dec0022002, 0xc0dec0dec00330f0,
-				0xc0dec0dec0044b00, 0xc0dec0dec0011001, 0xc0dec0dec0022002),
-			Flags: flatrpc.ExecFlagCollectSignal,
-			Signal: []uint64{0xc0dec0dec0011b01, 0xc0dec0dec0044bf0, 0xc0dec0dec00330f2,
-				0xc0dec0dec0022003, 0xc0dec0dec0011001},
+			Input: makeCover64(0xc0dec0dec0000033, 0xc0dec0dec0000022, 0xc0dec0dec0000011,
+				0xc0dec0dec0000011, 0xc0dec0dec0000022, 0xc0dec0dec0000033, 0xc0dec0dec0000011),
+			Flags: flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover,
+			Cover: []uint64{0xc0dec0dec0000011, 0xc0dec0dec0000022, 0xc0dec0dec0000033},
 		},
 		// Invalid non-kernel PCs must fail test execution.
 		{
 			Is64Bit: true,
 			Input:   makeCover64(0xc0dec0dec0000022, 0xc000000000000033),
-			Flags:   flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
+			Flags:   flatrpc.ExecFlagCollectCover,
 		},
 		{
 			Is64Bit: false,
 			Input:   makeCover32(0x33),
-			Flags:   flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
+			Flags:   flatrpc.ExecFlagCollectCover,
 		},
 		// 64-bit comparisons.
 		{
@@ -317,28 +305,25 @@ func testCover(t *testing.T, target *prog.Target) {
 			Input: makeCover64(0xc0dec0dec0000001, 0xc0dec0dec0000010, 0xc0dec0dec0000002,
 				0xc0dec0dec0000100, 0xc0dec0dec0001000),
 			MaxSignal: []uint64{0xc0dec0dec0000001, 0xc0dec0dec0000013, 0xc0dec0dec0000abc},
-			Flags:     flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
-			Cover: []uint64{0xc0dec0dec0000001, 0xc0dec0dec0000010, 0xc0dec0dec0000002,
-				0xc0dec0dec0000100, 0xc0dec0dec0001000},
-			Signal: []uint64{0xc0dec0dec0001100, 0xc0dec0dec0000102},
+			Flags:     flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover,
+			Cover:     []uint64{0xc0dec0dec0001000, 0xc0dec0dec0000100},
 		},
 		{
 			Is64Bit:   false,
 			Input:     makeCover32(0xc0000001, 0xc0000010, 0xc0000002, 0xc0000100, 0xc0001000),
 			MaxSignal: []uint64{0xc0000001, 0xc0000013, 0xc0000abc},
-			Flags:     flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
-			Cover:     []uint64{0xc0000001, 0xc0000010, 0xc0000002, 0xc0000100, 0xc0001000},
-			Signal:    []uint64{0xc0001100, 0xc0000102},
+			Flags:     flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover,
+			Cover:     []uint64{0xc0001000, 0xc0000100},
 		},
 		{
 			Is64Bit: true,
 			Input: makeCover64(0xc0dec0dec0000001, 0xc0dec0dec0000010, 0xc0dec0dec0000002,
 				0xc0dec0dec0000100, 0xc0dec0dec0001000),
-			MaxSignal:       []uint64{0xc0dec0dec0000001, 0xc0dec0dec0000013, 0xc0dec0dec0000abc},
-			ReturnAllSignal: true,
-			Flags:           flatrpc.ExecFlagCollectSignal,
-			Signal: []uint64{0xc0dec0dec0001100, 0xc0dec0dec0000102, 0xc0dec0dec0000012,
-				0xc0dec0dec0000011, 0xc0dec0dec0000001},
+			MaxSignal:      []uint64{0xc0dec0dec0000001, 0xc0dec0dec0000013, 0xc0dec0dec0000abc},
+			ReturnAllCover: true,
+			Flags:          flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover,
+			Cover: []uint64{0xc0dec0dec0001000, 0xc0dec0dec0000100, 0xc0dec0dec0000002,
+				0xc0dec0dec0000010, 0xc0dec0dec0000001},
 		},
 		// Test cover filter.
 		{
@@ -346,29 +331,24 @@ func testCover(t *testing.T, target *prog.Target) {
 			Input: makeCover64(0xc0dec0dec0000001, 0xc0dec0dec0000010, 0xc0dec0dec0000020,
 				0xc0dec0dec0000040, 0xc0dec0dec0000100, 0xc0dec0dec0001000, 0xc0dec0dec0002000),
 			CoverFilter: []uint64{0xc0dec0dec0000002, 0xc0dec0dec0000100},
-			Flags:       flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
-			Cover: []uint64{0xc0dec0dec0000001, 0xc0dec0dec0000010, 0xc0dec0dec0000020, 0xc0dec0dec0000040,
-				0xc0dec0dec0000100, 0xc0dec0dec0001000, 0xc0dec0dec0002000},
-			Signal: []uint64{0xc0dec0dec0001100, 0xc0dec0dec0000140, 0xc0dec0dec0000011, 0xc0dec0dec0000001},
+			Flags:       flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover,
+			Cover:       []uint64{0xc0dec0dec0000100, 0xc0dec0dec0000001},
 		},
 		{
 			Is64Bit: false,
 			Input: makeCover32(0xc0000001, 0xc0000010, 0xc0000020, 0xc0000040,
 				0xc0000100, 0xc0001000, 0xc0002000),
 			CoverFilter: []uint64{0xc0000002, 0xc0000100},
-			Flags:       flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
-			Cover: []uint64{0xc0000001, 0xc0000010, 0xc0000020, 0xc0000040,
-				0xc0000100, 0xc0001000, 0xc0002000},
-			Signal: []uint64{0xc0001100, 0xc0000140, 0xc0000011, 0xc0000001},
+			Flags:       flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover,
+			Cover:       []uint64{0xc0000100, 0xc0000001},
 		},
 		// Extra coverage.
 		{
 			Is64Bit:       true,
 			ExtraCoverage: true,
 			Input:         makeCover64(0xc0dec0dec0000001, 0xc0dec0dec0000010),
-			Flags:         flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover,
-			Cover:         []uint64{0xc0dec0dec0000001, 0xc0dec0dec0000010},
-			Signal:        []uint64{0xc0dec0dec0000011, 0xc0dec0dec0000001},
+			Flags:         flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagFilterCover,
+			Cover:         []uint64{0xc0dec0dec0000010, 0xc0dec0dec0000001},
 		},
 	}
 	executor := csource.BuildExecutor(t, target, "../../")
@@ -411,8 +391,8 @@ func testCover1(t *testing.T, ctx context.Context, target *prog.Target, test Cov
 			ExecFlags: test.Flags,
 		},
 	}
-	if test.ReturnAllSignal {
-		req.ReturnAllSignal = []int{0}
+	if test.ReturnAllCover {
+		req.ReturnAllCover = []int{0}
 	}
 	source.Submit(req)
 	res := req.Wait(ctx)
@@ -429,11 +409,7 @@ func testCover1(t *testing.T, ctx context.Context, target *prog.Target, test Cov
 	if test.Cover == nil {
 		test.Cover = []uint64{}
 	}
-	if test.Signal == nil {
-		test.Signal = []uint64{}
-	}
 	assert.Equal(t, test.Cover, call.Cover)
-	assert.Equal(t, test.Signal, call.Signal)
 	// Comparisons are reordered and order does not matter, so compare without order.
 	assert.ElementsMatch(t, test.Comps, call.Comps)
 }

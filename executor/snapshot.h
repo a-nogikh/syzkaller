@@ -123,7 +123,6 @@ static void SnapshotSetup(char** argv, int argc)
 	auto msg = flatbuffers::GetRoot<rpc::SnapshotHandshake>(ivs.input);
 	handshake_req req = {
 	    .magic = kInMagic,
-	    .use_cover_edges = msg->cover_edges(),
 	    .is_kernel_64_bit = msg->kernel_64_bit(),
 	    .flags = msg->env_flags(),
 	    .pid = 0,
@@ -247,8 +246,8 @@ static void SnapshotStart()
 	    .id = 0,
 	    .type = rpc::RequestType::Program,
 	    .exec_flags = static_cast<uint64>(msg->exec_flags()),
-	    .all_call_signal = msg->all_call_signal(),
-	    .all_extra_signal = msg->all_extra_signal(),
+	    .all_call_cover = msg->all_call_cover(),
+	    .all_extra_cover = msg->all_extra_cover(),
 	};
 	parse_execute(req);
 	output_data->num_calls.store(msg->num_calls(), std::memory_order_relaxed);

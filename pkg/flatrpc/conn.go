@@ -260,9 +260,6 @@ func verifyExecResult(res *ExecResultRaw, rawSize int) error {
 		// Cap array size at 1G to prevent overflows during multiplication by size and addition.
 		const maxSize = 1 << 30
 		size := 0
-		if call.SignalLength() != 0 {
-			size += min(maxSize, call.SignalLength()) * int(unsafe.Sizeof(call.Signal(0)))
-		}
 		if call.CoverLength() != 0 {
 			size += min(maxSize, call.CoverLength()) * int(unsafe.Sizeof(call.Cover(0)))
 		}

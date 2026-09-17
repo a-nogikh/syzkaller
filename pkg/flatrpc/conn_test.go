@@ -204,7 +204,7 @@ func FuzzRecv(f *testing.F) {
 				Info: &ProgInfo{
 					ExtraRaw: []*CallInfo{
 						{
-							Signal: []uint64{1, 2},
+							Cover: []uint64{1, 2},
 						},
 					},
 				},

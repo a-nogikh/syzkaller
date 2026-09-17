@@ -32,10 +32,10 @@ type Request struct {
 	BinaryFile  string     // for RequestTypeBinary
 	GlobPattern string     // for 	RequestTypeGlob
 
-	// Return all signal for these calls instead of new signal.
-	ReturnAllSignal []int
-	ReturnError     bool
-	ReturnOutput    bool
+	// Return all coverage for these calls instead of new coverage.
+	ReturnAllCover []int
+	ReturnError    bool
+	ReturnOutput   bool
 
 	// This stat will be incremented on request completion.
 	Stat *stat.Val
@@ -114,14 +114,13 @@ func (r *Request) Risky() bool {
 }
 
 func (r *Request) Validate() error {
-	collectSignal := r.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectSignal > 0
-	if len(r.ReturnAllSignal) != 0 && !collectSignal {
-		return fmt.Errorf("ReturnAllSignal is set, but FlagCollectSignal is not")
+	collectCover := r.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover > 0
+	if len(r.ReturnAllCover) != 0 && !collectCover {
+		return fmt.Errorf("ReturnAllCover is set, but FlagCollectCover is not")
 	}
 	collectComps := r.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectComps > 0
-	collectCover := r.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover > 0
-	if (collectComps) && (collectSignal || collectCover) {
-		return fmt.Errorf("hint collection is mutually exclusive with signal/coverage")
+	if collectComps && collectCover {
+		return fmt.Errorf("hint collection is mutually exclusive with coverage")
 	}
 	switch r.Type {
 	case flatrpc.RequestTypeProgram:

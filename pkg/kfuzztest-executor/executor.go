@@ -84,7 +84,6 @@ func (kfe *KFuzzTestExecutor) workerLoop(tid int) {
 				callInfo.Flags |= flatrpc.CallFlagBlocked
 			} else {
 				for _, pc := range coverage {
-					callInfo.Signal = append(callInfo.Signal, uint64(pc))
 					callInfo.Cover = append(callInfo.Cover, uint64(pc))
 				}
 				callInfo.Flags |= flatrpc.CallFlagExecuted

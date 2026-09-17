@@ -26,7 +26,7 @@ func TestDeflake(t *testing.T) {
 		{
 			Info: triageCall{
 				newSignal: signal.FromRaw([]uint64{0, 1, 2, 3, 4}, 0),
-				cover:     cover.FromRaw([]uint64{10, 20}),
+				cover:     cover.FromRaw([]uint64{1, 2, 3, 10, 20}),
 			},
 			Exec: func(run uint64) (int32, []uint64, []uint64) {
 				// For first, we return 1. For second, 2. And so on.
@@ -38,7 +38,7 @@ func TestDeflake(t *testing.T) {
 			Info: triageCall{
 				newSignal: signal.FromRaw([]uint64{0, 1, 2}, 0),
 				// Cover is a union of all coverages.
-				cover: cover.FromRaw([]uint64{10, 20, 30, 40, 100}),
+				cover: cover.FromRaw([]uint64{0, 1, 2, 4, 6, 8, 10, 20, 30, 40, 100}),
 				// 0, 2, 6 were in three resuls.
 				stableSignal: signal.FromRaw([]uint64{0, 2, 6}, 0),
 				// 0, 2 were also in newSignal.
@@ -63,7 +63,7 @@ func TestDeflake(t *testing.T) {
 		{
 			Info: triageCall{
 				newSignal:       signal.FromRaw([]uint64{0, 1, 2, 3, 4}, 3),
-				cover:           cover.FromRaw([]uint64{10, 20}),
+				cover:           cover.FromRaw([]uint64{1, 2, 3, 10, 20}),
 				stableSignal:    signal.FromRaw([]uint64{2}, 0),
 				newStableSignal: signal.FromRaw([]uint64{2}, 0),
 			},
@@ -92,8 +92,12 @@ func TestDeflake(t *testing.T) {
 				p:     prog,
 				calls: map[int]*triageCall{0: &info},
 				fuzzer: &Fuzzer{
-					Cover:  newCover(),
-					Config: &Config{},
+					Cover: newCover(),
+					Config: &Config{
+						CovFilter: map[uint64]struct{}{
+							0: {}, 1: {}, 2: {}, 3: {}, 4: {}, 6: {}, 8: {},
+						},
+					},
 				},
 				info: &JobInfo{},
 			}
@@ -105,9 +109,8 @@ func TestDeflake(t *testing.T) {
 				return &queue.Result{
 					Info: &flatrpc.ProgInfo{
 						Calls: []*flatrpc.CallInfo{{
-							Error:  errno,
-							Signal: signal,
-							Cover:  cover,
+							Error: errno,
+							Cover: append(signal, cover...),
 						}},
 					},
 				}

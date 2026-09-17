@@ -130,9 +130,6 @@ func emulateExec(req *queue.Request) (*queue.Result, string, error) {
 		if req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover > 0 {
 			callInfo.Cover = cover
 		}
-		if req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectSignal > 0 {
-			callInfo.Signal = cover
-		}
 		info.Calls = append(info.Calls, callInfo)
 	}
 	return &queue.Result{Info: &info}, "", nil

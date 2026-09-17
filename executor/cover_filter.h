@@ -11,9 +11,6 @@
 // However, in practice false positives should be very rare. A typical coverage call instruction is 4/5 bytes,
 // and there must be at least 1 other instruction in between them to make them different basic blocks,
 // so it's practically impossible to place 2 of them in the same 8-byte region.
-// For signal with hashed low 12 bits the probability is also low b/c overall density of coverage callbacks
-// is relatively low, a KASAN Linux kernel contains 1 callback per 88 bytes of code on average.
-// So even if we discard low 3 bits, average densitiy is still 1/11.
 // For gVisor with dense coverage IDs special care must be taken to avoid collisions.
 //
 // The set is organized as a 3 level table.

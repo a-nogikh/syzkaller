@@ -68,7 +68,6 @@ func (ci *CallInfo) clone() *CallInfo {
 		return nil
 	}
 	ret := *ci
-	ret.Signal = slices.Clone(ret.Signal)
 	ret.Cover = slices.Clone(ret.Cover)
 	ret.Comps = slices.Clone(ret.Comps)
 	return &ret

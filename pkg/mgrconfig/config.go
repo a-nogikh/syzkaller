@@ -246,7 +246,7 @@ type Experimental struct {
 	// Use KCOV remote coverage feature (default: true).
 	RemoteCover bool `json:"remote_cover"`
 
-	// Hash adjacent PCs to form fuzzing feedback signal, otherwise use PCs as signal (default: true).
+	// DEPRECATED: Edge coverage is no longer supported; signal is always based on PCs.
 	CoverEdges bool `json:"cover_edges"`
 
 	// Use automatically (auto) generated or manually (manual) written descriptions or any (any) (default: manual)

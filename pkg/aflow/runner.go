@@ -209,9 +209,9 @@ func (rm *RunnerManager) SubmitAsync(p *prog.Prog, onDone func(*queue.Result)) {
 		Prog: p.Clone(),
 		ExecOpts: flatrpc.ExecOpts{
 			// We force threaded mode to allow blocking calls to not hang the
-			// persistent VM pool execution. Cover and signal collection are always
+			// persistent VM pool execution. Cover collection is always
 			// requested for aflow seed generation.
-			ExecFlags: flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagThreaded,
+			ExecFlags: flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagThreaded,
 		},
 		ReturnError:  true,
 		ReturnOutput: true,

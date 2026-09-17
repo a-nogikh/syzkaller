@@ -62,8 +62,6 @@ type Config struct {
 	VMType string
 	RPC    string
 	VMLess bool
-	// Hash adjacent PCs to form fuzzing feedback signal (otherwise just use coverage PCs as signal).
-	UseCoverEdges bool
 	// Filter signal/comparisons against target kernel text/data ranges.
 	// Disabled for gVisor/Starnix which are not Linux.
 	FilterSignal      bool
@@ -194,8 +192,6 @@ func New(cfg *RemoteConfig) (Server, error) {
 		VMArch: cfg.TargetVMArch,
 		RPC:    cfg.RPC,
 		VMLess: cfg.VMLess,
-		// gVisor coverage is not a trace, so producing edges won't work.
-		UseCoverEdges: cfg.Experimental.CoverEdges && cfg.Type != targets.GVisor,
 		// gVisor/Starnix are not Linux, so filtering against Linux ranges won't work.
 		FilterSignal:      cfg.Type != targets.GVisor && cfg.Type != targets.Starnix,
 		PrintMachineCheck: true,
@@ -568,7 +564,6 @@ func (serv *server) CreateInstance(id int, injectExec chan<- bool, updInfo Updat
 		id:            id,
 		source:        serv.execSource,
 		cover:         serv.cfg.Cover,
-		coverEdges:    serv.cfg.UseCoverEdges,
 		filterSignal:  serv.cfg.FilterSignal,
 		debug:         serv.cfg.Debug,
 		debugTimeouts: serv.cfg.DebugTimeouts,

@@ -88,7 +88,6 @@ private:
 class ProcOpts
 {
 public:
-	bool use_cover_edges = false;
 	bool is_kernel_64_bit = false;
 	uint32 slowdown = 0;
 	uint32 syscall_timeout_ms = 0;
@@ -97,8 +96,7 @@ public:
 private:
 	friend std::ostream& operator<<(std::ostream& ss, const ProcOpts& opts)
 	{
-		ss << "use_cover_edges=" << opts.use_cover_edges
-		   << " is_kernel_64_bit=" << opts.is_kernel_64_bit
+		ss << "is_kernel_64_bit=" << opts.is_kernel_64_bit
 		   << " slowdown=" << opts.slowdown
 		   << " syscall_timeout_ms=" << opts.syscall_timeout_ms
 		   << " program_timeout_ms=" << opts.program_timeout_ms;
@@ -378,7 +376,6 @@ private:
 		sandbox_arg_ = msg_->exec_opts->sandbox_arg();
 		handshake_req req = {
 		    .magic = kInMagic,
-		    .use_cover_edges = opts_.use_cover_edges,
 		    .is_kernel_64_bit = opts_.is_kernel_64_bit,
 		    .flags = exec_env_,
 		    .pid = static_cast<uint64>(id_),
@@ -415,17 +412,17 @@ private:
 		raw.msg.Set(std::move(exec));
 		conn_.Send(raw);
 
-		uint64 all_call_signal = 0;
-		bool all_extra_signal = false;
-		for (int32_t call : msg_->all_signal) {
-			// This code assumes that call indices can be represented as bits in uint64 all_call_signal.
+		uint64 all_call_cover = 0;
+		bool all_extra_cover = false;
+		for (int32_t call : msg_->all_cover) {
+			// This code assumes that call indices can be represented as bits in uint64 all_call_cover.
 			static_assert(kMaxCalls == 64);
 			if (call < -1 || call >= static_cast<int32_t>(kMaxCalls))
-				failmsg("bad all_signal call", "call=%d", call);
+				failmsg("bad all_cover call", "call=%d", call);
 			if (call < 0)
-				all_extra_signal = true;
+				all_extra_cover = true;
 			else
-				all_call_signal |= 1ull << call;
+				all_call_cover |= 1ull << call;
 		}
 		memcpy(req_shmem_.Mem(), msg_->data.data(), std::min(msg_->data.size(), kMaxInput));
 		execute_req req{
@@ -433,8 +430,8 @@ private:
 		    .id = static_cast<uint64>(msg_->id),
 		    .type = msg_->type,
 		    .exec_flags = static_cast<uint64>(msg_->exec_opts->exec_flags()),
-		    .all_call_signal = all_call_signal,
-		    .all_extra_signal = all_extra_signal,
+		    .all_call_cover = all_call_cover,
+		    .all_extra_cover = all_extra_cover,
 		    .return_error = IsSet(msg_->flags, rpc::RequestFlag::ReturnError),
 		};
 		exec_start_ = current_time_ms();
@@ -710,14 +707,13 @@ private:
 		conn_.Recv(conn_reply);
 		if (conn_reply.debug)
 			flag_debug = true;
-		debug("connected to manager: procs=%d cover_edges=%d kernel_64_bit=%d slowdown=%d syscall_timeout=%u"
+		debug("connected to manager: procs=%d kernel_64_bit=%d slowdown=%d syscall_timeout=%u"
 		      " program_timeout=%u features=0x%llx\n",
-		      conn_reply.procs, conn_reply.cover_edges, conn_reply.kernel_64_bit,
+		      conn_reply.procs, conn_reply.kernel_64_bit,
 		      conn_reply.slowdown, conn_reply.syscall_timeout_ms,
 		      conn_reply.program_timeout_ms, static_cast<uint64>(conn_reply.features));
 		leak_frames_ = conn_reply.leak_frames;
 
-		proc_opts_.use_cover_edges = conn_reply.cover_edges;
 		proc_opts_.is_kernel_64_bit = is_kernel_64_bit = conn_reply.kernel_64_bit;
 		proc_opts_.slowdown = conn_reply.slowdown;
 		proc_opts_.syscall_timeout_ms = conn_reply.syscall_timeout_ms;

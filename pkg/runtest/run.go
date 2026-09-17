@@ -429,8 +429,7 @@ func (rt *Context) createSyzTest(p *prog.Prog, sandbox string, threaded, cov boo
 	}
 	if cov {
 		opts.EnvFlags |= flatrpc.ExecEnvSignal
-		opts.ExecFlags |= flatrpc.ExecFlagCollectSignal
-		opts.ExecFlags |= flatrpc.ExecFlagCollectCover
+		opts.ExecFlags |= flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagDedupCover | flatrpc.ExecFlagFilterCover
 	}
 	opts.EnvFlags |= features.FeaturesToFlags(rt.Features, nil)
 	if rt.Debug {
@@ -573,24 +572,21 @@ func flagStatus(flags, flag flatrpc.CallFlag) string {
 func checkCallCoverage(req *runRequest, run, call int, info *flatrpc.ProgInfo, calls map[string]bool) error {
 	inf := info.Calls[call]
 	if req.ExecOpts.EnvFlags&flatrpc.ExecEnvSignal == 0 {
-		if len(inf.Signal) != 0 {
-			return fmt.Errorf("run %v: call %v: got %v unwanted signal", run, call, len(inf.Signal))
+		if len(inf.Cover) != 0 {
+			return fmt.Errorf("run %v: call %v: got %v unwanted cover", run, call, len(inf.Cover))
 		}
 		return nil
 	}
 	callName := req.Prog.Calls[call].Meta.CallName
 	_, isNoCov := noCovSyscalls[callName]
-	// Signal is always deduplicated, so we may not get any signal
+	// Filtered coverage is deduplicated across calls, so we may not get any cover
 	// on a second invocation of the same syscall.
 	// For calls that are not meant to collect synchronous coverage we
-	// allow the signal to be empty as long as the extra signal is not.
+	// allow the cover to be empty as long as the extra cover is not.
 	if !isNoCov && !calls[callName] {
-		if len(inf.Signal) < 2 && len(info.Extra.Signal) == 0 {
-			return fmt.Errorf("run %v: call %v: no signal", run, call)
+		if len(inf.Cover) < 2 && (info.Extra == nil || len(info.Extra.Cover) == 0) {
+			return fmt.Errorf("run %v: call %v: no cover", run, call)
 		}
-	}
-	if !isNoCov && len(inf.Cover) == 0 {
-		return fmt.Errorf("run %v: call %v: no cover", run, call)
 	}
 	calls[callName] = true
 	return nil

@@ -52,7 +52,6 @@ table ConnectRequestRaw {
 table ConnectReplyRaw {
 	debug			:bool;
 	cover			:bool;
-	cover_edges		:bool;
 	kernel_64_bit		:bool;
 	procs			:int32;
 	slowdown		:int32;
@@ -157,9 +156,9 @@ enum ExecEnv : uint64 (bit_flags) {
 }
 
 enum ExecFlag : uint64 (bit_flags) {
-	CollectSignal,		// collect feedback signals
 	CollectCover,		// collect coverage
 	DedupCover,		// deduplicate coverage in executor
+	FilterCover,		// filter coverage using max_signal and cover_filter
 	CollectComps,		// collect KCOV comparisons
 	Threaded,		// use multiple threads to mitigate blocked syscalls
 }
@@ -181,8 +180,8 @@ table ExecRequestRaw {
 	data			:[uint8];
 	exec_opts		:ExecOptsRaw;
 	flags			:RequestFlag;
-	// Return all signal for these calls.
-	all_signal		:[int32];
+	// Return all coverage for these calls even if FilterCover is set.
+	all_cover		:[int32];
 }
 
 table SignalUpdateRaw {
@@ -222,10 +221,9 @@ table CallInfoRaw {
 	flags			:CallFlag;
 	// Call errno (0 if the call was successful).
 	error			:int32;
-	// Feedback signal, filled if ExecFlag.CollectSignal is set.
-	signal			:[uint64];
 	// Code coverage, filled if ExecFlag.CollectCover is set.
 	// If ExecFlag.DedupCover is set, then duplicates are removed, otherwise it contains a trace.
+	// If ExecFlag.FilterCover is set, coverage is filtered using max_signal and cover_filter.
 	cover			:[uint64];
 	// Comparison operands.
 	comps			:[ComparisonRaw];
@@ -295,7 +293,6 @@ table SnapshotHeader {
 }
 
 table SnapshotHandshake {
-	cover_edges		:bool;
 	kernel_64_bit		:bool;
 	slowdown		:int32;
 	syscall_timeout_ms	:int32;
@@ -308,7 +305,7 @@ table SnapshotHandshake {
 table SnapshotRequest {
 	exec_flags		:ExecFlag;
 	num_calls		:int32;
-	all_call_signal		:uint64;
-	all_extra_signal	:bool;
+	all_call_cover		:uint64;
+	all_extra_cover		:bool;
 	prog_data		:[uint8];
 }

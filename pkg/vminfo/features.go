@@ -129,16 +129,16 @@ func (ctx *checkContext) featureToFlags(feat flatrpc.Feature) (flatrpc.ExecEnv, 
 	switch feat {
 	case flatrpc.FeatureCoverage:
 		envFlags |= flatrpc.ExecEnvSignal
-		execFlags |= flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover
+		execFlags |= flatrpc.ExecFlagCollectCover
 	case flatrpc.FeatureComparisons:
 		envFlags |= flatrpc.ExecEnvSignal
 		execFlags |= flatrpc.ExecFlagCollectComps
 	case flatrpc.FeatureExtraCoverage:
 		envFlags |= flatrpc.ExecEnvSignal | flatrpc.ExecEnvExtraCover
-		execFlags |= flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover
+		execFlags |= flatrpc.ExecFlagCollectCover
 	case flatrpc.FeatureDelayKcovMmap:
 		envFlags |= flatrpc.ExecEnvSignal | flatrpc.ExecEnvDelayKcovMmap
-		execFlags |= flatrpc.ExecFlagCollectSignal | flatrpc.ExecFlagCollectCover
+		execFlags |= flatrpc.ExecFlagCollectCover
 	case flatrpc.FeatureKcovResetIoctl:
 		envFlags |= flatrpc.ExecEnvReadOnlyCoverage
 	case flatrpc.FeatureSandboxNone:
@@ -205,7 +205,7 @@ func (ctx *checkContext) featureSucceeded(feat flatrpc.Feature, testProg *prog.P
 	call := res.Info.Calls[0]
 	switch feat {
 	case flatrpc.FeatureCoverage:
-		if len(call.Cover) == 0 || len(call.Signal) == 0 {
+		if len(call.Cover) == 0 {
 			return "got no coverage"
 		}
 	case flatrpc.FeatureComparisons:

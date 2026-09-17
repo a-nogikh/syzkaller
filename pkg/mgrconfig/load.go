@@ -105,7 +105,6 @@ func DefaultValues() *Config {
 		RunFsck:        true,
 		Experimental: Experimental{
 			RemoteCover:      true,
-			CoverEdges:       true,
 			DescriptionsMode: ManualDescriptionsMode,
 		},
 	}
