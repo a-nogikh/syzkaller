@@ -189,9 +189,10 @@ func (s *set) New(name, desc string, opts ...any) *Val {
 		name:  name,
 		desc:  desc,
 		graph: name,
-		order: s.nextOrder.Add(1),
 		fmt:   func(v int, period time.Duration) string { return strconv.Itoa(v) },
 	}
+	var prom string
+	var ext func() int
 	stacked := false
 	for _, o := range opts {
 		switch opt := o.(type) {
@@ -210,23 +211,41 @@ func (s *set) New(name, desc string, opts ...any) *Val {
 		case Distribution:
 			v.hist = true
 		case func() int:
-			v.ext = opt
+			ext = opt
 		case func(int, time.Duration) string:
 			v.fmt = opt
 		case Prometheus:
-			// Prometheus Instrumentation https://prometheus.io/docs/guides/go-application.
-			prometheus.Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-				Name: string(opt),
-				Help: desc,
-			},
-				func() float64 { return float64(v.Val()) },
-			))
+			prom = string(opt)
 		default:
 			panic(fmt.Sprintf("unknown stats option %#v", o))
 		}
 	}
+	v.ext = ext
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if old := s.vals[name]; old != nil {
+		if v.ext == nil {
+			return old
+		}
+		v.order = old.order
+		s.vals[name] = v
+		return v
+	}
+	v.order = s.nextOrder.Add(1)
+	if prom != "" {
+		// Prometheus Instrumentation https://prometheus.io/docs/guides/go-application.
+		prometheus.Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: prom,
+			Help: desc,
+		},
+			func() float64 {
+				s.mu.Lock()
+				cur := s.vals[name]
+				s.mu.Unlock()
+				return float64(cur.Val())
+			},
+		))
+	}
 	s.vals[name] = v
 	if v.graph != "" {
 		if s.graphs[v.graph] == nil {

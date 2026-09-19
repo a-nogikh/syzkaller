@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSet(t *testing.T) {
@@ -214,3 +215,39 @@ func TestSetStress(t *testing.T) {
 	time.Sleep(time.Second)
 	stop.Store(true)
 }
+
+func TestSetReRegister(t *testing.T) {
+	set := newSet(4, false)
+
+	// Re-registering a counter stat preserves the existing *Val, accumulated count, and graph history.
+	counter1 := set.New("counter", "desc")
+	counter1.Add(42)
+	valA := 10
+	ext1 := set.New("ext_stat", "desc", func() int { return valA })
+	rate1 := set.New("rate_stat", "desc", Rate{})
+	rate1.Add(5)
+	set.tick()
+
+	counter2 := set.New("counter", "desc")
+	require.Same(t, counter1, counter2)
+	require.Equal(t, 42, counter2.Val())
+	counter2.Add(8)
+	require.Equal(t, 50, counter1.Val())
+
+	// Re-registering an external callback stat updates the registry and preserves graph history,
+	// while keeping ext1.Val() bound to its own instance.
+	valB := 25
+	ext2 := set.New("ext_stat", "desc", func() int { return valB })
+	require.Equal(t, 10, ext1.Val())
+	require.Equal(t, 25, ext2.Val())
+
+	rate2 := set.New("rate_stat", "desc", Rate{})
+	require.Same(t, rate1, rate2)
+	rate2.Add(7)
+	set.tick()
+
+	require.Equal(t, []float64{42, 50}, set.graphs["counter"].lines["counter"].data[:set.historyPos])
+	require.Equal(t, []float64{10, 25}, set.graphs["ext_stat"].lines["ext_stat"].data[:set.historyPos])
+	require.Equal(t, []float64{5, 7}, set.graphs["rate_stat"].lines["rate_stat"].data[:set.historyPos])
+}
+
