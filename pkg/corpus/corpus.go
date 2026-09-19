@@ -66,33 +66,75 @@ func NewMonitoredCorpus(ctx context.Context, updates chan<- NewItemEvent) *Corpu
 }
 
 func NewFocusedCorpus(ctx context.Context, updates chan<- NewItemEvent, areas []FocusArea) *Corpus {
+	corpus := newFocusedCorpus(ctx, updates, areas)
+	corpus.registerStats()
+	return corpus
+}
+
+func newFocusedCorpus(ctx context.Context, updates chan<- NewItemEvent, areas []FocusArea) *Corpus {
 	corpus := &Corpus{
 		ctx:          ctx,
 		progsMap:     make(map[string]*Item),
 		updates:      updates,
 		ProgramsList: &ProgramsList{},
 	}
+	for _, area := range areas {
+		corpus.focusAreas = append(corpus.focusAreas, &focusAreaState{
+			FocusArea:    area,
+			ProgramsList: &ProgramsList{},
+		})
+	}
+	return corpus
+}
+
+func (corpus *Corpus) registerStats() {
 	corpus.StatProgs = stat.New("corpus", "Number of test programs in the corpus", stat.Console,
 		stat.Link("/corpus"), stat.Graph("corpus"), stat.LenOf(&corpus.progsMap, &corpus.mu))
 	corpus.StatSignal = stat.New("signal", "Fuzzing signal in the corpus",
 		stat.LenOf(&corpus.signal, &corpus.mu))
 	corpus.StatCover = stat.New("coverage", "Source coverage in the corpus", stat.Console,
 		stat.Link("/cover"), stat.Prometheus("syz_corpus_cover"), stat.LenOf(&corpus.cover, &corpus.mu))
-	for _, area := range areas {
-		obj := &ProgramsList{}
-		if len(areas) > 1 && area.Name != "" && len(area.CoverPCs) > 0 {
+	for _, area := range corpus.focusAreas {
+		if len(corpus.focusAreas) > 1 && area.Name != "" && len(area.CoverPCs) > 0 {
 			// Only show extra statistics if there's more than one area.
 			stat.New("corpus ["+area.Name+"]",
 				fmt.Sprintf("Corpus programs of the focus area %q", area.Name),
 				stat.Console, stat.Graph("corpus"),
-				stat.LenOf(&obj.progs, &corpus.mu))
+				stat.LenOf(&area.progs, &corpus.mu))
 		}
-		corpus.focusAreas = append(corpus.focusAreas, &focusAreaState{
-			FocusArea:    area,
-			ProgramsList: obj,
+	}
+}
+
+// Migrate constructs a new Corpus with all items from corpus whose programs
+// can be deserialized under target.
+func (corpus *Corpus) Migrate(ctx context.Context, target *prog.Target) *Corpus {
+	corpus.mu.RLock()
+	areas := make([]FocusArea, len(corpus.focusAreas))
+	for i, fa := range corpus.focusAreas {
+		areas[i] = fa.FocusArea
+	}
+	updates := corpus.updates
+	corpus.mu.RUnlock()
+
+	newCorpus := newFocusedCorpus(ctx, nil, areas)
+	for _, item := range corpus.Items() {
+		newProg, err := target.Deserialize(item.Prog.Serialize(), prog.NonStrict)
+		if err != nil || len(newProg.Calls) != len(item.Prog.Calls) {
+			continue
+		}
+		if slices.ContainsFunc(newProg.Calls, func(c *prog.Call) bool { return c.Meta.Attrs.Disabled }) {
+			continue
+		}
+		newCorpus.Save(NewInput{
+			Prog:   newProg,
+			Call:   item.Call,
+			Signal: item.Signal.Copy(),
+			Cover:  slices.Clone(item.Cover),
 		})
 	}
-	return corpus
+	newCorpus.updates = updates
+	newCorpus.registerStats()
+	return newCorpus
 }
 
 // ItemUpdate represents an update to a corpus item.

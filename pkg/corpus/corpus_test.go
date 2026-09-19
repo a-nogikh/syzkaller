@@ -8,6 +8,8 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/google/syzkaller/pkg/ast"
+	"github.com/google/syzkaller/pkg/compiler"
 	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/pkg/stat"
@@ -234,3 +236,138 @@ func TestCallCoverPreserved(t *testing.T) {
 	callCover := corpus.CallCover()
 	require.Equal(t, cover.FromRaw([]uint64{10, 30}), callCover[prog.ExtraCallName].Cover)
 }
+
+func compileTestTarget(t *testing.T, desc string, consts map[string]uint64) *prog.Target {
+	t.Helper()
+	eh := func(pos ast.Pos, msg string) {
+		t.Fatalf("compile error at %v: %s", pos, msg)
+	}
+	parsed := ast.Parse([]byte(desc), "test.txt", eh)
+	require.NotNil(t, parsed)
+	base, err := prog.GetTarget(targets.TestOS, targets.TestArch64)
+	require.NoError(t, err)
+	comp := compiler.Compile(parsed, consts, targets.Get(targets.TestOS, targets.TestArch64), eh)
+	require.NotNil(t, comp)
+	return prog.NewTarget(base, comp.TargetDesc(consts))
+}
+
+func TestCorpusMigrate(t *testing.T) {
+	t.Parallel()
+	oldTarget := compileTestTarget(t, `
+s_data {
+	x	int32
+	y	int32
+}
+
+foo$untouched(a int32, b ptr[in, s_data])
+foo$refined(a int32)
+foo$disabled(a int32)
+foo$deleted(a int32)
+`, map[string]uint64{
+		"SYS_foo": 1,
+	})
+
+	// newTarget keeps foo$untouched, refines foo$refined with an extra argument,
+	// marks foo$disabled as [disabled], adds foo$new_variant, and removes foo$deleted.
+	newTarget := compileTestTarget(t, `
+s_data {
+	x	int32
+	y	int32
+}
+
+foo$new_variant(a int32)
+foo$untouched(a int32, b ptr[in, s_data])
+foo$refined(a int32, b int32)
+foo$disabled(a int32) (disabled)
+`, map[string]uint64{
+		"SYS_foo": 1,
+	})
+
+	area1 := FocusArea{
+		Name:     "migrate_area1",
+		CoverPCs: map[uint64]struct{}{10: {}},
+		Weight:   1.0,
+	}
+	area2 := FocusArea{
+		Name:     "migrate_area2",
+		CoverPCs: map[uint64]struct{}{20: {}},
+		Weight:   1.0,
+	}
+	updates := make(chan NewItemEvent, 10)
+	corpus := NewFocusedCorpus(context.Background(), updates, []FocusArea{area1, area2})
+
+	progs := []struct {
+		text  string
+		call  int
+		sig   []uint64
+		cover []uint64
+	}{
+		{
+			text:  "foo$untouched(0x1, &(0x7f0000000000)={0x2, 0x3})\n",
+			call:  0,
+			sig:   []uint64{100, 101},
+			cover: []uint64{10, 20},
+		},
+		{
+			// Adapted by NonStrict deserialization to foo$refined(0x5, 0x0).
+			text:  "foo$refined(0x5)\n",
+			call:  0,
+			sig:   []uint64{102},
+			cover: []uint64{20},
+		},
+		{
+			// Dropped because foo$disabled has the [disabled] attribute in newTarget.
+			text:  "foo$disabled(0x1)\n",
+			call:  0,
+			sig:   []uint64{199},
+			cover: []uint64{20},
+		},
+		{
+			// Dropped because foo$deleted no longer exists in newTarget.
+			text:  "foo$deleted(0x1)\n",
+			call:  0,
+			sig:   []uint64{200},
+			cover: []uint64{20},
+		},
+		{
+			// Dropped because one of the calls (foo$deleted) is stripped by NonStrict,
+			// changing len(newProg.Calls).
+			text:  "foo$deleted(0x1)\nfoo$untouched(0x1, &(0x7f0000000000)={0x2, 0x3})\n",
+			call:  1,
+			sig:   []uint64{201},
+			cover: []uint64{10},
+		},
+	}
+	for _, tc := range progs {
+		p, err := oldTarget.Deserialize([]byte(tc.text), prog.Strict)
+		require.NoError(t, err, "failed to deserialize %s", tc.text)
+		corpus.Save(NewInput{
+			Prog:   p,
+			Call:   tc.call,
+			Signal: signal.FromRaw(tc.sig, 0),
+			Cover:  tc.cover,
+		})
+		<-updates
+	}
+
+	migrated := corpus.Migrate(context.Background(), newTarget)
+
+	// Migrate should not re-emit NewItemEvents for migrated items, but should keep updates channel active.
+	require.Empty(t, updates)
+
+	items := migrated.Items()
+	require.Len(t, items, 2)
+	var gotProgs []string
+	for _, item := range items {
+		require.Same(t, newTarget, item.Prog.Target)
+		gotProgs = append(gotProgs, string(item.Prog.Serialize()))
+	}
+	require.ElementsMatch(t, []string{
+		"foo$untouched(0x1, &(0x7f0000000000)={0x2, 0x3})\n",
+		"foo$refined(0x5, 0x0)\n",
+	}, gotProgs)
+	require.Equal(t, 3, migrated.StatSignal.Val())
+	require.Equal(t, 2, migrated.StatProgs.Val())
+	require.Equal(t, map[string]int{"migrate_area1": 1, "migrate_area2": 2}, migrated.ProgsPerArea())
+}
+
