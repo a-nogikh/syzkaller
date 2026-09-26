@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/syzkaller/pkg/corpus"
+	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/execbackend"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/fuzzer"
@@ -63,7 +64,7 @@ func setup(name string, cfg *mgrconfig.Config, debug bool) (*kernelContext, erro
 		debug:           debug,
 		cfg:             cfg,
 		crashes:         make(chan *report.Report, 128),
-		candidates:      make(chan []fuzzer.Candidate),
+		candidates:      make(chan []fuzzer.Candidate, 1),
 		servStats:       rpcserver.NewNamedStats(name),
 		reportGenerator: manager.ReportGeneratorCache(cfg),
 	}
@@ -129,6 +130,29 @@ func (kc *kernelContext) Loop(ctx context.Context) error {
 	return eg.Wait()
 }
 
+func (kc *kernelContext) ReloadTarget(newTarget *prog.Target, candidates []fuzzer.Candidate, stream *queue.RandomQueue) error {
+	kc.pool.TogglePause(true)
+	defer kc.pool.TogglePause(false)
+
+	if err := kc.cfg.UpdateTarget(newTarget); err != nil {
+		return fmt.Errorf("failed to update config target for %q: %w", kc.name, err)
+	}
+	kc.serv.UpdateTarget(newTarget)
+	var source queue.Source = stream
+	if kc.source == nil {
+		kc.candidates <- candidates
+		syscalls := make(map[*prog.Syscall]bool, len(kc.cfg.Syscalls))
+		for _, id := range kc.cfg.Syscalls {
+			syscalls[newTarget.Syscalls[id]] = true
+		}
+		syscalls, _ = newTarget.TransitivelyEnabledCalls(syscalls)
+		source = queue.Tee(kc.setupFuzzer(kc.features, syscalls), stream)
+	}
+	opts := fuzzer.DefaultExecOpts(kc.cfg, kc.features, kc.debug)
+	kc.serv.SetSource(queue.DefaultOpts(source, opts))
+	return nil
+}
+
 func (kc *kernelContext) MaxSignal() signal.Signal {
 	if fuzzer := kc.fuzzer.Load(); fuzzer != nil {
 		return fuzzer.Cover.CopyMaxSignal()
@@ -161,7 +185,13 @@ func (kc *kernelContext) MachineChecked(features flatrpc.Feature,
 
 func (kc *kernelContext) setupFuzzer(features flatrpc.Feature, syscalls map[*prog.Syscall]bool) queue.Source {
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
-	corpusObj := corpus.NewFocusedCorpus(kc.ctx, nil, kc.coverFilters.Areas)
+	oldFuzzer := kc.fuzzer.Load()
+	var corpusObj *corpus.Corpus
+	if oldFuzzer != nil {
+		corpusObj = oldFuzzer.Config.Corpus.Migrate(kc.ctx, kc.cfg.Target)
+	} else {
+		corpusObj = corpus.NewFocusedCorpus(kc.ctx, nil, kc.coverFilters.Areas)
+	}
 	fuzzerObj := fuzzer.NewFuzzer(kc.ctx, &fuzzer.Config{
 		Corpus:   corpusObj,
 		Coverage: kc.cfg.Cover,
@@ -179,6 +209,9 @@ func (kc *kernelContext) setupFuzzer(features flatrpc.Feature, syscalls map[*pro
 			log.Logf(level, msg, args...)
 		},
 	}, rnd, kc.cfg.Target)
+	if oldFuzzer != nil {
+		fuzzerObj.Cover.AddMaxSignal(oldFuzzer.Cover.CopyMaxSignal())
+	}
 
 	if kc.http != nil {
 		kc.http.Fuzzer.Store(fuzzerObj)
@@ -201,23 +234,25 @@ func (kc *kernelContext) setupFuzzer(features flatrpc.Feature, syscalls map[*pro
 	log.Logf(0, "%s: adding %d seeds", kc.name, len(filtered))
 	fuzzerObj.AddCandidates(filtered)
 
-	go func() {
-		if !kc.cfg.Cover {
-			return
-		}
-		for {
-			select {
-			case <-time.After(time.Second):
-			case <-kc.ctx.Done():
+	if oldFuzzer == nil {
+		go func() {
+			if !kc.cfg.Cover {
 				return
 			}
-			newSignal := fuzzerObj.Cover.GrabSignalDelta()
-			if len(newSignal) == 0 {
-				continue
+			for {
+				select {
+				case <-time.After(time.Second):
+				case <-kc.ctx.Done():
+					return
+				}
+				newSignal := kc.fuzzer.Load().Cover.GrabSignalDelta()
+				if len(newSignal) == 0 {
+					continue
+				}
+				kc.serv.DistributeSignalDelta(newSignal)
 			}
-			kc.serv.DistributeSignalDelta(newSignal)
-		}
-	}()
+		}()
+	}
 	return fuzzerObj
 }
 
@@ -279,6 +314,27 @@ func (kc *kernelContext) ProgsPerArea() map[string]int {
 		return nil
 	}
 	return fuzzer.Config.Corpus.ProgsPerArea()
+}
+
+func (kc *kernelContext) Coverage() (*cover.ReportGenerator, []cover.Prog, error) {
+	fuzzer := kc.fuzzer.Load()
+	if fuzzer == nil {
+		return nil, nil, fmt.Errorf("fuzzer is not initialized yet")
+	}
+	rg, err := kc.reportGenerator.Get()
+	if err != nil {
+		return nil, nil, err
+	}
+	items := fuzzer.Config.Corpus.Items()
+	progs := make([]cover.Prog, 0, len(items))
+	for _, item := range items {
+		progs = append(progs, cover.Prog{
+			Sig:  item.Sig,
+			Data: string(item.Prog.Serialize(prog.SkipImages)),
+			PCs:  manager.CoverToPCs(kc.cfg, item.Cover),
+		})
+	}
+	return rg, progs, nil
 }
 
 func (kc *kernelContext) Crashes() <-chan *report.Report {

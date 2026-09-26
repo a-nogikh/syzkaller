@@ -10,6 +10,7 @@ import (
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/report"
 	"github.com/google/syzkaller/pkg/signal"
+	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/vm"
 	"github.com/google/syzkaller/vm/dispatcher"
 )
@@ -36,6 +37,9 @@ type Server interface {
 	// SetSource updates the source of execution requests for the backend.
 	// This is typically called after the initial machine check is complete.
 	SetSource(source queue.Source)
+
+	// UpdateTarget updates the target descriptions used for new runner connections.
+	UpdateTarget(target *prog.Target)
 
 	// Features returns the enabled features. It is only valid after the machine check is complete.
 	Features() flatrpc.Feature

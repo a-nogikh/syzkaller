@@ -189,23 +189,7 @@ func Complete(cfg *Config) error {
 		return fmt.Errorf("fuzzing_vms cannot be less than 0")
 	}
 
-	descriptionsMode, ok := strToDescriptionsMode[cfg.Experimental.DescriptionsMode]
-	if !ok {
-		allowed := slices.Sorted(maps.Keys(strToDescriptionsMode))
-		return fmt.Errorf("invalid descriptions_mode %q, must be one of: %s",
-			cfg.Experimental.DescriptionsMode, strings.Join(allowed, ", "))
-	}
-	if cfg.Snapshot {
-		descriptionsMode |= SnapshotDescriptions
-	}
-	var err error
-	cfg.Syscalls, err = ParseEnabledSyscalls(cfg.Target, cfg.EnabledSyscalls, cfg.DisabledSyscalls,
-		descriptionsMode)
-	if err != nil {
-		return err
-	}
-	cfg.NoMutateCalls, err = ParseNoMutateSyscalls(cfg.Target, cfg.NoMutateSyscalls)
-	if err != nil {
+	if err := cfg.completeSyscalls(); err != nil {
 		return err
 	}
 	if err := cfg.completeFocusAreas(); err != nil {
@@ -539,4 +523,29 @@ func MatchSyscall(name, pattern string) bool {
 		return true
 	}
 	return false
+}
+
+func (cfg *Config) completeSyscalls() error {
+	descriptionsMode, ok := strToDescriptionsMode[cfg.Experimental.DescriptionsMode]
+	if !ok {
+		allowed := slices.Sorted(maps.Keys(strToDescriptionsMode))
+		return fmt.Errorf("invalid descriptions_mode %q, must be one of: %s",
+			cfg.Experimental.DescriptionsMode, strings.Join(allowed, ", "))
+	}
+	if cfg.Snapshot {
+		descriptionsMode |= SnapshotDescriptions
+	}
+	var err error
+	cfg.Syscalls, err = ParseEnabledSyscalls(cfg.Target, cfg.EnabledSyscalls, cfg.DisabledSyscalls,
+		descriptionsMode)
+	if err != nil {
+		return err
+	}
+	cfg.NoMutateCalls, err = ParseNoMutateSyscalls(cfg.Target, cfg.NoMutateSyscalls)
+	return err
+}
+
+func (cfg *Config) UpdateTarget(target *prog.Target) error {
+	cfg.Target = target
+	return cfg.completeSyscalls()
 }

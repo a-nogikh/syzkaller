@@ -13,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/flatrpc"
+	"github.com/google/syzkaller/pkg/fuzzer"
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/log"
 	"github.com/google/syzkaller/pkg/manager"
@@ -21,6 +23,7 @@ import (
 	"github.com/google/syzkaller/pkg/report"
 	"github.com/google/syzkaller/pkg/repro"
 	"github.com/google/syzkaller/pkg/stat"
+	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/vm"
 	"golang.org/x/sync/errgroup"
 )
@@ -63,30 +66,18 @@ type Bug struct {
 	Repro  *repro.Result
 }
 
-func Run(ctx context.Context, baseCfg, newCfg *mgrconfig.Config, cfg Config) error {
+func New(baseCfg, newCfg *mgrconfig.Config, cfg Config) (*Context, error) {
 	if cfg.PatchedOnly == nil {
-		return fmt.Errorf("you must set up a patched only channel")
+		return nil, fmt.Errorf("you must set up a patched only channel")
 	}
 	base, err := setup("base", baseCfg, cfg.Debug)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	new, err := setup("new", newCfg, cfg.Debug)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	eg, ctx := errgroup.WithContext(ctx)
-	eg.Go(func() error {
-		info, err := manager.LoadSeeds(newCfg, true)
-		if err != nil {
-			return err
-		}
-		select {
-		case new.candidates <- info.Candidates:
-		case <-ctx.Done():
-		}
-		return nil
-	})
 
 	stream := queue.NewRandomQueue(4096, rand.New(rand.NewSource(time.Now().UnixNano())))
 	base.source = stream
@@ -99,7 +90,7 @@ func Run(ctx context.Context, baseCfg, newCfg *mgrconfig.Config, cfg Config) err
 		cfg.runner = &reproRunner{done: make(chan reproRunnerResult, 2)}
 	}
 
-	diffCtx := &diffContext{
+	diffCtx := &Context{
 		cfg:           cfg,
 		doneRepro:     make(chan *manager.ReproResult),
 		base:          base,
@@ -107,6 +98,17 @@ func Run(ctx context.Context, baseCfg, newCfg *mgrconfig.Config, cfg Config) err
 		store:         cfg.Store,
 		reproAttempts: map[string]int{},
 		patchedOnly:   cfg.PatchedOnly,
+		loadSeeds: func(ctx context.Context) error {
+			info, err := manager.LoadSeeds(newCfg, true)
+			if err != nil {
+				return err
+			}
+			select {
+			case new.candidates <- info.Candidates:
+			case <-ctx.Done():
+			}
+			return nil
+		},
 	}
 	if newCfg.HTTP != "" {
 		diffCtx.http = &manager.HTTPServer{
@@ -120,17 +122,24 @@ func Run(ctx context.Context, baseCfg, newCfg *mgrconfig.Config, cfg Config) err
 		}
 		new.http = diffCtx.http
 	}
-	eg.Go(func() error {
-		return diffCtx.Loop(ctx)
-	})
-	return eg.Wait()
+	return diffCtx, nil
+}
+
+func Run(ctx context.Context, baseCfg, newCfg *mgrconfig.Config, cfg Config) error {
+	diffCtx, err := New(baseCfg, newCfg, cfg)
+	if err != nil {
+		return err
+	}
+	return diffCtx.Loop(ctx)
 }
 
 type Kernel interface {
 	Loop(ctx context.Context) error
+	ReloadTarget(target *prog.Target, candidates []fuzzer.Candidate, stream *queue.RandomQueue) error
 	Crashes() <-chan *report.Report
 	TriageProgress() float64
 	ProgsPerArea() map[string]int
+	Coverage() (*cover.ReportGenerator, []cover.Prog, error)
 	CoverFilters() manager.CoverageFilters
 	Config() *mgrconfig.Config
 	Pool() *vm.Dispatcher
@@ -138,7 +147,7 @@ type Kernel interface {
 	Reporter() *report.Reporter
 }
 
-type diffContext struct {
+type Context struct {
 	cfg   Config
 	store *manager.DiffFuzzerStore
 	http  *manager.HTTPServer
@@ -147,6 +156,7 @@ type diffContext struct {
 	base        Kernel
 	new         Kernel
 	patchedOnly chan *Bug
+	loadSeeds   func(ctx context.Context) error
 
 	mu            sync.Mutex
 	reproAttempts map[string]int
@@ -159,8 +169,13 @@ const (
 	corpusTriageToMonitor = 0.99
 )
 
-func (dc *diffContext) Loop(ctx context.Context) error {
+func (dc *Context) Loop(ctx context.Context) error {
 	g, groupCtx := errgroup.WithContext(ctx)
+	if dc.loadSeeds != nil {
+		g.Go(func() error {
+			return dc.loadSeeds(groupCtx)
+		})
+	}
 	reproLoop := manager.NewReproLoop(dc, dc.new.Pool().Total()-dc.new.Config().FuzzingVMs, false)
 	if dc.http != nil {
 		dc.http.ReproLoop = reproLoop
@@ -246,7 +261,7 @@ loop:
 	return g.Wait()
 }
 
-func (dc *diffContext) handleReproResult(ctx context.Context, ret reproRunnerResult, reproLoop *manager.ReproLoop) {
+func (dc *Context) handleReproResult(ctx context.Context, ret reproRunnerResult, reproLoop *manager.ReproLoop) {
 	// We have run the reproducer on the base instance.
 
 	// A sanity check: the base kernel might have crashed with the same title
@@ -283,7 +298,7 @@ func (dc *diffContext) handleReproResult(ctx context.Context, ret reproRunnerRes
 	}
 }
 
-func (dc *diffContext) ignoreCrash(ctx context.Context, title string) bool {
+func (dc *Context) ignoreCrash(ctx context.Context, title string) bool {
 	if dc.store.EverCrashedBase(title) {
 		return true
 	}
@@ -302,7 +317,7 @@ func (dc *diffContext) ignoreCrash(ctx context.Context, title string) bool {
 	return false
 }
 
-func (dc *diffContext) reportBaseCrash(ctx context.Context, rep *report.Report) {
+func (dc *Context) reportBaseCrash(ctx context.Context, rep *report.Report) {
 	dc.store.BaseCrashed(rep.Title, rep.Report)
 	if dc.cfg.BaseCrashes == nil {
 		return
@@ -313,7 +328,7 @@ func (dc *diffContext) reportBaseCrash(ctx context.Context, rep *report.Report) 
 	}
 }
 
-func (dc *diffContext) waitCorpusTriage(ctx context.Context, threshold float64) chan struct{} {
+func (dc *Context) waitCorpusTriage(ctx context.Context, threshold float64) chan struct{} {
 	const triageCheckPeriod = 30 * time.Second
 	ret := make(chan struct{})
 	go func() {
@@ -336,7 +351,7 @@ func (dc *diffContext) waitCorpusTriage(ctx context.Context, threshold float64) 
 
 var ErrPatchedAreaNotReached = errors.New("fuzzer has not reached the patched area")
 
-func (dc *diffContext) monitorPatchedCoverage(ctx context.Context) error {
+func (dc *Context) monitorPatchedCoverage(ctx context.Context) error {
 	if dc.cfg.FuzzToReachPatched == 0 {
 		// The feature is disabled.
 		return nil
@@ -392,7 +407,7 @@ func needReproForTitle(title string) bool {
 	return true
 }
 
-func (dc *diffContext) shouldIgnore(crash *manager.Crash) bool {
+func (dc *Context) shouldIgnore(crash *manager.Crash) bool {
 	if !needReproForTitle(crash.Title) {
 		return true
 	}
@@ -404,7 +419,7 @@ func (dc *diffContext) shouldIgnore(crash *manager.Crash) bool {
 // NeedRepro is called by the repro loop before every reproduction attempt, so it must
 // only consult the in-memory state. The expensive checks are done in shouldIgnore()
 // once, at the moment the crash is first seen.
-func (dc *diffContext) NeedRepro(crash *manager.Crash) bool {
+func (dc *Context) NeedRepro(crash *manager.Crash) bool {
 	if crash.FullRepro {
 		return true
 	}
@@ -417,7 +432,7 @@ func (dc *diffContext) NeedRepro(crash *manager.Crash) bool {
 	return dc.reproAttempts[crash.Title] < maxReproAttempts
 }
 
-func (dc *diffContext) RunRepro(ctx context.Context, crash *manager.Crash) *manager.ReproResult {
+func (dc *Context) RunRepro(ctx context.Context, crash *manager.Crash) *manager.ReproResult {
 	dc.mu.Lock()
 	dc.reproAttempts[crash.Title]++
 	dc.mu.Unlock()
@@ -449,6 +464,30 @@ func (dc *diffContext) RunRepro(ctx context.Context, crash *manager.Crash) *mana
 	return ret
 }
 
-func (dc *diffContext) ResizeReproPool(size int) {
+func (dc *Context) ResizeReproPool(size int) {
 	dc.new.Pool().ReserveForRun(size)
+}
+
+func (dc *Context) ReloadTarget(newTarget *prog.Target, candidates []fuzzer.Candidate) error {
+	log.Logf(0, "reloading target with %d syscalls and %d seed candidates", len(newTarget.Syscalls), len(candidates))
+	stream := queue.NewRandomQueue(4096, rand.New(rand.NewSource(time.Now().UnixNano())))
+	if err := dc.base.ReloadTarget(newTarget, nil, stream); err != nil {
+		return fmt.Errorf("failed to reload base target: %w", err)
+	}
+	if err := dc.new.ReloadTarget(newTarget, candidates, stream); err != nil {
+		return fmt.Errorf("failed to reload patched target: %w", err)
+	}
+	return nil
+}
+
+func (dc *Context) WaitCorpusTriage(ctx context.Context) <-chan struct{} {
+	return dc.waitCorpusTriage(ctx, corpusTriageToMonitor)
+}
+
+func (dc *Context) ProgsPerArea() map[string]int {
+	return dc.new.ProgsPerArea()
+}
+
+func (dc *Context) Coverage() (*cover.ReportGenerator, []cover.Prog, error) {
+	return dc.new.Coverage()
 }

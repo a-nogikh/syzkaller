@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/flatrpc"
+	"github.com/google/syzkaller/pkg/fuzzer"
+	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/manager"
 	"github.com/google/syzkaller/pkg/mgrconfig"
 	"github.com/google/syzkaller/pkg/report"
@@ -23,7 +26,7 @@ type testEnv struct {
 	t       *testing.T
 	ctx     context.Context
 	cancel  context.CancelFunc
-	diffCtx *diffContext
+	diffCtx *Context
 	base    *MockKernel
 	new     *MockKernel
 	done    chan error
@@ -47,7 +50,7 @@ func newTestEnv(t *testing.T, cfg *Config) *testEnv {
 		cfg.runner = newMockRunner(nil)
 	}
 
-	diffCtx := &diffContext{
+	diffCtx := &Context{
 		cfg:           *cfg,
 		doneRepro:     make(chan *manager.ReproResult, 1),
 		store:         cfg.Store,
@@ -117,6 +120,7 @@ func (env *testEnv) waitForStatus(title string, status manager.DiffBugStatus) {
 
 type MockKernel struct {
 	LoopFunc          func(ctx context.Context) error
+	ReloadFunc        func(target *prog.Target, candidates []fuzzer.Candidate, stream *queue.RandomQueue) error
 	CrashesCh         chan *report.Report
 	TriageProgressVal float64
 	ProgsPerAreaVal   map[string]int
@@ -135,6 +139,16 @@ func (mk *MockKernel) Loop(ctx context.Context) error {
 	return nil
 }
 
+func (mk *MockKernel) ReloadTarget(target *prog.Target, candidates []fuzzer.Candidate, stream *queue.RandomQueue) error {
+	if mk.ConfigVal != nil {
+		mk.ConfigVal.Target = target
+	}
+	if mk.ReloadFunc != nil {
+		return mk.ReloadFunc(target, candidates, stream)
+	}
+	return nil
+}
+
 func (mk *MockKernel) Crashes() <-chan *report.Report {
 	return mk.CrashesCh
 }
@@ -145,6 +159,10 @@ func (mk *MockKernel) TriageProgress() float64 {
 
 func (mk *MockKernel) ProgsPerArea() map[string]int {
 	return mk.ProgsPerAreaVal
+}
+
+func (mk *MockKernel) Coverage() (*cover.ReportGenerator, []cover.Prog, error) {
+	return nil, nil, nil
 }
 
 func (mk *MockKernel) CoverFilters() manager.CoverageFilters {

@@ -47,6 +47,7 @@ type Server interface {
 	TriagedCorpus()
 	Serve(context.Context) error
 	SetSource(source queue.Source)
+	UpdateTarget(target *prog.Target)
 	Features() flatrpc.Feature
 	CreateInstance(id int, injectExec chan<- bool, updInfo UpdateInfo) chan error
 	ShutdownInstance(id int, crashed bool, extraExecs ...report.ExecutorInfo) ([]ExecRecord, []byte)
@@ -338,10 +339,7 @@ func (serv *server) handleConn(ctx context.Context, conn *flatrpc.Conn) error {
 			serv.StopFuzzing(id)
 			serv.ShutdownInstance(id, true)
 		}()
-	} else if err := checkRevisions(connectReq, serv.cfg.Target, conn.RemoteAddr()); err != nil {
-		return err
 	}
-	serv.StatVMRestarts.Add(1)
 
 	serv.mu.Lock()
 	runner := serv.runners[id]
@@ -349,6 +347,12 @@ func (serv *server) handleConn(ctx context.Context, conn *flatrpc.Conn) error {
 	if runner == nil {
 		return fmt.Errorf("unknown VM %v tries to connect", id)
 	}
+	if !serv.cfg.VMLess {
+		if err := checkRevisions(connectReq, runner.progTarget, conn.RemoteAddr()); err != nil {
+			return err
+		}
+	}
+	serv.StatVMRestarts.Add(1)
 
 	err = serv.handleRunnerConn(ctx, runner, conn)
 	log.Logf(2, "runner %v: %v", id, err)
@@ -363,7 +367,7 @@ func (serv *server) handleRunnerConn(ctx context.Context, runner *Runner, conn *
 		Files:    serv.checker.RequiredFiles(),
 		Timeouts: serv.timeouts,
 		Callback: serv.handleMachineInfo,
-		Syscalls: flatrpc.BuildSyscallEntries(serv.target),
+		Syscalls: flatrpc.BuildSyscallEntries(runner.progTarget),
 	}
 	opts.LeakFrames, opts.RaceFrames = serv.mgr.BugFrames()
 	if serv.checkDone.Load() {
@@ -565,6 +569,11 @@ func (serv *server) printMachineCheck(checkFilesInfo []*flatrpc.FileInfo, enable
 }
 
 func (serv *server) CreateInstance(id int, injectExec chan<- bool, updInfo UpdateInfo) chan error {
+	serv.mu.Lock()
+	defer serv.mu.Unlock()
+	if serv.runners[id] != nil {
+		panic(fmt.Sprintf("duplicate instance %v", id))
+	}
 	runner := &Runner{
 		id:            id,
 		source:        serv.execSource,
@@ -586,11 +595,6 @@ func (serv *server) CreateInstance(id int, injectExec chan<- bool, updInfo Updat
 		procs:    serv.cfg.Procs,
 		updInfo:  updInfo,
 		resultCh: make(chan error, 1),
-	}
-	serv.mu.Lock()
-	defer serv.mu.Unlock()
-	if serv.runners[id] != nil {
-		panic(fmt.Sprintf("duplicate instance %v", id))
 	}
 	serv.runners[id] = runner
 	return runner.resultCh
@@ -627,6 +631,12 @@ func (serv *server) DistributeSignalDelta(plus signal.Signal) {
 
 func (serv *server) SetSource(source queue.Source) {
 	serv.baseSource.Store(source)
+}
+
+func (serv *server) UpdateTarget(target *prog.Target) {
+	serv.mu.Lock()
+	defer serv.mu.Unlock()
+	serv.target = target
 }
 
 func (serv *server) Features() flatrpc.Feature {

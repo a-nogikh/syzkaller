@@ -9,11 +9,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/syzkaller/pkg/corpus"
+	"github.com/google/syzkaller/pkg/fuzzer"
+	"github.com/google/syzkaller/pkg/fuzzer/queue"
 	"github.com/google/syzkaller/pkg/manager"
+	"github.com/google/syzkaller/pkg/mgrconfig"
 	"github.com/google/syzkaller/pkg/report"
 	"github.com/google/syzkaller/pkg/repro"
+	"github.com/google/syzkaller/pkg/signal"
+	"github.com/google/syzkaller/prog"
 	_ "github.com/google/syzkaller/prog/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const testTimeout = 15 * time.Second
@@ -209,4 +216,95 @@ func TestDiffRetryRepro(t *testing.T) {
 		t.Fatalf("unexpected repro")
 	default:
 	}
+}
+
+func TestDiffReloadTarget(t *testing.T) {
+	env := newTestEnv(t, nil)
+	defer env.close()
+	env.start()
+
+	var baseTarget *prog.Target
+	var baseStream, newStream *queue.RandomQueue
+	var gotCandidates []fuzzer.Candidate
+	env.base.ReloadFunc = func(target *prog.Target, candidates []fuzzer.Candidate, stream *queue.RandomQueue) error {
+		baseTarget = target
+		baseStream = stream
+		return nil
+	}
+	env.new.ReloadFunc = func(target *prog.Target, candidates []fuzzer.Candidate, stream *queue.RandomQueue) error {
+		newStream = stream
+		gotCandidates = candidates
+		return nil
+	}
+
+	target, err := prog.GetTarget("test", "64")
+	require.NoError(t, err)
+	seeds := []fuzzer.Candidate{{Prog: target.DataMmapProg()}}
+
+	require.NoError(t, env.diffCtx.ReloadTarget(target, seeds))
+	require.Same(t, target, baseTarget)
+	require.Same(t, target, env.new.ConfigVal.Target)
+	require.NotNil(t, baseStream)
+	require.Same(t, baseStream, newStream)
+	require.Equal(t, seeds, gotCandidates)
+}
+
+func TestKernelSetupFuzzerReload(t *testing.T) {
+	target, err := prog.GetTarget("test", "64")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := mgrconfig.DefaultValues()
+	cfg.Target = target
+	kc := &kernelContext{
+		name:       "new",
+		ctx:        ctx,
+		cfg:        cfg,
+		candidates: make(chan []fuzzer.Candidate, 1),
+	}
+
+	enabled := map[*prog.Syscall]bool{
+		target.SyscallMap["test$manual"]: true,
+	}
+	kc.candidates <- nil
+	kc.setupFuzzer(0, enabled)
+
+	fuzzer1 := kc.fuzzer.Load()
+	require.NotNil(t, fuzzer1)
+
+	p, err := target.Deserialize([]byte("test$manual(0x1)\n"), prog.Strict)
+	require.NoError(t, err)
+	fuzzer1.Config.Corpus.Save(corpus.NewInput{
+		Prog:   p,
+		Call:   0,
+		Signal: signal.FromRaw([]uint64{10, 20}, 0),
+		Cover:  []uint64{100, 200},
+	})
+	fuzzer1.Cover.AddMaxSignal(signal.FromRaw([]uint64{10, 20, 30}, 0))
+
+	// Simulate reload: update config via UpdateTarget and re-run setupFuzzer.
+	require.NoError(t, kc.cfg.UpdateTarget(target))
+	require.NotEmpty(t, kc.cfg.Syscalls)
+
+	seedProg, err := target.Deserialize([]byte("test$res0()\n"), prog.Strict)
+	require.NoError(t, err)
+	kc.candidates <- []fuzzer.Candidate{{Prog: seedProg}}
+
+	enabledAfter := map[*prog.Syscall]bool{
+		target.SyscallMap["test$res0"]: true,
+	}
+	kc.setupFuzzer(0, enabledAfter)
+
+	fuzzer2 := kc.fuzzer.Load()
+	require.NotNil(t, fuzzer2)
+	require.NotSame(t, fuzzer1, fuzzer2)
+
+	// Migrated corpus should retain test$manual(0x1) and maxSignal {10, 20, 30}.
+	items := fuzzer2.Config.Corpus.Items()
+	require.Len(t, items, 1)
+	require.Equal(t, "test$manual(0x1)\n", string(items[0].Prog.Serialize()))
+	require.Equal(t, 3, fuzzer2.Cover.CopyMaxSignal().Len())
+	require.Equal(t, 1, fuzzer2.CandidatesToTriage())
 }
