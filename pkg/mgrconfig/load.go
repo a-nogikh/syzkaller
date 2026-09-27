@@ -189,23 +189,7 @@ func Complete(cfg *Config) error {
 		return fmt.Errorf("fuzzing_vms cannot be less than 0")
 	}
 
-	descriptionsMode, ok := strToDescriptionsMode[cfg.Experimental.DescriptionsMode]
-	if !ok {
-		allowed := slices.Sorted(maps.Keys(strToDescriptionsMode))
-		return fmt.Errorf("invalid descriptions_mode %q, must be one of: %s",
-			cfg.Experimental.DescriptionsMode, strings.Join(allowed, ", "))
-	}
-	if cfg.Snapshot {
-		descriptionsMode |= SnapshotDescriptions
-	}
-	var err error
-	cfg.Syscalls, err = ParseEnabledSyscalls(cfg.Target, cfg.EnabledSyscalls, cfg.DisabledSyscalls,
-		descriptionsMode)
-	if err != nil {
-		return err
-	}
-	cfg.NoMutateCalls, err = ParseNoMutateSyscalls(cfg.Target, cfg.NoMutateSyscalls)
-	if err != nil {
+	if err := cfg.completeSyscalls(cfg.Target); err != nil {
 		return err
 	}
 	if err := cfg.completeFocusAreas(); err != nil {
@@ -539,4 +523,40 @@ func MatchSyscall(name, pattern string) bool {
 		return true
 	}
 	return false
+}
+
+func (cfg *Config) completeSyscalls(target *prog.Target) error {
+	descriptionsMode, ok := strToDescriptionsMode[cfg.Experimental.DescriptionsMode]
+	if !ok {
+		allowed := slices.Sorted(maps.Keys(strToDescriptionsMode))
+		return fmt.Errorf("invalid descriptions_mode %q, must be one of: %s",
+			cfg.Experimental.DescriptionsMode, strings.Join(allowed, ", "))
+	}
+	if cfg.Snapshot {
+		descriptionsMode |= SnapshotDescriptions
+	}
+	cfg.Target = target
+	var err error
+	cfg.Syscalls, err = ParseEnabledSyscalls(target, cfg.EnabledSyscalls, cfg.DisabledSyscalls,
+		descriptionsMode)
+	if err != nil {
+		return err
+	}
+	cfg.NoMutateCalls, err = ParseNoMutateSyscalls(target, cfg.NoMutateSyscalls)
+	return err
+}
+
+// WithTarget returns a copy of the config that uses the target (e.g. one compiled from
+// modified descriptions) with all syscall IDs re-resolved against it.
+// The new target must be for the same OS/arch. The original config is not modified.
+func (cfg *Config) WithTarget(target *prog.Target) (*Config, error) {
+	if target.OS != cfg.TargetOS || target.Arch != cfg.TargetArch {
+		return nil, fmt.Errorf("target %v/%v does not match the config target %v/%v",
+			target.OS, target.Arch, cfg.TargetOS, cfg.TargetArch)
+	}
+	ret := *cfg
+	if err := ret.completeSyscalls(target); err != nil {
+		return nil, err
+	}
+	return &ret, nil
 }
