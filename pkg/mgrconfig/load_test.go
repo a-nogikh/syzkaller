@@ -150,15 +150,33 @@ func TestWithTarget(t *testing.T) {
 		Derived:         Derived{TargetOS: targets.TestOS, TargetArch: targets.TestArch64},
 	}
 	require.NoError(t, cfg.completeSyscalls(base))
+	// Boosted syscalls may refer to syscalls that exist only in the new target.
+	cfg.Experimental.BoostedSyscalls = []string{"test$foo"}
 	newCfg, err := cfg.WithTarget(target)
 	require.NoError(t, err)
 	require.Same(t, target, newCfg.Target)
 	require.ElementsMatch(t, []int{target.SyscallMap["test$foo"].ID, target.SyscallMap["test$bar"].ID},
 		newCfg.Syscalls)
+	require.Equal(t, []int{target.SyscallMap["test$foo"].ID}, newCfg.BoostedCalls)
 	require.Same(t, base, cfg.Target)
 
 	other, err := prog.GetTarget(targets.TestOS, targets.TestArch32)
 	require.NoError(t, err)
 	_, err = cfg.WithTarget(other)
+	require.Error(t, err)
+}
+
+func TestParseBoostedSyscalls(t *testing.T) {
+	target, err := prog.GetTarget(targets.TestOS, targets.TestArch64)
+	require.NoError(t, err)
+	id := func(name string) int { return target.SyscallMap[name].ID }
+	enabled := []int{id("test$int"), id("test$opt0"), id("test$opt1")}
+
+	got, err := ParseBoostedSyscalls(target, enabled, []string{"test$opt*", "test$opt0"})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []int{id("test$opt0"), id("test$opt1")}, got)
+
+	// Boosted syscalls must be enabled.
+	_, err = ParseBoostedSyscalls(target, enabled, []string{"test$int", "test$res0"})
 	require.Error(t, err)
 }

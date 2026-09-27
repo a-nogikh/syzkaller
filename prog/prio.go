@@ -270,9 +270,10 @@ func normalizePrios(prios [][]int32, n int) {
 // ChoiceTable allows making a weighted choice of a syscall for a given syscall
 // based on call-to-call priorities and a set of enabled and generatable syscalls.
 type ChoiceTable struct {
-	target *Target
-	runs   [][]int32
-	calls  []*Syscall
+	target  *Target
+	runs    [][]int32
+	calls   []*Syscall
+	boosted []int
 }
 
 func (target *Target) BuildChoiceTable(corpus []*Prog, enabled map[*Syscall]bool) *ChoiceTable {
@@ -306,7 +307,22 @@ func (target *Target) BuildChoiceTable(corpus []*Prog, enabled map[*Syscall]bool
 			run[i][j] = sum
 		}
 	}
-	return &ChoiceTable{target, run, generatableCalls}
+	return &ChoiceTable{target: target, runs: run, calls: generatableCalls}
+}
+
+// boostPercent is the percentage of choices made among the boosted calls.
+const boostPercent = 15
+
+// Boost makes the table choose one of the given calls (uniformly) in boostPercent% of cases,
+// regardless of the call-to-call priorities. Calls that are not generatable are ignored.
+// Boost must be called before the table is used.
+func (ct *ChoiceTable) Boost(calls []int) {
+	ct.boosted = nil
+	for _, id := range calls {
+		if ct.Generatable(id) {
+			ct.boosted = append(ct.boosted, id)
+		}
+	}
 }
 
 func (ct *ChoiceTable) Generatable(call int) bool {
@@ -314,6 +330,9 @@ func (ct *ChoiceTable) Generatable(call int) bool {
 }
 
 func (ct *ChoiceTable) choose(r *rand.Rand, bias int) int {
+	if len(ct.boosted) != 0 && r.Intn(100) < boostPercent {
+		return ct.boosted[r.Intn(len(ct.boosted))]
+	}
 	if r.Intn(100) < 5 {
 		// Let's make 5% decisions totally at random.
 		return ct.calls[r.Intn(len(ct.calls))].ID

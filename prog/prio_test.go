@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/syzkaller/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizePrios(t *testing.T) {
@@ -101,4 +102,36 @@ func BenchmarkBuildChoiceTable(b *testing.B) {
 	for range b.N {
 		target.BuildChoiceTable(nil, nil)
 	}
+}
+
+func TestChoiceTableBoost(t *testing.T) {
+	target, rs, _ := initTest(t)
+	boosted := target.SyscallMap["getpid"]
+	enabled := map[*Syscall]bool{boosted: true}
+	for _, c := range target.Syscalls[:200] {
+		if !c.Attrs.Disabled && !c.Attrs.NoGenerate {
+			enabled[c] = true
+		}
+	}
+	ct := target.BuildChoiceTable(nil, enabled)
+	ctBoosted := *ct
+	// The mmap call is not enabled, so it must be ignored.
+	mmap := target.SyscallMap["mmap"]
+	require.False(t, enabled[mmap])
+	ctBoosted.Boost([]int{boosted.ID, mmap.ID})
+	r := rand.New(rs)
+	const iters = 10000
+	count := func(ct *ChoiceTable) int {
+		n := 0
+		for range iters {
+			id := ct.choose(r, -1)
+			require.NotEqual(t, mmap.ID, id)
+			if id == boosted.ID {
+				n++
+			}
+		}
+		return n
+	}
+	require.Less(t, count(ct), iters/20)
+	require.Greater(t, count(&ctBoosted), iters/10)
 }

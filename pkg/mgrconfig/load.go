@@ -38,6 +38,7 @@ type Derived struct {
 
 	Syscalls      []int
 	NoMutateCalls map[int]bool // Set of IDs of syscalls which should not be mutated.
+	BoostedCalls  []int        // IDs of Experimental.BoostedSyscalls (a subset of Syscalls).
 	Timeouts      targets.Timeouts
 
 	// Special debugging/development mode specified by VM type "none".
@@ -514,6 +515,26 @@ func ParseNoMutateSyscalls(target *prog.Target, syscalls []string) (map[int]bool
 	return result, nil
 }
 
+// ParseBoostedSyscalls resolves the boosted syscall patterns among the enabled syscalls.
+// Each pattern must match at least one enabled syscall.
+func ParseBoostedSyscalls(target *prog.Target, enabled []int, boosted []string) ([]int, error) {
+	var result []int
+	for _, c := range boosted {
+		n := 0
+		for _, id := range enabled {
+			if MatchSyscall(target.Syscalls[id].Name, c) {
+				result = append(result, id)
+				n++
+			}
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("boosted syscall %v does not match any enabled syscall", c)
+		}
+	}
+	slices.Sort(result)
+	return slices.Compact(result), nil
+}
+
 func MatchSyscall(name, pattern string) bool {
 	if pattern == name || strings.HasPrefix(name, pattern+"$") {
 		return true
@@ -543,6 +564,10 @@ func (cfg *Config) completeSyscalls(target *prog.Target) error {
 		return err
 	}
 	cfg.NoMutateCalls, err = ParseNoMutateSyscalls(target, cfg.NoMutateSyscalls)
+	if err != nil {
+		return err
+	}
+	cfg.BoostedCalls, err = ParseBoostedSyscalls(target, cfg.Syscalls, cfg.Experimental.BoostedSyscalls)
 	return err
 }
 

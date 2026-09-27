@@ -222,6 +222,8 @@ type Config struct {
 	Collide        bool
 	EnabledCalls   map[*prog.Syscall]bool
 	NoMutateCalls  map[int]bool
+	// Calls that are generated/inserted into programs more often.
+	BoostedCalls   []int
 	FetchRawCover  bool
 	NewInputFilter func(call string) bool
 	PatchTest      bool
@@ -387,6 +389,9 @@ func (fuzzer *Fuzzer) rand() *rand.Rand {
 
 func (fuzzer *Fuzzer) updateChoiceTable(programs []*prog.Prog) {
 	newCt := fuzzer.target.BuildChoiceTable(programs, fuzzer.Config.EnabledCalls)
+	if len(fuzzer.Config.BoostedCalls) != 0 {
+		newCt.Boost(fuzzer.Config.BoostedCalls)
+	}
 
 	fuzzer.ctMu.Lock()
 	defer fuzzer.ctMu.Unlock()

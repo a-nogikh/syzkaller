@@ -262,6 +262,11 @@ type Experimental struct {
 
 	// Enable dynamic discovery and fuzzing of KFuzzTest targets.
 	EnableKFuzzTest bool `json:"enable_kfuzztest"`
+
+	// BoostedSyscalls are generated/inserted into programs more often: a fixed share of
+	// newly generated calls is chosen uniformly among them. The syntax is the same as for
+	// enable_syscalls, each entry must match at least one of the enabled syscalls.
+	BoostedSyscalls []string `json:"boosted_syscalls,omitempty"`
 }
 
 type FocusArea struct {
