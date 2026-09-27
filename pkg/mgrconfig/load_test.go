@@ -4,8 +4,11 @@
 package mgrconfig
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/google/syzkaller/pkg/compiler"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys/targets"
 	"github.com/stretchr/testify/assert"
@@ -129,4 +132,33 @@ func TestFormatTarget(t *testing.T) {
 		got := FormatTarget(tc.os, tc.vmArch, tc.arch)
 		require.Equal(t, tc.want, got)
 	}
+}
+
+func TestWithTarget(t *testing.T) {
+	base, err := prog.GetTarget(targets.TestOS, targets.TestArch64)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	descriptions := "syz_mmap(addr vma, len len[addr])\ntest$foo(a intptr)\ntest$bar(a intptr)\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.txt"), []byte(descriptions), 0644))
+	res, err := compiler.CompileTarget(dir, base)
+	require.NoError(t, err)
+	target := res.Target
+
+	cfg := &Config{
+		EnabledSyscalls: []string{"test"},
+		Experimental:    Experimental{DescriptionsMode: "manual"},
+		Derived:         Derived{TargetOS: targets.TestOS, TargetArch: targets.TestArch64},
+	}
+	require.NoError(t, cfg.completeSyscalls(base))
+	newCfg, err := cfg.WithTarget(target)
+	require.NoError(t, err)
+	require.Same(t, target, newCfg.Target)
+	require.ElementsMatch(t, []int{target.SyscallMap["test$foo"].ID, target.SyscallMap["test$bar"].ID},
+		newCfg.Syscalls)
+	require.Same(t, base, cfg.Target)
+
+	other, err := prog.GetTarget(targets.TestOS, targets.TestArch32)
+	require.NoError(t, err)
+	_, err = cfg.WithTarget(other)
+	require.Error(t, err)
 }
