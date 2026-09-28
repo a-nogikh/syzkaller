@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/syzkaller/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizePrios(t *testing.T) {
@@ -68,6 +69,47 @@ func TestStaticPriorities(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestNoGenerateBias(t *testing.T) {
+	target := initTargetTest(t, "test", "64")
+	noGen := target.SyscallMap["test$no_generate_produce_common"]
+	staticRelated := target.SyscallMap["test$consume_common"]
+	dynamicRelated := target.SyscallMap["test$int"]
+	unrelated := target.SyscallMap["test"]
+
+	enabled := map[*Syscall]bool{
+		noGen:          true,
+		staticRelated:  true,
+		dynamicRelated: true,
+		unrelated:      true,
+	}
+	corpus := []*Prog{
+		{
+			Target: target,
+			Calls:  []*Call{MakeCall(noGen, nil), MakeCall(dynamicRelated, nil)},
+		},
+	}
+	prios, _ := target.CalculatePriorities(corpus, enabled)
+	require.Greater(t, prios[noGen.ID][staticRelated.ID], prios[noGen.ID][unrelated.ID])
+	require.Greater(t, prios[noGen.ID][dynamicRelated.ID], prios[noGen.ID][unrelated.ID])
+	for c := range enabled {
+		require.Zero(t, prios[c.ID][noGen.ID])
+	}
+
+	ct := target.BuildChoiceTable(corpus, enabled)
+	require.True(t, ct.Enabled(noGen.ID))
+	require.False(t, ct.Generatable(noGen.ID))
+
+	r := rand.New(rand.NewSource(0))
+	counts := make(map[int]int)
+	for range 1000 {
+		chosen := ct.choose(r, noGen.ID)
+		require.NotEqual(t, noGen.ID, chosen)
+		counts[chosen]++
+	}
+	require.Greater(t, counts[staticRelated.ID], counts[unrelated.ID])
+	require.Greater(t, counts[dynamicRelated.ID], counts[unrelated.ID])
 }
 
 func TestPrioDeterminism(t *testing.T) {

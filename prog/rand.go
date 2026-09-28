@@ -630,11 +630,7 @@ func (r *randGen) generateCall(s *state, p *Prog, insertionPoint int) []*Call {
 	biasCall := -1
 	if insertionPoint > 0 {
 		// Choosing the base call is based on the insertion point of the new calls sequence.
-		insertionCall := p.Calls[r.Intn(insertionPoint)].Meta
-		if !insertionCall.Attrs.NoGenerate {
-			// We must be careful not to bias towards a non-generatable call.
-			biasCall = insertionCall.ID
-		}
+		biasCall = p.Calls[r.Intn(insertionPoint)].Meta.ID
 	}
 	idx := s.ct.choose(r.Rand, biasCall)
 	meta := r.target.Syscalls[idx]
