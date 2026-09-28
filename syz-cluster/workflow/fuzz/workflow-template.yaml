@@ -23,7 +23,8 @@ spec:
             path: /patched
           - name: config
             path: /tmp/config.json
-      timeout: 4h
+      # 3h of fuzzing + up to 20 minutes of AI descriptions generation + post-fuzzing triage.
+      timeout: 4h30m
       initContainers:
         - name: setup-repo
           image: ${IMAGE_PREFIX}fuzz-action:${IMAGE_TAG}

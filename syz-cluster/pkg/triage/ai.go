@@ -46,6 +46,8 @@ type AIFindingTriageResult struct {
 const (
 	aiEvaluationTimeout     = time.Hour
 	aiFindingTriageTimeout  = 15 * time.Minute
+	aiDescriptionsTimeout   = 20 * time.Minute
+	descriptionsTokenLimit  = 10 * 1000 * 1000 // 10M tokens
 	seriesTriageTokenLimit  = 5 * 1000 * 1000  // 5M tokens
 	findingTriageTokenLimit = 10 * 1000 * 1000 // 10M tokens
 	// TODO: Set TargetArch dynamically based on the targets for the patch/finding.
@@ -200,13 +202,7 @@ func (c *AIClient) EvaluateFinding(ctx context.Context, series *api.Series,
 	c.tracer.Logf("starting AI finding triage evaluation...")
 	var seriesPatches []ai.SeriesPatch
 	if series != nil {
-		for _, p := range series.Patches {
-			seriesPatches = append(seriesPatches, ai.SeriesPatch{
-				Seq:   p.Seq,
-				Title: p.Title,
-				Body:  string(p.Body),
-			})
-		}
+		seriesPatches = SeriesPatches(series)
 	}
 
 	args := ai.FindingTriageArgs{
@@ -236,6 +232,44 @@ func (c *AIClient) EvaluateFinding(ctx context.Context, series *api.Series,
 		Reasoning:  result.Reasoning,
 		Trajectory: htmlReport,
 	}, nil
+}
+
+// PatchDescriptions lets AI update the syscall descriptions for the patch series.
+// The returned trajectory may be non-empty even if an error is returned.
+func (c *AIClient) PatchDescriptions(ctx context.Context, args *ai.PatchDescriptionsArgs) (
+	*ai.PatchDescriptionsResult, []byte, error) {
+	aiCtx, cancel := context.WithTimeout(ctx, aiDescriptionsTimeout)
+	defer cancel()
+
+	c.tracer.Logf("starting AI descriptions update...")
+	outputs, htmlReport, err := c.execute(aiCtx, ai.WorkflowPatchDescriptions, args, descriptionsTokenLimit)
+	if err != nil {
+		return nil, htmlReport, err
+	}
+	outBytes, err := json.Marshal(outputs)
+	if err != nil {
+		return nil, htmlReport, fmt.Errorf("failed to marshal outputs: %w", err)
+	}
+	var result ai.PatchDescriptionsResult
+	if err := json.Unmarshal(outBytes, &result); err != nil {
+		return nil, htmlReport, fmt.Errorf("AI descriptions update returned invalid data: %w", err)
+	}
+	c.tracer.Logf("AI descriptions: new syscalls %q, relevant syscalls %q (reason: %s)",
+		result.NewSyscalls, result.RelevantSyscalls, result.Reasoning)
+	return &result, htmlReport, nil
+}
+
+// SeriesPatches converts the series patches to the format expected by the AI workflows.
+func SeriesPatches(series *api.Series) []ai.SeriesPatch {
+	var ret []ai.SeriesPatch
+	for _, p := range series.Patches {
+		ret = append(ret, ai.SeriesPatch{
+			Seq:   p.Seq,
+			Title: p.Title,
+			Body:  string(p.Body),
+		})
+	}
+	return ret
 }
 
 func EvaluatePatch(ctx context.Context, config *app.AppConfig, series *api.Series,

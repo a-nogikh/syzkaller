@@ -13,6 +13,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"time"
 
 	"github.com/google/syzkaller/pkg/build"
 	"github.com/google/syzkaller/pkg/debugtracer"
@@ -249,6 +251,11 @@ func buildKernel(tracer debugtracer.DebugTracer, req *api.BuildRequest) (*BuildR
 	}
 	tracer.Logf("build finished successfully")
 
+	if req.SeriesID != "" {
+		if err := saveUAPIHeaders(params); err != nil {
+			tracer.Logf("failed to save UAPI headers: %s", err)
+		}
+	}
 	err = saveSymbolHashes(tracer)
 	if err != nil {
 		tracer.Logf("failed to save symbol hashes: %s", err)
@@ -258,9 +265,30 @@ func buildKernel(tracer debugtracer.DebugTracer, req *api.BuildRequest) (*BuildR
 	//   |-- symbol_hashes.json
 	//   |-- kernel
 	//   |-- kernel.config
+	//   |-- uapi (only for patched builds)
+	//   |  `-- include
 	//   `-- obj
 	//      `-- vmlinux
 	return ret, nil
+}
+
+// saveUAPIHeaders saves the patched kernel UAPI headers to let AI evaluate const values
+// for the syscall descriptions.
+func saveUAPIHeaders(params build.Params) error {
+	target := targets.Get(params.TargetOS, params.TargetArch)
+	args := build.LinuxMakeArgs(target, params.Compiler, params.Linker, "", "", runtime.NumCPU())
+	// Unlike headers_install, "make headers" does not need rsync.
+	// It prepares the headers in usr/include.
+	cmd := osutil.Command("make", append(args, "headers")...)
+	cmd.Dir = params.KernelDir
+	if err := osutil.Sandbox(cmd, true, true); err != nil {
+		return err
+	}
+	if _, err := osutil.Run(10*time.Minute, cmd); err != nil {
+		return err
+	}
+	return osutil.CopyDirRecursively(filepath.Join(params.KernelDir, "usr", "include"),
+		filepath.Join(params.OutputDir, "uapi", "include"))
 }
 
 func saveSymbolHashes(tracer debugtracer.DebugTracer) error {

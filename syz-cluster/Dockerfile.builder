@@ -29,3 +29,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 FROM scratch
 COPY --from=builder /build/bin/ /build/bin/
 COPY --from=builder /build/syz-cluster/bin/ /build/syz-cluster/bin/
+# Needed for the AI-driven descriptions updates.
+COPY --from=builder /build/sys/linux/ /build/sys/linux/
+COPY --from=builder /build/docs/ /build/docs/
+COPY --from=builder /build/executor/ /build/executor/
