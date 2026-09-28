@@ -22,6 +22,7 @@ const (
 	WorkflowSeedGen            = WorkflowType("seed-gen")
 	WorkflowSeedGenFileLine    = WorkflowType("seed-gen-file-line")
 	WorkflowFindingTriage      = WorkflowType("finding-triage")
+	WorkflowPatchDescriptions  = WorkflowType("patch-descriptions")
 )
 
 // Outputs of various workflow types.
@@ -190,4 +191,32 @@ type FindingTriageArgs struct {
 type FindingTriageResult struct {
 	Introduced bool   `jsonschema:"True only if crash was introduced by the tested patch series."`
 	Reasoning  string `jsonschema:"Detailed explanation analyzing crash report against patch diffs."`
+}
+
+type PatchDescriptionsArgs struct {
+	TargetOS   string
+	TargetArch string
+	// Kernel checkout with the patch series committed as HEAD.
+	KernelSrc    string
+	KernelConfig string
+	Patches      []SeriesPatch `json:",omitempty"`
+	// Syzkaller checkout with the descriptions to start from. It's not modified.
+	Syzkaller string
+	// Optional dir with the kernel headers installed with "make headers_install" (contains include/).
+	UAPIHeaders string `json:",omitempty"`
+	// Syscall patterns enabled/disabled in the fuzzer config (enable_syscalls/disable_syscalls).
+	EnabledSyscalls  []string `json:",omitempty"`
+	DisabledSyscalls []string `json:",omitempty"`
+}
+
+type PatchDescriptionsResult struct {
+	// New and modified description files (relative to sys/<TargetOS>) with their full contents.
+	Files map[string]string
+	// Unified diff of the changes for human consumption.
+	Diff string
+	// Syscalls added by the changes.
+	NewSyscalls []string
+	// Syscalls that are most relevant to the patch series and should be fuzzed more.
+	RelevantSyscalls []string
+	Reasoning        string
 }

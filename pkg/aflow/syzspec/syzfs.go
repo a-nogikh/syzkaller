@@ -30,7 +30,9 @@ func IsAutoTxt(name string) bool {
 // from local repository directories.
 type SyzFS struct {
 	syzkallerDir string
-	osTarget     string
+	// sysDir holds the description files, by default it's sys/<osTarget> in syzkallerDir.
+	sysDir   string
+	osTarget string
 }
 
 // OSTarget returns the OS target for which syzkaller files are scoped in this SyzFS instance.
@@ -53,8 +55,18 @@ func NewSyzFS(syzkallerDir, osTarget string) *SyzFS {
 
 	return &SyzFS{
 		syzkallerDir: syzkallerDir,
+		sysDir:       filepath.Join(syzkallerDir, "sys", normalizedOS),
 		osTarget:     normalizedOS,
 	}
+}
+
+// WithSysDir returns a copy of the SyzFS that serves description files from sysDir
+// instead of sys/<osTarget>. Files under executor/, docs/ and skills/ are still served
+// from the syzkaller directory.
+func (s *SyzFS) WithSysDir(sysDir string) *SyzFS {
+	ret := *s
+	ret.sysDir = sysDir
+	return &ret
 }
 
 func (s *SyzFS) resolvePath(name string) string {
@@ -68,7 +80,7 @@ func (s *SyzFS) resolvePath(name string) string {
 	if isLocalSyzFile(name) {
 		return filepath.Join(s.syzkallerDir, name)
 	}
-	return filepath.Join(s.syzkallerDir, "sys", s.osTarget, name)
+	return filepath.Join(s.sysDir, name)
 }
 
 func withResolvedPath[T any](s *SyzFS, name, op string, fn func(string) (T, error)) (T, error) {

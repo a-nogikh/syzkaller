@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/google/syzkaller/pkg/aflow"
 	"github.com/google/syzkaller/sys/targets"
 	"github.com/stretchr/testify/require"
 )
@@ -41,4 +42,23 @@ func TestPrepareSyzFS(t *testing.T) {
 	require.NotContains(t, res.DescriptionFilesPrompt, "sys.txt.const\n")
 	require.Contains(t, res.SkillsPrompt, "Available Subsystem Skills")
 	require.Contains(t, res.SkillsPrompt, "- skills/kvm.md:")
+}
+
+func TestPrepareSyzFSScratch(t *testing.T) {
+	res, err := prepareSyzFSScratchFunc(aflow.NewTestContext(t), PrepareSyzFSArgs{
+		Syzkaller: syzkallerRepoRoot(t),
+		TargetOS:  targets.Linux,
+	})
+	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(res.DescriptionsScratchDir, "sys.txt"))
+	require.Contains(t, res.DescriptionFilesPrompt, "sys.txt\n")
+
+	newData := []byte("# modified\n")
+	require.NoError(t, os.WriteFile(filepath.Join(res.DescriptionsScratchDir, "sys.txt"), newData, 0644))
+	data, err := res.SyzFS.ReadFile("sys.txt")
+	require.NoError(t, err)
+	require.Equal(t, newData, data)
+	require.NotEmpty(t, res.SyzFS.TestSeeds())
+	_, err = res.SyzFS.ReadFile("executor/common_linux.h")
+	require.NoError(t, err)
 }
