@@ -46,26 +46,32 @@ func codeeditor(ctx *aflow.Context, state state, args args) (struct{}, error) {
 	if !osutil.IsExist(file) || !codesearch.IsSourceFile(file) {
 		return struct{}{}, aflow.BadCallError("SourceFile %q does not exist", args.SourceFile)
 	}
-	if strings.TrimSpace(args.CurrentCode) == "" {
-		return struct{}{}, aflow.BadCallError("CurrentCode snippet is empty")
+	return struct{}{}, EditFile(file, args.CurrentCode, args.NewCode)
+}
+
+// EditFile replaces full lines matching currentCode with newCode in the file.
+// Problems with the arguments are returned as aflow.BadCallError.
+func EditFile(file, currentCode, newCode string) error {
+	if strings.TrimSpace(currentCode) == "" {
+		return aflow.BadCallError("CurrentCode snippet is empty")
 	}
 	fileData, err := os.ReadFile(file)
 	if err != nil {
-		return struct{}{}, err
+		return err
 	}
 	if len(fileData) == 0 || fileData[len(fileData)-1] != '\n' {
 		// Generally shouldn't happen, but just in case.
 		fileData = append(fileData, '\n')
 	}
-	if args.CurrentCode[len(args.CurrentCode)-1] != '\n' {
-		args.CurrentCode += "\n"
+	if currentCode[len(currentCode)-1] != '\n' {
+		currentCode += "\n"
 	}
-	if args.NewCode != "" && args.NewCode[len(args.NewCode)-1] != '\n' {
-		args.NewCode += "\n"
+	if newCode != "" && newCode[len(newCode)-1] != '\n' {
+		newCode += "\n"
 	}
 	lines := slices.Collect(bytes.Lines(fileData))
-	src := slices.Collect(bytes.Lines([]byte(args.CurrentCode)))
-	dst := slices.Collect(bytes.Lines([]byte(args.NewCode)))
+	src := slices.Collect(bytes.Lines([]byte(currentCode)))
+	dst := slices.Collect(bytes.Lines([]byte(newCode)))
 	// First, try to match as is. If that fails, try a more permissive matching
 	// that ignores whitespaces, empty lines, etc.
 	newLines, matches := replace(lines, src, dst, false)
@@ -73,19 +79,18 @@ func codeeditor(ctx *aflow.Context, state state, args args) (struct{}, error) {
 		newLines, matches = replace(lines, src, dst, true)
 	}
 	if matches == 0 {
-		return struct{}{}, aflow.BadCallError("CurrentCode snippet does not match anything in the source file," +
+		return aflow.BadCallError("CurrentCode snippet does not match anything in the source file," +
 			" provide more precise CurrentCode snippet")
 	}
 	if matches > 1 {
-		return struct{}{}, aflow.BadCallError("CurrentCode snippet matched %v places,"+
+		return aflow.BadCallError("CurrentCode snippet matched %v places,"+
 			" increase context in CurrentCode to avoid ambiguity", matches)
 	}
 	newFileData := slices.Concat(newLines...)
 	if bytes.Equal(fileData, newFileData) {
-		return struct{}{}, aflow.BadCallError("The edit does not change the code.")
+		return aflow.BadCallError("The edit does not change the code.")
 	}
-	err = osutil.WriteFile(file, newFileData)
-	return struct{}{}, err
+	return osutil.WriteFile(file, newFileData)
 }
 
 func replace(lines, src, dst [][]byte, fuzzy bool) (newLines [][]byte, matches int) {
