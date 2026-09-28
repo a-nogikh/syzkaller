@@ -3444,7 +3444,7 @@ error:
 
 static void reset_loop_device(const char* loopname)
 {
-	int loopfd = open(loopname, O_RDWR);
+	int loopfd = open(loopname, O_RDONLY);
 	if (loopfd == -1) {
 		debug("reset_loop_device: open failed: %d\n", errno);
 		return;
