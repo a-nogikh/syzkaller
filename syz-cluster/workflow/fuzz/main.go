@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/google/syzkaller/pkg/aflow/ai"
 	"github.com/google/syzkaller/pkg/build"
 	"github.com/google/syzkaller/pkg/db"
 	"github.com/google/syzkaller/pkg/debugtracer"
@@ -61,6 +62,11 @@ func main() {
 		log.Fatalf("the binary is built without the git revision information")
 	}
 
+	// Until there's a way to pass the log.Logger object and capture all,
+	// use the global log collection.
+	const MB = 1000000
+	log.EnableLogCaching(100000, 10*MB)
+
 	config := readFuzzConfig()
 	ctx := context.Background()
 	if err := reportStatus(ctx, config, client, api.TestRunning, nil); err != nil {
@@ -71,11 +77,14 @@ func main() {
 	osutil.MkdirAll(artifactsDir)
 	store := &manager.DiffFuzzerStore{BasePath: artifactsDir}
 
+	// This is done before starting the timer, so it does not eat into the fuzzing time.
+	descriptions := generateDescriptions(ctx, config, client, artifactsDir)
+
 	// We want to only cancel the run() operation in order to be able to also report
 	// the final test result back.
 	runCtx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
-	err = run(runCtx, config, client, d, store)
+	err = run(runCtx, config, client, d, store, descriptions)
 	status := api.TestPassed // TODO: what about TestFailed?
 	if errors.Is(err, errSkipFuzzing) {
 		status = api.TestSkipped
@@ -123,16 +132,11 @@ func logFinalState(store *manager.DiffFuzzerStore) {
 var errSkipFuzzing = errors.New("skip")
 
 func run(ctx context.Context, config *api.FuzzConfig, client *api.Client,
-	timeout time.Duration, store *manager.DiffFuzzerStore) error {
+	timeout time.Duration, store *manager.DiffFuzzerStore, descriptions *ai.PatchDescriptionsResult) error {
 	series, err := client.GetSessionSeries(ctx, *flagSession)
 	if err != nil {
 		return fmt.Errorf("failed to query the series info: %w", err)
 	}
-
-	// Until there's a way to pass the log.Logger object and capture all,
-	// use the global log collection.
-	const MB = 1000000
-	log.EnableLogCaching(100000, 10*MB)
 
 	base, patched, err := generateConfigs(config)
 	if err != nil {
@@ -149,6 +153,8 @@ func run(ctx context.Context, config *api.FuzzConfig, client *api.Client,
 	}
 	diff.PatchFocusAreas(patched, series.PatchBodies(), baseSymbols.Text, patchedSymbols.Text)
 	setupAIFocusAreas(config, patched, series)
+	// Must be done before loading the corpus, since the target may change.
+	base, patched = applyDescriptions(base, patched, descriptions)
 
 	if len(config.CorpusURLs) > 0 {
 		err := prepareCorpus(ctx, patched.Workdir, config.CorpusURLs, patched.Target)

@@ -34,6 +34,10 @@ RUN useradd --create-home syzkaller
 RUN git config --system --add safe.directory '*'
 
 COPY --from=builder /build/bin/ /syzkaller/bin/
+# Needed for the AI-driven descriptions updates.
+COPY --from=builder /build/sys/linux/ /syzkaller/sys/linux/
+COPY --from=builder /build/docs/ /syzkaller/docs/
+COPY --from=builder /build/executor/ /syzkaller/executor/
 COPY --from=builder /build/syz-cluster/bin/fuzz-action /bin/fuzz-action
 
 ENTRYPOINT ["/bin/fuzz-action"]
