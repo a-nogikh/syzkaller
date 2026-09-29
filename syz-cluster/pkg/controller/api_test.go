@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/syzkaller/syz-cluster/pkg/api"
 	"github.com/google/syzkaller/syz-cluster/pkg/app"
+	"github.com/google/syzkaller/syz-cluster/pkg/blob"
 	"github.com/google/syzkaller/syz-cluster/pkg/db"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -183,6 +184,36 @@ func TestAPIUploadTestArtifacts(t *testing.T) {
 	assert.NoError(t, err)
 	err = client.UploadTestArtifacts(ctx, ids.SessionID, "test", bytes.NewReader([]byte("artifacts content")))
 	assert.NoError(t, err)
+}
+
+func TestAPIUploadTestTrajectory(t *testing.T) {
+	env, ctx := app.TestEnvironment(t)
+	client := TestServer(t, env)
+
+	ids := UploadTestSeries(t, ctx, client, testSeries)
+	buildResp := UploadTestBuild(t, ctx, client, testBuild)
+	test := &api.SessionTest{
+		SessionID:   ids.SessionID,
+		BaseBuildID: buildResp.ID,
+		TestName:    "test",
+		Result:      api.TestRunning,
+		Log:         []byte("some log"),
+	}
+	require.NoError(t, client.UploadSessionTest(ctx, test))
+	test.Trajectory = []byte("<html>trajectory</html>")
+	require.NoError(t, client.UploadSessionTest(ctx, test))
+	// The trajectory must not be lost on subsequent status updates.
+	test.Trajectory = nil
+	test.Result = api.TestPassed
+	require.NoError(t, client.UploadSessionTest(ctx, test))
+
+	entity, err := db.NewSessionTestRepository(env.Spanner).Get(ctx, ids.SessionID, "test")
+	require.NoError(t, err)
+	require.Equal(t, api.TestPassed, entity.Result)
+	require.True(t, entity.TrajectoryURI.Valid)
+	data, err := blob.ReadAllBytes(env.BlobStorage, entity.TrajectoryURI.StringVal)
+	require.NoError(t, err)
+	require.Equal(t, "<html>trajectory</html>", string(data))
 }
 
 func TestAPIBaseFindings(t *testing.T) {

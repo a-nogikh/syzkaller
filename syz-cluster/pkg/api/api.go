@@ -150,6 +150,8 @@ type SessionTest struct {
 	TestName       string `json:"test_name"`
 	Result         string `json:"result"`
 	Log            []byte `json:"log"`
+	// Trajectory is an HTML rendering of the AI workflow run as part of the test.
+	Trajectory []byte `json:"trajectory,omitempty"`
 }
 
 type SessionTestStep struct {

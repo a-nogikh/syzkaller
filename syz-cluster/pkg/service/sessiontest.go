@@ -47,10 +47,20 @@ func (s *SessionTestService) Save(ctx context.Context, req *api.SessionTest) err
 			return fmt.Errorf("failed to save the log: %w", err)
 		}
 	}
+	trajectoryURI := entity.TrajectoryURI
+	if len(req.Trajectory) > 0 {
+		uri, err := s.blobStorage.Write(bytes.NewReader(req.Trajectory),
+			"Session", req.SessionID, "Test", req.TestName, "trajectory")
+		if err != nil {
+			return fmt.Errorf("failed to save the trajectory: %w", err)
+		}
+		trajectoryURI = spanner.NullString{StringVal: uri, Valid: true}
+	}
 	return s.testRepo.InsertOrUpdate(ctx, entity, func(test *db.SessionTest) {
 		test.Result = req.Result
 		test.UpdatedAt = time.Now()
 		test.LogURI = logURI
+		test.TrajectoryURI = trajectoryURI
 		if req.BaseBuildID != "" {
 			test.BaseBuildID = spanner.NullString{StringVal: req.BaseBuildID, Valid: true}
 		}
