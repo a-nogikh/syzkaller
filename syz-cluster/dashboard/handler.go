@@ -77,6 +77,7 @@ func (h *dashboardHandler) Mux() *http.ServeMux {
 	mux.HandleFunc("/sessions/{id}/test_logs", errToStatus(h.sessionTestLog))
 	mux.HandleFunc("/test_steps/{step_id}/log", errToStatus(h.sessionTestStepLog))
 	mux.HandleFunc("/sessions/{id}/test_artifacts", errToStatus(h.sessionTestArtifacts))
+	mux.HandleFunc("/sessions/{id}/test_trajectory", errToStatus(h.sessionTestTrajectory))
 	mux.HandleFunc("/series/{id}/all_patches", errToStatus(h.allPatches))
 	mux.HandleFunc("/series/{id}", errToStatus(h.seriesInfo))
 	mux.HandleFunc("/session/{id}", errToStatus(h.sessionInfo))
@@ -621,6 +622,17 @@ func (h *dashboardHandler) sessionTestArtifacts(w http.ResponseWriter, r *http.R
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	return h.streamBlob(w, test.ArtifactsArchiveURI)
+}
+
+func (h *dashboardHandler) sessionTestTrajectory(w http.ResponseWriter, r *http.Request) error {
+	test, err := h.sessionTestRepo.Get(r.Context(), r.PathValue("id"), r.FormValue("name"))
+	if err != nil {
+		return err
+	} else if test == nil {
+		return fmt.Errorf("%w: test", errNotFound)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	return h.streamBlob(w, test.TrajectoryURI.StringVal)
 }
 
 func (h *dashboardHandler) sessionTestStepLog(w http.ResponseWriter, r *http.Request) error {

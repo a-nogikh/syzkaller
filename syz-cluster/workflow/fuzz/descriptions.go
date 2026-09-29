@@ -99,8 +99,10 @@ func runDescriptionsWorkflow(ctx context.Context, config *api.FuzzConfig, client
 		DisabledSyscalls: patched.DisabledSyscalls,
 	})
 	if len(trajectory) != 0 {
-		if err := osutil.WriteFile(filepath.Join(artifactsDir, "ai_descriptions.html"), trajectory); err != nil {
-			log.Logf(0, "failed to save the AI descriptions trajectory: %v", err)
+		test := newSessionTest(api.TestRunning)
+		test.Trajectory = trajectory
+		if err := client.UploadSessionTest(ctx, test); err != nil {
+			log.Logf(0, "failed to upload the AI descriptions trajectory: %v", err)
 		}
 	}
 	if err != nil {

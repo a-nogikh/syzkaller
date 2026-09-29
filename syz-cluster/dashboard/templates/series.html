@@ -246,6 +246,9 @@
                         {{if .ArtifactsArchiveURI}}
                             <a href="/sessions/{{.SessionID}}/test_artifacts?name={{.TestName}}" class="ms-1">[Artifacts]</a>
                         {{end}}
+                        {{if .TrajectoryURI.Valid}}
+                            <a href="/sessions/{{.SessionID}}/test_trajectory?name={{.TestName}}" class="ms-1" target="_blank">[Trajectory]</a>
+                        {{end}}
                     </th>
                 </tr>
                 {{range .Steps}}

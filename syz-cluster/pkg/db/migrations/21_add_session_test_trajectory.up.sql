@@ -1,0 +1,1 @@
+ALTER TABLE SessionTests ADD COLUMN TrajectoryURI STRING(512);

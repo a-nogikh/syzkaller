@@ -148,6 +148,7 @@ type SessionTest struct {
 	Result              string             `spanner:"Result"`
 	LogURI              string             `spanner:"LogURI"`
 	ArtifactsArchiveURI string             `spanner:"ArtifactsArchiveURI"`
+	TrajectoryURI       spanner.NullString `spanner:"TrajectoryURI"`
 }
 
 func (t *SessionTest) AnyBuildID() string {
