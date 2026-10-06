@@ -5,10 +5,11 @@ package prog
 
 import (
 	"math/rand"
-	"reflect"
 	"testing"
 
 	"github.com/google/syzkaller/pkg/testutil"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizePrios(t *testing.T) {
@@ -22,12 +23,8 @@ func TestNormalizePrios(t *testing.T) {
 		{4, 8, 17},
 		{10, 20, 0},
 	}
-	t.Logf("had:  %+v", prios)
 	normalizePrios(prios, len(prios))
-	if !reflect.DeepEqual(prios, want) {
-		t.Logf("got:  %+v", prios)
-		t.Errorf("want: %+v", want)
-	}
+	require.Equal(t, want, prios)
 }
 
 // Test static priorities assigned based on argument direction.
@@ -62,12 +59,64 @@ func TestStaticPriorities(t *testing.T) {
 				continue
 			}
 			// Checks that prio[callCreatesRes][callUsesRes] > prio[callUsesRes][callCreatesRes]
-			if count >= counter[call] {
-				t.Fatalf("too high priority for %s -> %s: %d vs %s -> %s: %d",
-					call, referenceCall, count, referenceCall, call, counter[call])
-			}
+			require.Lessf(t, count, counter[call], "too high priority for %s -> %s: %d vs %s -> %s: %d",
+				call, referenceCall, count, referenceCall, call, counter[call])
 		}
 	}
+}
+
+func TestDynamicPriorities(t *testing.T) {
+	target := initTargetTest(t, "test", "64")
+	pColocated, err := target.Deserialize([]byte("test$res0()\ntest$int(0x1, 0x2, 0x3, 0x4, 0x5)\n"), Strict)
+	require.NoError(t, err)
+	pMulti, err := target.Deserialize([]byte("test$res0()\ntest$opt1(0x0)\ntest$align0(0x0)\n"), Strict)
+	require.NoError(t, err)
+	pSinglePair, err := target.Deserialize([]byte("test$align1(0x0)\ntest$align2(0x0)\n"), Strict)
+	require.NoError(t, err)
+
+	var corpus []*Prog
+	for range 80 {
+		corpus = append(corpus, pColocated.Clone())
+	}
+	for range 20 {
+		corpus = append(corpus, pMulti.Clone())
+	}
+	corpus = append(corpus, pSinglePair)
+
+	ct := target.BuildChoiceTable(corpus, nil)
+	res0ID := target.SyscallMap["test$res0"].ID
+	intID := target.SyscallMap["test$int"].ID
+	align0ID := target.SyscallMap["test$align0"].ID
+	align1ID := target.SyscallMap["test$align1"].ID
+	align2ID := target.SyscallMap["test$align2"].ID
+
+	// Verify that dynamic colocation boosts test$int after test$res0 while still exploring static/other calls.
+	r := rand.New(rand.NewSource(0))
+	const iters = 10000
+	counts := make(map[int]int)
+	for range iters {
+		counts[ct.choose(r, res0ID)]++
+	}
+	assert.Greater(t, counts[intID], iters/20, "colocated call should be chosen frequently")
+	assert.Less(t, counts[intID], iters*4/10, "colocated call should not monopolize all choices")
+
+	// Verify that a call with only a single known co-occurring call in the corpus
+	// does not hand 50% of all choices to that single pair.
+	singleCounts := make(map[int]int)
+	for range iters {
+		singleCounts[ct.choose(r, align1ID)]++
+	}
+	assert.Greater(t, singleCounts[align2ID], iters/50, "single corpus pair should still be explored")
+	assert.Less(t, singleCounts[align2ID], iters/5, "single corpus pair must not hog 50%% of choices")
+
+	// Verify multi-call context: when prefix is [test$res0, test$opt1], test$align0 is colocated with both.
+	prefixProg, err := target.Deserialize([]byte("test$res0()\ntest$opt1(0x0)\n"), Strict)
+	require.NoError(t, err)
+	multiCounts := make(map[int]int)
+	for range iters {
+		multiCounts[ct.chooseCalls(r, prefixProg.Calls)]++
+	}
+	assert.Greater(t, multiCounts[align0ID], iters/20, "multi-call colocated call should be boosted")
 }
 
 func TestPrioDeterminism(t *testing.T) {
@@ -82,16 +131,19 @@ func TestPrioDeterminism(t *testing.T) {
 	}
 	ct0 := target.BuildChoiceTable(corpus, nil)
 	ct1 := target.BuildChoiceTable(corpus, nil)
-	if !reflect.DeepEqual(ct0.runs, ct1.runs) {
-		t.Fatal("non-deterministic ChoiceTable")
-	}
+	require.Equal(t, ct0.callTags, ct1.callTags)
+	require.Equal(t, ct0.tagCalls, ct1.tagCalls)
+	require.Equal(t, ct0.dynamicCalls, ct1.dynamicCalls)
 	for i := range iters {
 		seed := rs.Int63()
 		call0 := ct0.choose(rand.New(rand.NewSource(seed)), -1)
 		call1 := ct1.choose(rand.New(rand.NewSource(seed)), -1)
-		if call0 != call1 {
-			t.Fatalf("seed=%v iter=%v call=%v/%v", seed, i, call0, call1)
-		}
+		require.Equal(t, call0, call1, "seed=%v iter=%v", seed, i)
+
+		p := corpus[i%len(corpus)]
+		callCtx0 := ct0.chooseCalls(rand.New(rand.NewSource(seed)), p.Calls)
+		callCtx1 := ct1.chooseCalls(rand.New(rand.NewSource(seed)), p.Calls)
+		require.Equal(t, callCtx0, callCtx1, "seed=%v iter=%v", seed, i)
 	}
 }
 
@@ -100,5 +152,23 @@ func BenchmarkBuildChoiceTable(b *testing.B) {
 	defer cleanup()
 	for range b.N {
 		target.BuildChoiceTable(nil, nil)
+	}
+}
+
+func BenchmarkChoiceTableChoose(b *testing.B) {
+	target, cleanup := initBench(b)
+	defer cleanup()
+	rs := rand.NewSource(0)
+	ct0 := target.DefaultChoiceTable()
+	var corpus []*Prog
+	for range 1000 {
+		corpus = append(corpus, target.Generate(rs, 20, ct0))
+	}
+	ct := target.BuildChoiceTable(corpus, nil)
+	r := rand.New(rs)
+	sampleProg := corpus[0]
+	b.ResetTimer()
+	for i := range b.N {
+		ct.chooseCalls(r, sampleProg.Calls[:i%len(sampleProg.Calls)+1])
 	}
 }

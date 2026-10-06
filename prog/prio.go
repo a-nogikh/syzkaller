@@ -6,6 +6,7 @@ package prog
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand"
 	"slices"
@@ -99,15 +100,11 @@ func (target *Target) calcStaticPriorities(enabled map[*Syscall]bool) [][]int32 
 	for i := range prios {
 		prios[i] = make([]int32, len(target.Syscalls))
 	}
-	var weights []weights
 	for _, weightMap := range uses {
 		// Iteration over map is slow, especially here when we do it O(N^2) times.
-		weights = weights[:0]
-		for _, w := range weightMap {
-			weights = append(weights, w)
-		}
-		for _, w0 := range weights {
-			for _, w1 := range weights {
+		callWeights := slices.Collect(maps.Values(weightMap))
+		for _, w0 := range callWeights {
+			for _, w1 := range callWeights {
 				if w0.call == w1.call {
 					// Self-priority is assigned below.
 					continue
@@ -120,13 +117,8 @@ func (target *Target) calcStaticPriorities(enabled map[*Syscall]bool) [][]int32 
 	}
 	// The value assigned for self-priority (call wrt itself) have to be high, but not too high.
 	for c := range enabled {
-		id, pp := c.ID, prios[c.ID]
-		max := slices.Max(pp)
-		if max == 0 {
-			pp[id] = 1
-		} else {
-			pp[id] = max * 3 / 4
-		}
+		pp := prios[c.ID]
+		pp[c.ID] = max(1, slices.Max(pp)*3/4)
 	}
 	normalizePrios(prios, len(enabled))
 	return prios
@@ -157,14 +149,11 @@ func (target *Target) calcResourceUsage(enabled map[*Syscall]bool) map[string]ma
 				}
 			}
 		case *PtrType:
-			if _, ok := a.Elem.(*StructType); ok {
-				noteUsagef(uses, c, 10, ctx.Dir, "ptrto-%v", a.Elem.Name())
-			}
-			if _, ok := a.Elem.(*UnionType); ok {
-				noteUsagef(uses, c, 10, ctx.Dir, "ptrto-%v", a.Elem.Name())
-			}
-			if arr, ok := a.Elem.(*ArrayType); ok {
-				noteUsagef(uses, c, 10, ctx.Dir, "ptrto-%v", arr.Elem.Name())
+			switch elem := a.Elem.(type) {
+			case *StructType, *UnionType:
+				noteUsagef(uses, c, 10, ctx.Dir, "ptrto-%v", elem.Name())
+			case *ArrayType:
+				noteUsagef(uses, c, 10, ctx.Dir, "ptrto-%v", elem.Elem.Name())
 			}
 		case *BufferType:
 			switch a.Kind {
@@ -197,26 +186,21 @@ type weights struct {
 	inout int32
 }
 
-func noteUsage(uses map[string]map[int]weights, c *Syscall, weight int32, dir Dir, str string) {
-	noteUsagef(uses, c, weight, dir, "%v", str)
-}
-
-func noteUsagef(uses map[string]map[int]weights, c *Syscall, weight int32, dir Dir, str string, args ...any) {
-	id := fmt.Sprintf(str, args...)
+func noteUsage(uses map[string]map[int]weights, c *Syscall, weight int32, dir Dir, id string) {
 	if uses[id] == nil {
 		uses[id] = make(map[int]weights)
 	}
 	callWeight := uses[id][c.ID]
 	callWeight.call = c.ID
 	if dir != DirOut {
-		if weight > uses[id][c.ID].in {
-			callWeight.in = weight
-		}
+		callWeight.in = max(callWeight.in, weight)
 	}
-	if weight > uses[id][c.ID].inout {
-		callWeight.inout = weight
-	}
+	callWeight.inout = max(callWeight.inout, weight)
 	uses[id][c.ID] = callWeight
+}
+
+func noteUsagef(uses map[string]map[int]weights, c *Syscall, weight int32, dir Dir, str string, args ...any) {
+	noteUsage(uses, c, weight, dir, fmt.Sprintf(str, args...))
 }
 
 func (target *Target) calcDynamicPrio(corpus []*Prog, enabled map[*Syscall]bool) [][]int32 {
@@ -267,53 +251,178 @@ func normalizePrios(prios [][]int32, n int) {
 	}
 }
 
+const (
+	// Number of candidate calls sampled from dynamicCalls[bias] to score against program context.
+	dynamicContextCandidates = 4
+)
+
+type prioItem struct {
+	id     int32
+	cumSum int32
+}
+
 // ChoiceTable allows making a weighted choice of a syscall for a given syscall
-// based on call-to-call priorities and a set of enabled and generatable syscalls.
+// or program prefix based on static resource/type priorities and dynamic corpus colocation.
 type ChoiceTable struct {
-	target *Target
-	runs   [][]int32
-	calls  []*Syscall
+	target      *Target
+	calls       []*Syscall
+	generatable []bool
+
+	// Bipartite static priority table:
+	// callTags[callID] stores the usage tags for callID and their cumulative weights.
+	// tagCalls[tagID] stores the consumer calls for tagID and their cumulative weights.
+	callTags [][]prioItem
+	tagCalls [][]prioItem
+
+	// Sparse dynamic priority table:
+	// dynamicCalls[callID] stores the syscalls that appear after callID in the corpus,
+	// sorted by id, with cumulative sqrt(count) weights.
+	dynamicCalls [][]prioItem
+	hasDynamic   bool
 }
 
 func (target *Target) BuildChoiceTable(corpus []*Prog, enabled map[*Syscall]bool) *ChoiceTable {
-	prios, enabledCalls := target.CalculatePriorities(corpus, enabled)
+	enabledCalls := target.prepareEnabledSyscalls(corpus, enabled)
 	var generatableCalls []*Syscall
+	generatable := make([]bool, len(target.Syscalls))
 	for c := range enabledCalls {
 		generatableCalls = append(generatableCalls, c)
+		generatable[c.ID] = true
 	}
 	slices.SortFunc(generatableCalls, func(a, b *Syscall) int {
 		return cmp.Compare(a.ID, b.ID)
 	})
-	// Looking up in a map is slow, so we create a slice for quick lookup.
-	enabledSlice := make([]bool, len(target.Syscalls))
-	for c := range enabledCalls {
-		enabledSlice[c.ID] = true
+
+	callTags, tagCalls := target.buildStaticPrioTable(enabledCalls)
+	dynamicCalls, hasDynamic := target.buildDynamicPrioTable(corpus, generatable)
+
+	return &ChoiceTable{
+		target:       target,
+		calls:        generatableCalls,
+		generatable:  generatable,
+		callTags:     callTags,
+		tagCalls:     tagCalls,
+		dynamicCalls: dynamicCalls,
+		hasDynamic:   hasDynamic,
 	}
-	run := make([][]int32, len(target.Syscalls))
-	// ChoiceTable.runs[][] contains cumulated sum of weighted priority numbers.
-	// This helps in quick binary search with biases when generating programs.
-	// This only applies for system calls that are enabled for the target.
-	for i := range run {
-		if !enabledSlice[i] {
+}
+
+func (target *Target) buildStaticPrioTable(enabled map[*Syscall]bool) ([][]prioItem, [][]prioItem) {
+	uses := target.calcResourceUsage(enabled)
+	tagNames := slices.Sorted(maps.Keys(uses))
+
+	callTags := make([][]prioItem, len(target.Syscalls))
+	tagCalls := make([][]prioItem, 0, len(tagNames))
+
+	for _, tag := range tagNames {
+		weightMap := uses[tag]
+		if len(weightMap) < 2 {
+			// A tag used by only a single syscall does not connect it to any other syscall.
 			continue
 		}
-		run[i] = make([]int32, len(target.Syscalls))
-		var sum int32
-		for j := range run[i] {
-			if enabledSlice[j] {
-				sum += prios[i][j]
+		callWeights := slices.Collect(maps.Values(weightMap))
+		slices.SortFunc(callWeights, func(a, b weights) int {
+			return cmp.Compare(a.call, b.call)
+		})
+
+		tagID := int32(len(tagCalls))
+		consumers := make([]prioItem, len(callWeights))
+		var tagSum int32
+		for i, w := range callWeights {
+			// Higher priority when c1 uses the resource as an input.
+			tagSum += w.in*3 + w.inout*2
+			consumers[i] = prioItem{id: int32(w.call), cumSum: tagSum}
+		}
+		tagCalls = append(tagCalls, consumers)
+
+		// Weight the tag by w0.inout * sqrt(tagSum) so tags with more consumers get
+		// higher weight without allowing huge generic tags (like fd) to completely
+		// drown out specific resource subkinds (like sock_in).
+		tagScale := max(int32(1), int32(math.Sqrt(float64(tagSum))))
+		for _, w := range callWeights {
+			prevSum := int32(0)
+			if n := len(callTags[w.call]); n > 0 {
+				prevSum = callTags[w.call][n-1].cumSum
 			}
-			run[i][j] = sum
+			callTags[w.call] = append(callTags[w.call], prioItem{
+				id:     tagID,
+				cumSum: prevSum + w.inout*tagScale,
+			})
 		}
 	}
-	return &ChoiceTable{target, run, generatableCalls}
+	return callTags, tagCalls
+}
+
+func (target *Target) buildDynamicPrioTable(corpus []*Prog, generatable []bool) ([][]prioItem, bool) {
+	if len(corpus) == 0 {
+		return nil, false
+	}
+	pairCounts := make([]map[int]int32, len(target.Syscalls))
+	for _, p := range corpus {
+		for idx0, c0 := range p.Calls {
+			id0 := c0.Meta.ID
+			if !generatable[id0] {
+				continue
+			}
+			m := pairCounts[id0]
+			for _, c1 := range p.Calls[idx0+1:] {
+				id1 := c1.Meta.ID
+				if !generatable[id1] {
+					continue
+				}
+				if m == nil {
+					m = make(map[int]int32)
+					pairCounts[id0] = m
+				}
+				m[id1]++
+			}
+		}
+	}
+
+	dynamicCalls := make([][]prioItem, len(target.Syscalls))
+	hasDynamic := false
+	for id0, m := range pairCounts {
+		if len(m) == 0 {
+			continue
+		}
+		hasDynamic = true
+		ids := slices.Sorted(maps.Keys(m))
+		row := make([]prioItem, len(ids))
+		var sum int32
+		for i, id1 := range ids {
+			// It's more important that some calls do coexist than whether
+			// it happened 50 or 100 times.
+			// Use sqrt() to lessen the effect of large counts.
+			w := max(int32(1), int32(2.0*math.Sqrt(float64(m[id1]))))
+			sum += w
+			row[i] = prioItem{id: int32(id1), cumSum: sum}
+		}
+		dynamicCalls[id0] = row
+	}
+	return dynamicCalls, hasDynamic
 }
 
 func (ct *ChoiceTable) Generatable(call int) bool {
-	return ct.runs[call] != nil
+	return call >= 0 && ct.generatable[call]
+}
+
+func (ct *ChoiceTable) chooseCalls(r *rand.Rand, calls []*Call) int {
+	bias := -1
+	if len(calls) > 0 {
+		// Choosing the base call is based on the insertion point of the new calls sequence.
+		if c := calls[r.Intn(len(calls))].Meta; ct.Generatable(c.ID) {
+			// We must be careful not to bias towards a non-generatable call.
+			bias = c.ID
+		}
+	}
+	return ct.chooseWithContext(r, bias, calls)
 }
 
 func (ct *ChoiceTable) choose(r *rand.Rand, bias int) int {
+	return ct.chooseWithContext(r, bias, nil)
+}
+
+func (ct *ChoiceTable) chooseWithContext(r *rand.Rand, bias int, contextCalls []*Call) int {
 	if r.Intn(100) < 5 {
 		// Let's make 5% decisions totally at random.
 		return ct.calls[r.Intn(len(ct.calls))].ID
@@ -325,14 +434,86 @@ func (ct *ChoiceTable) choose(r *rand.Rand, bias int) int {
 		fmt.Printf("bias to disabled or non-generatable syscall %v\n", ct.target.Syscalls[bias].Name)
 		panic("disabled or non-generatable syscall")
 	}
-	run := ct.runs[bias]
-	runSum := int(run[len(run)-1])
-	x := int32(r.Intn(runSum) + 1)
-	res := sort.Search(len(run), func(i int) bool {
-		return run[i] >= x
-	})
+	res := -1
+	if ct.hasDynamic {
+		dynBias := bias
+		if len(ct.dynamicCalls[dynBias]) == 0 && len(contextCalls) > 0 {
+			// If the chosen bias call has no dynamic history in the corpus, try another
+			// call from the program prefix that does have corpus history.
+			if c := contextCalls[r.Intn(len(contextCalls))].Meta; len(ct.dynamicCalls[c.ID]) > 0 {
+				dynBias = c.ID
+			}
+		}
+		// Scale dynamic probability with the number of distinct co-occurring calls (up to 50%)
+		// so a syscall that only appeared once in the corpus doesn't hand 50% of all future
+		// choices to a single call.
+		if dynProb := min(50, 5*len(ct.dynamicCalls[dynBias])); dynProb > 0 && r.Intn(100) < dynProb {
+			res = ct.chooseDynamic(r, dynBias, contextCalls)
+		}
+	}
+	if res < 0 {
+		res = ct.chooseStatic(r, bias)
+	}
 	if !ct.Generatable(res) {
 		panic("selected disabled or non-generatable syscall")
 	}
 	return res
+}
+
+func (ct *ChoiceTable) chooseStatic(r *rand.Rand, bias int) int {
+	tags := ct.callTags[bias]
+	if len(tags) == 0 {
+		return bias
+	}
+	for range 4 {
+		tagIdx := samplePrioItem(r, tags)
+		if res := samplePrioItem(r, ct.tagCalls[tagIdx]); res != bias || r.Intn(4) == 0 {
+			return res
+		}
+	}
+	return bias
+}
+
+func samplePrioItem(r *rand.Rand, items []prioItem) int {
+	total := int(items[len(items)-1].cumSum)
+	x := int32(r.Intn(total) + 1)
+	idx := sort.Search(len(items), func(i int) bool {
+		return items[i].cumSum >= x
+	})
+	return int(items[idx].id)
+}
+
+func hasDynamicPair(row []prioItem, targetCall int32) bool {
+	idx := sort.Search(len(row), func(i int) bool {
+		return row[i].id >= targetCall
+	})
+	return idx < len(row) && row[idx].id == targetCall
+}
+
+func (ct *ChoiceTable) chooseDynamic(r *rand.Rand, bias int, contextCalls []*Call) int {
+	row := ct.dynamicCalls[bias]
+	if len(row) == 0 {
+		return -1
+	}
+	if len(contextCalls) <= 1 || len(row) == 1 {
+		return samplePrioItem(r, row)
+	}
+
+	// Sample a few candidates from bias's dynamic distribution and boost those
+	// that also co-occur in the corpus with other calls in contextCalls.
+	var cands [dynamicContextCandidates]prioItem
+	var sum int32
+	for i := range cands {
+		candID := int32(samplePrioItem(r, row))
+		weight := int32(1)
+		for _, c := range contextCalls {
+			otherID := c.Meta.ID
+			if otherID != bias && hasDynamicPair(ct.dynamicCalls[otherID], candID) {
+				weight += 2
+			}
+		}
+		sum += weight
+		cands[i] = prioItem{id: candID, cumSum: sum}
+	}
+	return samplePrioItem(r, cands[:])
 }
