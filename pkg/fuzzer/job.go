@@ -317,7 +317,7 @@ func (job *triageJob) stopDeflake(run, needRuns int, noNewSignal bool) bool {
 			haveSignal = false
 		}
 	}
-	if job.flags&ProgFromCorpus == 0 {
+	if job.flags&ProgFromCorpus == 0 || job.fuzzer.Config.PatchTest {
 		// For fuzzing programs we stop if we already have the right deflaked signal for all calls,
 		// or there's no chance to get coverage common to needRuns for all calls.
 		if run >= deflakeMaxRuns {
