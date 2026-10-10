@@ -79,3 +79,19 @@ func TestTee(t *testing.T) {
 	assert.Empty(t, copy.ReturnOutput)
 	assert.Empty(t, copy.Important)
 }
+
+func TestAlternate(t *testing.T) {
+	pq := Plain()
+	req1, req2 := &Request{}, &Request{}
+	pq.Submit(req1)
+	pq.Submit(req2)
+
+	alt := Alternate(pq, 3)
+	assert.Nil(t, alt.Next())
+	assert.Nil(t, alt.Next())
+	assert.Equal(t, req1, alt.Next())
+	assert.Nil(t, alt.Next())
+	assert.Nil(t, alt.Next())
+	assert.Equal(t, req2, alt.Next())
+	assert.Nil(t, alt.Next())
+}

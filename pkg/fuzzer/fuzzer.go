@@ -5,6 +5,7 @@
 package fuzzer
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math/rand"
@@ -84,35 +85,90 @@ func (fuzzer *Fuzzer) RecommendedCalls() int {
 type execQueues struct {
 	triageCandidateQueue *queue.DynamicOrderer
 	candidateQueue       *queue.PlainQueue
-	triageQueue          *queue.DynamicOrderer
-	smashQueue           *queue.PlainQueue
+	tiers                []focusTier
 	source               queue.Source
+}
+
+type focusTier struct {
+	coverPCs    map[uint64]struct{}
+	triageQueue *queue.DynamicOrderer
+	smashQueue  *queue.PlainQueue
 }
 
 func newExecQueues(fuzzer *Fuzzer) execQueues {
 	ret := execQueues{
 		triageCandidateQueue: queue.DynamicOrder(),
 		candidateQueue:       queue.Plain(),
-		triageQueue:          queue.DynamicOrder(),
-		smashQueue:           queue.Plain(),
 	}
+	if fuzzer.Config.PatchTest && fuzzer.Config.Corpus != nil {
+		areas := fuzzer.Config.Corpus.FocusAreas()
+		slices.SortStableFunc(areas, func(a, b corpus.FocusArea) int {
+			return cmp.Compare(b.Weight, a.Weight)
+		})
+		for _, area := range areas {
+			if len(area.CoverPCs) > 0 {
+				ret.tiers = append(ret.tiers, focusTier{
+					coverPCs:    area.CoverPCs,
+					triageQueue: queue.DynamicOrder(),
+					smashQueue:  queue.Plain(),
+				})
+			}
+		}
+	}
+	// Always append a catch-all tier at the end.
+	ret.tiers = append(ret.tiers, focusTier{
+		triageQueue: queue.DynamicOrder(),
+		smashQueue:  queue.Plain(),
+	})
+
 	// Alternate smash jobs with exec/fuzz to spread attention to the wider area.
 	skipQueue := 3
 	if fuzzer.Config.PatchTest {
 		// When we do patch fuzzing, we do not focus on finding and persisting
 		// new coverage that much, so it's reasonable to spend more time just
 		// mutating various corpus programs.
-		skipQueue = 2
+		skipQueue = 4
 	}
-	// Sources are listed in the order, in which they will be polled.
-	ret.source = queue.Order(
+	genFuzz := queue.Callback(fuzzer.genFuzz)
+	sources := []queue.Source{
 		ret.triageCandidateQueue,
 		ret.candidateQueue,
-		ret.triageQueue,
-		queue.Alternate(ret.smashQueue, skipQueue),
-		queue.Callback(fuzzer.genFuzz),
-	)
+	}
+	for _, tier := range ret.tiers {
+		sources = append(sources, tier.triageQueue)
+	}
+	for _, tier := range ret.tiers {
+		sources = append(sources,
+			queue.Alternate(genFuzz, skipQueue),
+			tier.smashQueue,
+		)
+	}
+	sources = append(sources, genFuzz)
+	// Sources are listed in the order, in which they will be polled.
+	ret.source = queue.Order(sources...)
 	return ret
+}
+
+func (fuzzer *Fuzzer) triageQueueForCalls(triage map[int]*triageCall) *queue.DynamicOrderer {
+	for _, tier := range fuzzer.tiers[:len(fuzzer.tiers)-1] {
+		for _, call := range triage {
+			if call.newSignal.HasAny(tier.coverPCs) {
+				return tier.triageQueue
+			}
+		}
+	}
+	return fuzzer.tiers[len(fuzzer.tiers)-1].triageQueue
+}
+
+func (fuzzer *Fuzzer) smashQueueForCall(info *triageCall) *queue.PlainQueue {
+	for _, tier := range fuzzer.tiers[:len(fuzzer.tiers)-1] {
+		for pc := range info.cover {
+			if _, ok := tier.coverPCs[pc]; ok {
+				return tier.smashQueue
+			}
+		}
+	}
+	return fuzzer.tiers[len(fuzzer.tiers)-1].smashQueue
 }
 
 func (fuzzer *Fuzzer) CandidatesToTriage() int {
@@ -158,7 +214,7 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
 		fuzzer.triageProgCall(req.Prog, res.Info.Extra, -1, &triage)
 
 		if len(triage) != 0 {
-			queue, stat := fuzzer.triageQueue, fuzzer.statJobsTriage
+			queue, stat := fuzzer.triageQueueForCalls(triage), fuzzer.statJobsTriage
 			jobType := JobTriage
 			if flags&progCandidate > 0 {
 				queue, stat = fuzzer.triageCandidateQueue, fuzzer.statJobsTriageCandidate

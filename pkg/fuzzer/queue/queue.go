@@ -332,7 +332,7 @@ type alternate struct {
 	seq  atomic.Int64
 }
 
-// Alternate proxies base, but returns nil every nth Next() call.
+// Alternate proxies base, but only returns a request every nth Next() call.
 func Alternate(base Source, nth int) Source {
 	return &alternate{
 		base: base,
@@ -341,7 +341,7 @@ func Alternate(base Source, nth int) Source {
 }
 
 func (a *alternate) Next() *Request {
-	if a.seq.Add(1)%int64(a.nth) == 0 {
+	if a.seq.Add(1)%int64(a.nth) != 0 {
 		return nil
 	}
 	return a.base.Next()

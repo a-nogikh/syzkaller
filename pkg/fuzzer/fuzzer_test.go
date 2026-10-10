@@ -40,13 +40,27 @@ func TestFuzz(t *testing.T) {
 		t.Skipf("skipping, broken cross-compiler: %v", sysTarget.BrokenCompiler)
 	}
 	executor := csource.BuildExecutor(t, target, "../..", "-fsanitize-coverage=trace-pc", "-g")
+	var pcs []uint64
+	t.Run("normal", func(t *testing.T) {
+		pcs = testFuzz(t, target, executor, false, nil)
+	})
+	t.Run("patch_test", func(t *testing.T) {
+		testFuzz(t, target, executor, true, []corpus.FocusArea{
+			{Name: "high", CoverPCs: map[uint64]struct{}{pcs[0]: {}}, Weight: 6.0},
+			{Name: "low", CoverPCs: map[uint64]struct{}{pcs[len(pcs)-1]: {}}, Weight: 3.0},
+			{Weight: 1.0},
+		})
+	})
+}
 
+func testFuzz(t *testing.T, target *prog.Target, executor string, patchTest bool, areas []corpus.FocusArea) []uint64 {
 	ctx := t.Context()
 
 	corpusUpdates := make(chan corpus.NewItemEvent)
 	fuzzer := NewFuzzer(ctx, &Config{
-		Debug:  true,
-		Corpus: corpus.NewMonitoredCorpus(ctx, corpusUpdates),
+		Debug:     true,
+		Corpus:    corpus.NewFocusedCorpus(ctx, corpusUpdates, areas),
+		PatchTest: patchTest,
 		Logf: func(level int, msg string, args ...any) {
 			if level > 1 {
 				return
@@ -88,6 +102,7 @@ func TestFuzz(t *testing.T) {
 		t.Logf("-----")
 		t.Logf("%s", p.Serialize())
 	}
+	return fuzzer.Config.Corpus.Cover()
 }
 
 func BenchmarkFuzzer(b *testing.B) {
