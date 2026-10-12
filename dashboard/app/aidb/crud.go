@@ -6,6 +6,7 @@ package aidb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -1100,7 +1101,7 @@ func CreatePatchIterationJob(ctx context.Context, reportingID string, replyToCom
 			}
 		}
 
-		extractBaseCommitArgs(parentJob, argsMap)
+		extractBaseCommitArgs(parentJob, reporting.ExtraCcList, argsMap)
 		argsMap["TargetCommentIDs"] = commentIDs
 		argsMap["ReplyToComments"] = replyToComments
 
@@ -1321,6 +1322,23 @@ func IterationJobDone(ctx context.Context, jobID string, commentIDs []string,
 			return err
 		}
 
+		// 4. Load the completed iteration job and apply recipient/tag updates.
+		stmt = spanner.Statement{
+			SQL:    selectJobs() + ` WHERE ID = @id`,
+			Params: map[string]any{"id": jobID},
+		}
+		job, err := readRow[Job](ctx, tx, stmt)
+		if err != nil {
+			return err
+		}
+		if job == nil {
+			return ErrNotFound
+		}
+		mutations, err := applyIterationResults(job, parentJob, parentRep, hasPatch)
+		if err != nil {
+			return err
+		}
+
 		// If the job didn't generate a patch or replies (or replying is disabled for this stage),
 		// we don't need to report it externally.
 		replyAllowed := true
@@ -1336,12 +1354,8 @@ func IterationJobDone(ctx context.Context, jobID string, commentIDs []string,
 			inReplyTos = append(inReplyTos, "")
 		}
 		inReplyTos = append(inReplyTos, replyToIDs...)
-		if len(inReplyTos) == 0 {
-			return nil
-		}
 
 		now := TimeNow(ctx)
-		var mutations []*spanner.Mutation
 		for _, inReplyTo := range inReplyTos {
 			var version spanner.NullInt64
 			if inReplyTo == "" {
@@ -1560,11 +1574,71 @@ func readRow[T any](ctx context.Context, txn dbQuerier, stmt spanner.Statement) 
 	return pkgspanner.ReadRow[T](iter)
 }
 
-func extractBaseCommitArgs(job *Job, argsMap map[string]any) {
-	if !job.Results.Valid {
-		return
+var iterationTagFields = []string{"ReviewedBy", "AckedBy", "TestedBy", "ReportedBy", "SuggestedBy"}
+
+// applyIterationResults prunes any recipients removed during the iteration from parentRep.ExtraCcList.
+// When the iteration did not produce a new patch version (!hasPatch), it also updates parentJob.Results
+// and parentRep.ExtraCcList in-place in Spanner so subsequent iterations or upstreaming pick up the changes.
+func applyIterationResults(job, parentJob *Job, parentRep *JobReporting,
+	hasPatch bool) ([]*spanner.Mutation, error) {
+	resMap := nullJSONMap(job.Results)
+	if resMap == nil {
+		return nil, nil
 	}
-	if m, ok := job.Results.Value.(map[string]any); ok {
+	extraCcList := slices.Clone(parentRep.ExtraCcList)
+	if rawRecs, ok := resMap["Recipients"]; ok {
+		newRecs := parseRecipients(rawRecs)
+		extraCcList = slices.DeleteFunc(extraCcList, func(cc string) bool {
+			canonical := email.CanonicalEmail(cc)
+			return !slices.ContainsFunc(newRecs, func(r ai.Recipient) bool {
+				return email.CanonicalEmail(r.Email) == canonical
+			})
+		})
+	}
+	if hasPatch {
+		parentRep.ExtraCcList = extraCcList
+		return nil, nil
+	}
+
+	var mutations []*spanner.Mutation
+	parentRes := maps.Clone(nullJSONMap(parentJob.Results))
+	if parentRes == nil {
+		parentRes = make(map[string]any)
+	}
+	parentUpdated := false
+	for _, key := range append([]string{"Recipients"}, iterationTagFields...) {
+		if val, ok := resMap[key]; ok {
+			parentRes[key] = val
+			parentUpdated = true
+		}
+	}
+	if parentUpdated {
+		parentJob.Results = toNullJSON(parentRes)
+		mut, err := spanner.UpdateStruct("Jobs", parentJob)
+		if err != nil {
+			return nil, err
+		}
+		mutations = append(mutations, mut)
+	}
+	if !slices.Equal(extraCcList, parentRep.ExtraCcList) {
+		parentRep.ExtraCcList = extraCcList
+		mut, err := spanner.UpdateStruct("JobReporting", parentRep)
+		if err != nil {
+			return nil, err
+		}
+		mutations = append(mutations, mut)
+	}
+	return mutations, nil
+}
+
+func extractBaseCommitArgs(job *Job, extraCc []string, argsMap map[string]any) {
+	delete(argsMap, "BaseFixes")
+	delete(argsMap, "BaseRecipients")
+	for _, key := range iterationTagFields {
+		delete(argsMap, "Base"+key)
+	}
+	var recipients []ai.Recipient
+	if m := nullJSONMap(job.Results); m != nil {
 		if repo, ok := m["KernelRepo"].(string); ok && repo != "" {
 			argsMap["BaseRepository"] = repo
 		}
@@ -1577,20 +1651,45 @@ func extractBaseCommitArgs(job *Job, argsMap map[string]any) {
 		if fixes, ok := m["Fixes"].(map[string]any); ok && fixes != nil {
 			argsMap["BaseFixes"] = fixes
 		}
-		if tags, ok := m["ReviewedBy"].([]any); ok && tags != nil {
-			argsMap["BaseReviewedBy"] = tags
+		for _, key := range iterationTagFields {
+			if tags, ok := m[key].([]any); ok && tags != nil {
+				argsMap["Base"+key] = tags
+			}
 		}
-		if tags, ok := m["AckedBy"].([]any); ok && tags != nil {
-			argsMap["BaseAckedBy"] = tags
-		}
-		if tags, ok := m["TestedBy"].([]any); ok && tags != nil {
-			argsMap["BaseTestedBy"] = tags
-		}
-		if tags, ok := m["ReportedBy"].([]any); ok && tags != nil {
-			argsMap["BaseReportedBy"] = tags
-		}
-		if tags, ok := m["SuggestedBy"].([]any); ok && tags != nil {
-			argsMap["BaseSuggestedBy"] = tags
+		recipients = parseRecipients(m["Recipients"])
+	}
+	for _, cc := range extraCc {
+		canonical := email.CanonicalEmail(cc)
+		if !slices.ContainsFunc(recipients, func(r ai.Recipient) bool {
+			return email.CanonicalEmail(r.Email) == canonical
+		}) {
+			recipients = append(recipients, ai.Recipient{Email: cc})
 		}
 	}
+	if len(recipients) > 0 {
+		argsMap["BaseRecipients"] = recipients
+	}
+}
+
+func nullJSONMap(j spanner.NullJSON) map[string]any {
+	if !j.Valid {
+		return nil
+	}
+	m, _ := j.Value.(map[string]any)
+	return m
+}
+
+func parseRecipients(v any) []ai.Recipient {
+	if v == nil {
+		return nil
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var res []ai.Recipient
+	if err := json.Unmarshal(data, &res); err != nil {
+		return nil
+	}
+	return res
 }

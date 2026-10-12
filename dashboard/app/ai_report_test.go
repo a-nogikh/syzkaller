@@ -1823,3 +1823,132 @@ func TestAIPatchIterationPatchAndReplies(t *testing.T) {
 	require.Equal(t, "public@test.com", publicPoll.Result.To[0])
 	require.Equal(t, 1, publicPoll.Result.Patch.Version)
 }
+
+func TestAIPatchIterationRecipients(t *testing.T) {
+	c := NewSpannerCtx(t)
+	defer c.Close()
+
+	c.SetAIConfig("ains", &AIConfig{
+		Stages: []AIPatchStageConfig{
+			{
+				Name:               "moderation",
+				ServingIntegration: "lore",
+				MailingList:        "moderation@test.com",
+				AddressComments:    true,
+				ReplyToComments:    true,
+			},
+			{
+				Name:               "public",
+				ServingIntegration: "lore",
+				MailingList:        "public@test.com",
+				MergePatchCc:       true,
+			},
+		},
+	})
+
+	startIteration := func(rootExtID, msgExtID string, cc []string) *dashapi.AIJobPollResp {
+		_, err := c.globalClient.AIReportCommand(&dashapi.SendExternalCommandReq{
+			Source:       dashapi.AIJobSourceLore,
+			RootExtID:    rootExtID,
+			MessageExtID: msgExtID,
+			Author:       "rev@test.com",
+			Cc:           cc,
+			Comment:      &dashapi.CommentCommand{Body: "review comment"},
+		})
+		require.NoError(t, err)
+		c.advanceTime(31 * time.Minute)
+		iter := c.pollAIWorkflow(t, ai.WorkflowPatchIteration)
+		require.NotEmpty(t, iter.ID)
+		return iter
+	}
+	baseRecipients := func(iter *dashapi.AIJobPollResp) []ai.Recipient {
+		data, err := json.Marshal(iter.Args["BaseRecipients"])
+		require.NoError(t, err)
+		var recs []ai.Recipient
+		require.NoError(t, json.Unmarshal(data, &recs))
+		return recs
+	}
+
+	_, jobID := c.setupAIPatchJob(t)
+	c.finishAIPatchJob(t, jobID, map[string]any{
+		"Recipients": []ai.Recipient{
+			{Name: "Maintainer One", Email: "m1@kernel.org", To: true},
+			{Name: "Maintainer Two", Email: "m2@kernel.org"},
+		},
+	})
+	c.pollAndConfirmReport(t, dashapi.AIJobSourceLore, "<v1>")
+
+	// 1. Reply-only iteration: updates recipients in-place and prunes dropped ExtraCc.
+	iter1 := startIteration("<v1>", "<c1>", []string{"moderation@test.com", "discuss@test.com", "drop@test.com"})
+	require.Equal(t, []ai.Recipient{
+		{Name: "Maintainer One", Email: "m1@kernel.org", To: true},
+		{Name: "Maintainer Two", Email: "m2@kernel.org"},
+		{Email: "discuss@test.com"},
+		{Email: "drop@test.com"},
+	}, baseRecipients(iter1))
+	require.NoError(t, c.agentClient.AIJobDone(&dashapi.AIJobDoneReq{
+		ID: iter1.ID,
+		Results: map[string]any{
+			"Recipients": []ai.Recipient{
+				{Name: "Maintainer One", Email: "m1@kernel.org", To: true},
+				{Email: "discuss@test.com"},
+				{Email: "newcc@kernel.org"},
+			},
+			"Replies": []map[string]any{{"ReplyTo": "<c1>", "Text": "Clarification."}},
+		},
+	}))
+	reply1 := c.pollAndConfirmReport(t, dashapi.AIJobSourceLore, "<reply-1>")
+	require.Equal(t, []string{"discuss@test.com"}, reply1.Result.Cc)
+
+	// 2. Patch iteration: inherits iter1 recipients and produces v2 patch.
+	iter2 := startIteration("<v1>", "<c2>", nil)
+	require.Equal(t, []ai.Recipient{
+		{Name: "Maintainer One", Email: "m1@kernel.org", To: true},
+		{Email: "discuss@test.com"},
+		{Email: "newcc@kernel.org"},
+	}, baseRecipients(iter2))
+	c.finishAIPatchJob(t, iter2.ID, map[string]any{
+		"Recipients": []ai.Recipient{
+			{Name: "Maintainer One", Email: "m1@kernel.org", To: true},
+			{Email: "discuss@test.com"},
+			{Email: "newcc@kernel.org"},
+		},
+	})
+
+	v2 := c.pollAndConfirmReport(t, dashapi.AIJobSourceLore, "<v2>")
+	require.Equal(t, []string{"moderation@test.com"}, v2.Result.To)
+	require.Equal(t, []string{"discuss@test.com"}, v2.Result.Cc)
+	require.Equal(t, []string{"<discuss@test.com>", "<newcc@kernel.org>"}, v2.Result.Patch.Cc)
+
+	// 3. Reply-only iteration on v2: updates v2 recipients in-place before upstreaming.
+	iter3 := startIteration("<v2>", "<c3>", nil)
+	require.NoError(t, c.agentClient.AIJobDone(&dashapi.AIJobDoneReq{
+		ID: iter3.ID,
+		Results: map[string]any{
+			"Recipients": []ai.Recipient{
+				{Name: "Maintainer One", Email: "m1@kernel.org", To: true},
+				{Email: "discuss@test.com"},
+				{Email: "final@kernel.org"},
+			},
+			"Replies": []map[string]any{{"ReplyTo": "<c3>", "Text": "Updated."}},
+		},
+	}))
+	c.pollAndConfirmReport(t, dashapi.AIJobSourceLore, "<reply-3>")
+
+	// 4. Upstream v2 to public stage (MergePatchCc: true) and verify latest recipients are applied.
+	upstreamResp, err := c.globalClient.AIReportCommand(&dashapi.SendExternalCommandReq{
+		Source:       dashapi.AIJobSourceLore,
+		RootExtID:    "<v2>",
+		MessageExtID: "<upstream-cmd>",
+		Author:       "approver@test.com",
+		Upstream:     &dashapi.UpstreamCommand{},
+	})
+	require.NoError(t, err)
+	require.Empty(t, upstreamResp.Error)
+
+	publicPatch := c.pollAndConfirmReport(t, dashapi.AIJobSourceLore, "<public-v1>")
+	require.Equal(t, []string{
+		"public@test.com", "approver@test.com", `"Maintainer One" <m1@kernel.org>`,
+	}, publicPatch.Result.To)
+	require.Equal(t, []string{"<discuss@test.com>", "<final@kernel.org>"}, publicPatch.Result.Cc)
+}

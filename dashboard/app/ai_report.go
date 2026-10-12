@@ -336,19 +336,8 @@ func apiAIPollReport(ctx context.Context, req *dashapi.PollExternalReportReq) (a
 			result.Patch.Closes = closes
 		}
 
-		result.To = []string{stageCfg.MailingList}
-		if stageCfg.MergePatchCc && result.Patch != nil {
-			result.To = append(result.To, result.Patch.To...)
-			result.Cc = append(result.Cc, result.Patch.Cc...)
-		}
-
-		result.Cc = append(result.Cc, r.ExtraCcList...)
-		result.Cc = email.SubtractEmailLists(unique(result.Cc), result.To)
-
-		result.CanUpstream = idx < len(nsCfg.AI.Stages)-1
-		if result.Patch == nil {
-			result.CanUpstream = false
-		}
+		populateReportRecipients(result, stageCfg, r.ExtraCcList)
+		result.CanUpstream = result.Patch != nil && idx < len(nsCfg.AI.Stages)-1
 		result.AddressComments = stageCfg.AddressComments
 
 		return &dashapi.PollExternalReportResp{
@@ -356,6 +345,22 @@ func apiAIPollReport(ctx context.Context, req *dashapi.PollExternalReportReq) (a
 		}, nil
 	}
 	return &dashapi.PollExternalReportResp{}, nil
+}
+
+func populateReportRecipients(result *dashapi.ReportPollResult, stageCfg *AIPatchStageConfig, extraCc []string) {
+	result.To = []string{stageCfg.MailingList}
+	if stageCfg.MergePatchCc && result.Patch != nil {
+		result.To = append(result.To, result.Patch.To...)
+		result.Cc = append(result.Cc, result.Patch.Cc...)
+	}
+	// Deduplicate by canonical email rather than exact string match (unique), because result.Patch.Cc
+	// entries may include a display name or angle brackets while extraCc entries are bare email addresses.
+	for _, extra := range extraCc {
+		if !slices.ContainsFunc(result.Cc, func(c string) bool { return email.EmailsMatch(c, extra) }) {
+			result.Cc = append(result.Cc, extra)
+		}
+	}
+	result.Cc = email.SubtractEmailLists(unique(result.Cc), result.To)
 }
 
 func makeNewReportResult(ctx context.Context, job *aidb.Job, res *ai.PatchingOutputs,
