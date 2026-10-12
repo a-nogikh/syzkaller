@@ -17,6 +17,10 @@ func TestMergeTags(t *testing.T) {
 	args := tagsMergerArgs{
 		BaseReviewedBy: []string{"Old Reviewer <old@rev.com>", "Drop Me <drop@me.com>"},
 		BaseTestedBy:   []string{"Existing Tester <test@test.com>"},
+		BaseRecipients: []ai.Recipient{
+			{Name: "Maintainer One", Email: "m1@kernel.org", To: true},
+			{Name: "Maintainer Two", Email: "m2@kernel.org", To: true},
+		},
 		AddTags: []ai.EmailTag{
 			{Tag: "Reviewed-by", Value: "New Reviewer <new@rev.com>"},
 			{Tag: "Acked-by", Value: "New Acker <ack@ack.com>"},
@@ -30,6 +34,8 @@ func TestMergeTags(t *testing.T) {
 		RemoveTags: []ai.EmailTag{
 			{Tag: "Reviewed-by", Value: "Drop Me <drop@me.com>"},
 		},
+		AddCc:    []string{"newcc@kernel.org", "M1@kernel.org"},
+		RemoveCc: []string{"m2@kernel.org"},
 	}
 
 	result, err := mergeTags(ctx, args)
@@ -40,6 +46,10 @@ func TestMergeTags(t *testing.T) {
 	require.Equal(t, []string{"Existing Tester <test@test.com>"}, result.TestedBy)
 	require.Equal(t, []string{"Suggester <suggester@syzbot.org>"}, result.SuggestedBy)
 	require.Empty(t, result.ReportedBy)
+	require.Equal(t, []ai.Recipient{
+		{Name: "Maintainer One", Email: "m1@kernel.org", To: true},
+		{Email: "newcc@kernel.org"},
+	}, result.Recipients)
 }
 
 func TestValidateTagExtractorOutputs(t *testing.T) {
@@ -82,6 +92,20 @@ func TestValidateTagExtractorOutputs(t *testing.T) {
 			wantErr: "",
 		},
 		{
+			name: "Valid Cc",
+			state: tagExtractorState{
+				BaseRecipients: []ai.Recipient{{Name: "Maintainer", Email: "maint@kernel.org", To: true}},
+			},
+			args: tagExtractorArgs{
+				AddCc:    []string{"Ignored Name <added@kernel.org>", "plain@kernel.org"},
+				RemoveCc: []string{"Maintainer <maint@kernel.org>"},
+			},
+			want: tagExtractorArgs{
+				AddCc:    []string{"added@kernel.org", "plain@kernel.org"},
+				RemoveCc: []string{"maint@kernel.org"},
+			},
+		},
+		{
 			name: "Remove missing tag",
 			state: tagExtractorState{
 				BaseAckedBy: []string{},
@@ -111,6 +135,17 @@ func TestValidateTagExtractorOutputs(t *testing.T) {
 				},
 			},
 			wantErr: "value for tag \"Reviewed-by\" must be a valid name and email",
+		},
+		{
+			name:    "Invalid AddCc email",
+			args:    tagExtractorArgs{AddCc: []string{"Just A Name"}},
+			wantErr: `value "Just A Name" in AddCc must be a valid email address`,
+		},
+		{
+			name:    "Remove missing recipient",
+			state:   tagExtractorState{BaseRecipients: []ai.Recipient{{Email: "present@kernel.org"}}},
+			args:    tagExtractorArgs{RemoveCc: []string{"missing@kernel.org"}},
+			wantErr: `recipient "missing@kernel.org" is not present in the current recipient list`,
 		},
 	}
 
