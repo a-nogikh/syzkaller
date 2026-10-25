@@ -63,7 +63,7 @@ func main() {
 	if len(tasks) == 0 {
 		tool.Failf("no task files found in %q", *flagInput)
 	}
-	cacheSize, err := parseSize(*flagCacheSize)
+	cacheSize, err := aflow.ParseCacheSize(*flagCacheSize)
 	if err != nil {
 		tool.Fail(err)
 	}
@@ -221,28 +221,6 @@ func getAccessToken() (string, error) {
 	}
 
 	return token.AccessToken, nil
-}
-
-func parseSize(s string) (uint64, error) {
-	var size uint64
-	var suffix string
-	if _, err := fmt.Sscanf(s, "%d%s", &size, &suffix); err != nil {
-		return 0, fmt.Errorf("failed to parse cache size %q: %w", s, err)
-	}
-	switch suffix {
-	case "KB":
-		size <<= 10
-	case "MB":
-		size <<= 20
-	case "GB":
-		size <<= 30
-	case "TB":
-		size <<= 40
-	case "":
-	default:
-		return 0, fmt.Errorf("unknown size suffix %q", suffix)
-	}
-	return size, nil
 }
 
 // expandFileInputs recursively traverses workflow inputs and replaces any

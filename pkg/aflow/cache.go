@@ -49,6 +49,29 @@ func NewCache(dir string, maxSize uint64) (*Cache, error) {
 	return newTestCache(nil, dir, maxSize, time.Now)
 }
 
+// ParseCacheSize parses human-readable cache sizes like 100MB, 5GB, 1TB.
+func ParseCacheSize(s string) (uint64, error) {
+	var size uint64
+	var suffix string
+	if _, err := fmt.Sscanf(s, "%d%s", &size, &suffix); err != nil {
+		return 0, fmt.Errorf("failed to parse cache size %q: %w", s, err)
+	}
+	switch suffix {
+	case "KB":
+		size <<= 10
+	case "MB":
+		size <<= 20
+	case "GB":
+		size <<= 30
+	case "TB":
+		size <<= 40
+	case "":
+	default:
+		return 0, fmt.Errorf("unknown size suffix %q", suffix)
+	}
+	return size, nil
+}
+
 func newTestCache(t *testing.T, dir string, maxSize uint64, timeNow func() time.Time) (*Cache, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("cache workdir is empty")

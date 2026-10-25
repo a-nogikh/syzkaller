@@ -355,3 +355,20 @@ func waitFlightJoin(t *testing.T, count int) {
 	}
 	t.Fatalf("timed out waiting for %v goroutines to join the flight", count)
 }
+
+func TestParseCacheSize(t *testing.T) {
+	for input, want := range map[string]uint64{
+		"10KB":  10 << 10,
+		"100MB": 100 << 20,
+		"5GB":   5 << 30,
+		"1TB":   1 << 40,
+	} {
+		size, err := ParseCacheSize(input)
+		require.NoError(t, err, input)
+		require.Equal(t, want, size, input)
+	}
+	for _, input := range []string{"", "GB", "10XB", "-1GB"} {
+		_, err := ParseCacheSize(input)
+		require.Error(t, err, input)
+	}
+}
