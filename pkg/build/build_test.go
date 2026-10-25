@@ -79,7 +79,7 @@ func TestCompilerIdentity(t *testing.T) {
 			if _, err := exec.LookPath(compiler); err != nil {
 				t.Skipf("compiler '%v' is not found: %v", compiler, err)
 			}
-			id, err := compilerIdentity(compiler)
+			id, err := CompilerIdentity(compiler)
 			if err != nil {
 				t.Fatalf("failed: %v", err)
 			}

@@ -100,7 +100,7 @@ func Image(params Params) (details ImageDetails, err error) {
 	if details.CompilerID == "" {
 		// Fill in the compiler info even if the build failed.
 		var idErr error
-		details.CompilerID, idErr = compilerIdentity(params.Compiler)
+		details.CompilerID, idErr = CompilerIdentity(params.Compiler)
 		if err == nil {
 			err = idErr
 		} // Try to preserve the build error otherwise.
@@ -186,7 +186,8 @@ func getBuilder(params Params) (builder, error) {
 	return nil, fmt.Errorf("unsupported image type %v/%v/%v", params.TargetOS, params.TargetArch, params.VMType)
 }
 
-func compilerIdentity(compiler string) (string, error) {
+// CompilerIdentity returns the name and the version of the compiler (the first line of --version output).
+func CompilerIdentity(compiler string) (string, error) {
 	if compiler == "" {
 		return "", nil
 	}
