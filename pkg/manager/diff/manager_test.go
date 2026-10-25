@@ -6,6 +6,7 @@ package diff
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/google/syzkaller/pkg/repro"
 	_ "github.com/google/syzkaller/prog/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const testTimeout = 15 * time.Second
@@ -176,6 +178,40 @@ func TestDiffFailBaseCrashEarly(t *testing.T) {
 	env.new.CrashesCh <- &report.Report{Title: "crash_title", Report: []byte("log")}
 	env.waitForStatus("crash_title", manager.DiffBugStatusIgnored)
 	assert.False(t, runReproCalled, "WaitRepro should not be called")
+}
+
+func TestDiffNoRepro(t *testing.T) {
+	// Reproduction is disabled -> Patched crashes are only recorded.
+	var runReproCalled atomic.Bool
+	env := newTestEnv(t, &Config{
+		runRepro: mockReproCallback("crash_title", nil, func() {
+			runReproCalled.Store(true)
+		}),
+	})
+	defer env.close()
+	env.new.ConfigVal.Reproduce = false
+
+	env.new.FinishCorpusTriage()
+	env.start()
+
+	env.new.CrashesCh <- &report.Report{Title: "crash_title", Report: []byte("log")}
+	require.Eventually(t, func() bool {
+		bugs := env.diffCtx.store.List()
+		return len(bugs) == 1 && bugs[0].Patched.Crashes == 1
+	}, testTimeout, 10*time.Millisecond)
+	bug := env.diffCtx.store.List()[0]
+	assert.Equal(t, manager.DiffBugStatus(""), bug.Status)
+	assert.NotEmpty(t, bug.Patched.Report)
+
+	// Base crashes are still reported.
+	env.base.CrashesCh <- &report.Report{Title: "base_crash"}
+	select {
+	case title := <-env.diffCtx.cfg.BaseCrashes:
+		assert.Equal(t, "base_crash", title)
+	case <-time.After(testTimeout):
+		t.Fatal("expected base crash")
+	}
+	assert.False(t, runReproCalled.Load(), "repro must not be called")
 }
 
 func TestDiffRetryRepro(t *testing.T) {

@@ -19,6 +19,8 @@ bin/syz-diff -workdir ~/syz-workdir -base-commit v6.18 -patch fix.diff -time 1h
   [torvalds tree](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux).
 * `-patch` is a git diff that applies to the base commit.
 * `-time` is the fuzzing duration (default: `1h`). Press Ctrl+C to stop earlier.
+* `-repro=false` disables the reproduction of crashes. It saves VM time when you are only interested
+  in which crashes are found, e.g. while evaluating fuzzing changes.
 * `-cache-size` limits the disk space used for the cached kernel builds and downloads
   (default: `100GB`). Each kernel build takes 1-2GB, the least recently used ones are removed first.
 
@@ -55,3 +57,4 @@ bin/syz-diff -base base.cfg -new patched.cfg [-patch fix.diff]
 
 If `-patch` is given, fuzzing is focused on the code modified by it. The findings are saved to
 `crashes/` in the workdir of the `-new` config, and the web UI is served at its `http` address.
+Set `"reproduce": false` in the `-new` config to disable the reproduction of crashes.

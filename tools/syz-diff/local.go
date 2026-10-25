@@ -44,6 +44,7 @@ type localParams struct {
 	PatchFile  string
 	Duration   time.Duration
 	CacheSize  uint64
+	Repro      bool
 	Debug      bool
 }
 
@@ -274,6 +275,7 @@ func (r *localRun) managerConfig(generate func(*api.FuzzConfig) (*mgrconfig.Conf
 	if err != nil {
 		return nil, err
 	}
+	cfg.Reproduce = r.Repro
 	return cfg, nil
 }
 

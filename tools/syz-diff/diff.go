@@ -36,6 +36,7 @@ var (
 		" -base-commit and -patch")
 	flagBaseCommit = flag.String("base-commit", "", "base kernel commit, tag or branch (with -workdir)")
 	flagTime       = flag.Duration("time", time.Hour, "how long to fuzz (with -workdir)")
+	flagRepro      = flag.Bool("repro", true, "reproduce the crashes found on the patched kernel (with -workdir)")
 	flagCacheSize  = flag.String("cache-size", "100GB", "max size of the kernel build/download cache in -workdir"+
 		" (e.g. 500MB, 100GB, 1TB)")
 )
@@ -67,6 +68,7 @@ func main() {
 			PatchFile:  *flagPatch,
 			Duration:   *flagTime,
 			CacheSize:  cacheSize,
+			Repro:      *flagRepro,
 			Debug:      *flagDebug,
 		})
 		if err != nil {

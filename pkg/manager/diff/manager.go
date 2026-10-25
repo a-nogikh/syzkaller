@@ -168,6 +168,10 @@ func (dc *diffContext) Loop(ctx context.Context) error {
 	}
 
 	g.Go(func() error {
+		if !dc.reproduce() {
+			log.Logf(0, "bug reproduction is disabled")
+			return nil
+		}
 		select {
 		case <-groupCtx.Done():
 			return nil
@@ -229,7 +233,7 @@ loop:
 			// A new crash is found on the patched instance.
 			crash := &manager.Crash{Report: rep}
 			ignore := dc.shouldIgnore(crash)
-			need := !ignore && dc.NeedRepro(crash)
+			need := dc.reproduce() && !ignore && dc.NeedRepro(crash)
 			log.Logf(0, "patched crashed: %v [need repro = %v]",
 				rep.Title, need)
 			dc.store.PatchedCrashed(rep)
@@ -394,6 +398,12 @@ func (dc *diffContext) monitorPatchedCoverage(ctx context.Context) error {
 
 // TODO: instead of this limit, consider expotentially growing delays between reproduction attempts.
 const maxReproAttempts = 6
+
+// reproduce returns whether the patched kernel crashes are to be reproduced.
+// If not, the crashes are still recorded, but they are not verified on the base kernel.
+func (dc *diffContext) reproduce() bool {
+	return dc.new.Config().Reproduce
+}
 
 func needReproForTitle(title string) bool {
 	if strings.Contains(title, "no output") ||

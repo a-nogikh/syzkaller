@@ -68,7 +68,7 @@ func newTestEnv(t *testing.T, cfg *Config) *testEnv {
 		return &vm.Instance{}, nil
 	}, func(ctx context.Context, inst *vm.Instance, upd dispatcher.UpdateInfo) {
 	})
-	newKernel.ConfigVal = &mgrconfig.Config{}
+	newKernel.ConfigVal = &mgrconfig.Config{Reproduce: true}
 
 	diffCtx.base = base
 	diffCtx.new = newKernel
