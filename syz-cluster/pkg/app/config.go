@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"net/mail"
 	"os"
-	"regexp"
-	"slices"
 	"strings"
 	"sync"
 
@@ -33,7 +31,8 @@ type AppConfig struct {
 	// Parameters used for sending/generating emails.
 	EmailReporting *EmailConfig `yaml:"emailReporting"`
 	// Trees and Fuzzer configuration.
-	Trees       []*api.Tree             `yaml:"trees"`
+	Trees []*api.Tree `yaml:"trees"`
+	// If empty, api.DefaultFuzzTargets() are used.
 	FuzzTargets []*api.FuzzTriageTarget `yaml:"fuzz_targets"`
 	// AI configuration (e.g. LLM secrets).
 	AI *AIConfig `yaml:"aiConfig"`
@@ -142,6 +141,9 @@ func loadConfig(path string) (*AppConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse: %w", err)
 	}
+	if len(obj.FuzzTargets) == 0 {
+		obj.FuzzTargets = api.DefaultFuzzTargets()
+	}
 
 	err = obj.Validate()
 	if err != nil {
@@ -162,20 +164,7 @@ func (c AppConfig) Validate() error {
 			return fmt.Errorf("emailReporting: %w", err)
 		}
 	}
-	for _, target := range c.FuzzTargets {
-		for _, r := range slices.Concat(target.PathRegexps, target.ExcludePathRegexps) {
-			if _, err := regexp.Compile(r); err != nil {
-				return fmt.Errorf("invalid path regexp %q: %w", r, err)
-			}
-		}
-		for _, campaign := range target.Campaigns {
-			if campaign.Track != string(api.TrackKASAN) && campaign.Track != string(api.TrackKMSAN) {
-				return fmt.Errorf("unsupported fuzzing track %q, must be %q or %q",
-					campaign.Track, api.TrackKASAN, api.TrackKMSAN)
-			}
-		}
-	}
-	return nil
+	return api.ValidateFuzzTargets(c.FuzzTargets)
 }
 
 func (c *EmailConfig) Validate() error {

@@ -34,10 +34,9 @@ func TestConfigs(t *testing.T) {
 		}
 
 		t.Run(path, func(t *testing.T) {
-			_, err := loadConfig(path)
-			if err != nil {
-				t.Fatalf("validation failed: %v", err)
-			}
+			cfg, err := loadConfig(path)
+			require.NoError(t, err)
+			require.NotEmpty(t, cfg.FuzzTargets)
 		})
 		return nil
 	})
