@@ -555,6 +555,46 @@ func buildTestContext(test [2]string, target *Target) (rs rand.Source, ct *Choic
 	return
 }
 
+func TestInsertCallMutatesProducer(t *testing.T) {
+	target := initTargetTest(t, "test", "64")
+	p, err := target.Deserialize([]byte("r0 = mutate5(&(0x7f0000000000)='./file0\\x00', 0x3)\n"), Strict)
+	require.NoError(t, err)
+	enabled := map[*Syscall]bool{
+		target.SyscallMap["mutate5"]: true,
+		target.SyscallMap["mutate6"]: true,
+	}
+	ct := target.BuildChoiceTable(nil, enabled)
+	rs := rand.NewSource(0)
+	opts := MutateOpts{
+		ExpectedIterations: 1,
+		InsertWeight:       100,
+	}
+	coMutated := false
+	for range 400 {
+		p1 := p.Clone()
+		p1.MutateWithOpts(rs, 4, ct, nil, nil, opts)
+		if len(p1.Calls) == 2 && p1.Calls[0].Meta.Name == "mutate5" && p1.Calls[1].Meta.Name == "mutate6" {
+			filename := p1.Calls[0].Args[0].(*PointerArg).Res.(*DataArg).Data()
+			assert.Equal(t, []byte("./file0\x00"), filename, "producerConfigOnly must not mutate filename buffer")
+			flags := p1.Calls[0].Args[1].(*ConstArg).Val
+			if flags != 0x3 {
+				coMutated = true
+			}
+		}
+	}
+	require.True(t, coMutated, "expected insertCall to co-mutate producer call")
+
+	// When inserting reaches ncalls (ncalls == 2), mutateResourceProducer must not run.
+	for range 100 {
+		p1 := p.Clone()
+		p1.MutateWithOpts(rs, 2, ct, nil, nil, opts)
+		if len(p1.Calls) == 2 && p1.Calls[0].Meta.Name == "mutate5" && p1.Calls[1].Meta.Name == "mutate6" {
+			flags := p1.Calls[0].Args[1].(*ConstArg).Val
+			require.Equal(t, uint64(0x3), flags, "must not co-mutate producer when len(p.Calls) == ncalls")
+		}
+	}
+}
+
 func BenchmarkStoreLoadInt(b *testing.B) {
 	// To get unaligned data on heap (compiler manages to align it on stack).
 	data := make([]byte, 9)
