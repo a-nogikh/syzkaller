@@ -122,7 +122,9 @@ type NewItemEvent struct {
 	NewCover []uint64
 }
 
-func (corpus *Corpus) Save(inp NewInput) {
+// Save adds or updates inp in the corpus and returns true if inp's serialized
+// program was not already present in the corpus.
+func (corpus *Corpus) Save(inp NewInput) bool {
 	progData := inp.Prog.Serialize()
 	sig := hash.String(progData)
 
@@ -186,6 +188,7 @@ func (corpus *Corpus) Save(inp NewInput) {
 		}:
 		}
 	}
+	return !exists
 }
 
 func (corpus *Corpus) applyFocusAreas(item *Item, addedCover []uint64) {

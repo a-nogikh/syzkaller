@@ -4,9 +4,13 @@
 package fuzzer
 
 import (
+	"context"
 	"fmt"
+	"math/rand"
 	"testing"
+	"time"
 
+	"github.com/google/syzkaller/pkg/corpus"
 	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
@@ -14,6 +18,7 @@ import (
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys/targets"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDeflake(t *testing.T) {
@@ -164,4 +169,50 @@ func TestDeflake(t *testing.T) {
 			assert.ElementsMatch(t, info.newStableSignal.ToRaw(), test.Info.newStableSignal.ToRaw())
 		})
 	}
+}
+
+func TestHandleCallSmashDedup(t *testing.T) {
+	t.Cleanup(checkGoroutineLeaks)
+
+	target, err := prog.GetTarget(targets.TestOS, targets.TestArch64)
+	require.NoError(t, err)
+	p, err := target.Deserialize([]byte("test$res0()\ntest$int(0x1, 0x2, 0x3, 0x4, 0x5)\n"), prog.Strict)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	fuzzer := NewFuzzer(ctx, &Config{
+		Corpus:         corpus.NewCorpus(ctx),
+		Comparisons:    true,
+		FaultInjection: true,
+		EnabledCalls: map[*prog.Syscall]bool{
+			target.SyscallMap["test$res0"]: true,
+			target.SyscallMap["test$int"]:  true,
+		},
+	}, rand.New(rand.NewSource(0)), target)
+
+	tj := &triageJob{
+		p:      p,
+		flags:  ProgMinimized,
+		fuzzer: fuzzer,
+		info:   &JobInfo{},
+	}
+	tj.handleCall(0, &triageCall{
+		stableSignal:    signal.FromRaw([]uint64{1}, 0),
+		newStableSignal: signal.FromRaw([]uint64{1}, 0),
+		cover:           cover.FromRaw([]uint64{1}),
+	})
+	tj.handleCall(1, &triageCall{
+		stableSignal:    signal.FromRaw([]uint64{2}, 0),
+		newStableSignal: signal.FromRaw([]uint64{2}, 0),
+		cover:           cover.FromRaw([]uint64{2}),
+	})
+
+	// Both calls save the same program to the corpus: only one smashJob should be
+	// started, while per-call hintsJob and faultInjectionJob run for both calls.
+	assert.Eventually(t, func() bool {
+		return fuzzer.statJobsSmash.Val() == 1 &&
+			fuzzer.statJobsHints.Val() == 2 &&
+			fuzzer.statJobsFaultInjection.Val() == 2
+	}, time.Second, 5*time.Millisecond)
+	cancel()
 }

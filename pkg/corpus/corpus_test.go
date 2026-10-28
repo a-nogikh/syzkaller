@@ -201,12 +201,12 @@ func TestFocusedCorpusReSave(t *testing.T) {
 
 	inp := generateRangedInput(target, rs, 1, 1)
 	inp.Cover = []uint64{10}
-	corpus.Save(inp)
+	assert.True(t, corpus.Save(inp))
 	assert.Len(t, corpus.focusAreas[0].progs, 1)
 
 	// Re-save the same input with additional coverage that includes the focus area PC again.
 	inp.Cover = []uint64{10, 20}
-	corpus.Save(inp)
+	assert.False(t, corpus.Save(inp))
 
 	// Verify that the program is not double-counted in the focus area.
 	assert.Len(t, corpus.focusAreas[0].progs, 1)
