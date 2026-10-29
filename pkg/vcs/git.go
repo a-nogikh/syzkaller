@@ -566,20 +566,9 @@ func (git *gitRepo) MergeBases(firstCommit, secondCommit string) ([]*Commit, err
 	return ret, nil
 }
 
-// CommitExists relies on 'git cat-file -e'.
-// If object exists its exit status is 0.
-// If object doesn't exist its exit status is 1 (not documented).
-// Otherwise, the exit status is 128 (not documented).
+// CommitExists reports whether commit resolves to a commit object in the repository.
 func (git Git) CommitExists(commit string) (bool, error) {
-	_, err := git.Run("cat-file", "-e", commit)
-	var vErr *osutil.VerboseError
-	if errors.As(err, &vErr) && vErr.ExitCode == 1 {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
+	return git.verifyObject(commit + "^{commit}")
 }
 
 func (git *gitRepo) CommitExists(commit string) (bool, error) {
@@ -1004,20 +993,35 @@ func (git Git) BranchesThatContain(commit string, since time.Time) ([]branchComm
 }
 
 func (git Git) verifyHash(hash string) (bool, error) {
-	_, err := git.Run("rev-parse", "--quiet", "--verify", hash)
+	return git.verifyObject(hash)
+}
+
+func (git Git) verifyObject(rev string) (bool, error) {
+	_, err := git.RunTimeout(time.Minute, "rev-parse", "--quiet", "--verify", "--end-of-options", rev)
+	if verr, ok := errors.AsType[*osutil.VerboseError](err); ok && verr.ExitCode == 1 {
+		return false, nil
+	}
 	if err != nil {
-		var verboseErr *osutil.VerboseError
-		if errors.As(err, &verboseErr) && verboseErr.ExitCode == 1 {
-			return false, nil
-		}
 		return false, err
 	}
 	return true, nil
 }
 
+// ContainedIn reports whether commit is an ancestor of (or equal to) parent.
+// An unknown commit is reported as not contained; any other git failure is returned as an error.
 func (git Git) ContainedIn(parent, commit string) (bool, error) {
-	_, err := git.Run("merge-base", "--is-ancestor", commit, parent)
-	return err == nil, nil
+	exists, err := git.CommitExists(commit)
+	if err != nil || !exists {
+		return false, err
+	}
+	_, err = git.RunTimeout(time.Minute, "merge-base", "--is-ancestor", commit, parent)
+	if verr, ok := errors.AsType[*osutil.VerboseError](err); ok && verr.ExitCode == 1 {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (git Git) Diff(commitA, commitB string) ([]byte, error) {

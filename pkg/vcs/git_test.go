@@ -5,8 +5,10 @@ package vcs
 
 import (
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -216,28 +218,64 @@ func TestGetCommitsByTitles(t *testing.T) {
 }
 
 func TestContains(t *testing.T) {
-	baseDir := t.TempDir()
+	baseDir := osutil.SandboxTempDir(t)
 	repo := MakeTestRepo(t, baseDir)
 
 	// We expect Contains to return true, if commit is in current checkout.
 	repo.Git("checkout", "-b", "branch-a")
-	repo.Git("commit", "--no-edit", "--allow-empty", "-m", "target")
-	commitA, _ := repo.repo.Commit(HEAD)
-	if contained, _ := repo.repo.Contains(commitA.Hash); !contained {
-		t.Fatalf("contains claims commit that should be present is not")
+	commitA := repo.CommitChangeset("target", FileContent{File: "foo.c", Content: "int x;\n"})
+	contained, err := repo.repo.Contains(commitA.Hash)
+	require.NoError(t, err)
+	assert.True(t, contained)
+
+	for _, missing := range []string{
+		"fake-hash",
+		"0123456789abcdef0123456789abcdef01234567",
+		"v6.12-rc1",
+		"foo.c",
+		"--output=" + filepath.Join(baseDir, "must-not-exist"),
+	} {
+		exists, err := repo.repo.CommitExists(missing)
+		require.NoError(t, err)
+		assert.False(t, exists, "missing=%q", missing)
+
+		contained, err := repo.repo.Contains(missing)
+		require.NoError(t, err)
+		assert.False(t, contained, "missing=%q", missing)
 	}
-	if contained, _ := repo.repo.Contains("fake-hash"); contained {
-		t.Fatalf("contains claims commit that is not present is present")
-	}
+	assert.NoFileExists(t, filepath.Join(baseDir, "must-not-exist"))
+
+	// A blob hash exists in the object database, but is not a commit.
+	blobOut, err := repo.repo.Run("rev-parse", "HEAD:foo.c")
+	require.NoError(t, err)
+	blobHash := strings.TrimSpace(string(blobOut))
+	exists, err := repo.repo.CommitExists(blobHash)
+	require.NoError(t, err)
+	assert.False(t, exists)
+	contained, err = repo.repo.Contains(blobHash)
+	require.NoError(t, err)
+	assert.False(t, contained)
 
 	// Commits must only be searched for from the checkedout HEAD.
 	repo.Git("checkout", "-b", "branch-b")
 	repo.Git("commit", "--no-edit", "--allow-empty", "-m", "target")
-	commitB, _ := repo.repo.Commit(HEAD)
+	commitB, err := repo.repo.Commit(HEAD)
+	require.NoError(t, err)
 	repo.Git("checkout", "branch-a")
-	if contained, _ := repo.repo.Contains(commitB.Hash); contained {
-		t.Fatalf("contains found commit that is not in current branch")
-	}
+	contained, err = repo.repo.Contains(commitB.Hash)
+	require.NoError(t, err)
+	assert.False(t, contained)
+
+	// Invalid parent commit is an error, not a "not contained" result.
+	_, err = repo.repo.ContainedIn("fake-parent", commitA.Hash)
+	require.Error(t, err)
+
+	// Non-repository directory must return an error rather than false, nil.
+	nonRepo := Git{Dir: t.TempDir()}
+	_, err = nonRepo.CommitExists(commitA.Hash)
+	require.Error(t, err)
+	_, err = nonRepo.ContainedIn(HEAD, commitA.Hash)
+	require.Error(t, err)
 }
 
 func TestLatestCommits(t *testing.T) {
