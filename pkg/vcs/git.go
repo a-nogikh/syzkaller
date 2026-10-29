@@ -691,12 +691,17 @@ func (git Git) Reset() error {
 	return err
 }
 
+var ErrCommitNotFound = errors.New("commit not found")
+
 // Commit extracts the information about the particular git commit.
 func (git Git) Commit(hash string) (*Commit, error) {
 	const patchSeparator = "---===syzkaller-patch-separator===---"
 	output, err := git.Run("log", "--format=%H%n%s%n%ae%n%an%n%ad%n%P%n%cd%n%b"+patchSeparator,
-		"-n", "1", "-p", "-U0", hash)
+		"-n", "1", "-p", "-U0", "--end-of-options", hash+"^{commit}", "--")
 	if err != nil {
+		if exists, existsErr := git.CommitExists(hash); existsErr == nil && !exists {
+			return nil, fmt.Errorf("%w: %w", ErrCommitNotFound, err)
+		}
 		return nil, err
 	}
 	before, after, ok := bytes.Cut(output, []byte(patchSeparator))

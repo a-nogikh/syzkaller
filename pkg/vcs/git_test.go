@@ -239,6 +239,9 @@ func TestContains(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, exists, "missing=%q", missing)
 
+		_, err = repo.repo.Commit(missing)
+		assert.ErrorIs(t, err, ErrCommitNotFound, "missing=%q", missing)
+
 		contained, err := repo.repo.Contains(missing)
 		require.NoError(t, err)
 		assert.False(t, contained, "missing=%q", missing)
@@ -252,6 +255,8 @@ func TestContains(t *testing.T) {
 	exists, err := repo.repo.CommitExists(blobHash)
 	require.NoError(t, err)
 	assert.False(t, exists)
+	_, err = repo.repo.Commit(blobHash)
+	assert.ErrorIs(t, err, ErrCommitNotFound)
 	contained, err = repo.repo.Contains(blobHash)
 	require.NoError(t, err)
 	assert.False(t, contained)
@@ -270,10 +275,13 @@ func TestContains(t *testing.T) {
 	_, err = repo.repo.ContainedIn("fake-parent", commitA.Hash)
 	require.Error(t, err)
 
-	// Non-repository directory must return an error rather than false, nil.
+	// Non-repository directory must return an error rather than false, nil or ErrCommitNotFound.
 	nonRepo := Git{Dir: t.TempDir()}
 	_, err = nonRepo.CommitExists(commitA.Hash)
 	require.Error(t, err)
+	_, err = nonRepo.Commit(commitA.Hash)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrCommitNotFound)
 	_, err = nonRepo.ContainedIn(HEAD, commitA.Hash)
 	require.Error(t, err)
 }
