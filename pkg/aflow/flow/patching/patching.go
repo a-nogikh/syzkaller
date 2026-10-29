@@ -6,6 +6,7 @@ package patching
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -626,14 +627,21 @@ func validateFixesHashes(ctx *aflow.Context, state fixesFinderState, args fixesF
 	if args.FixesHash == "" {
 		return args, nil
 	}
-	commit, err := kernelCommit(state.KernelSrc, args.FixesHash)
-	if err != nil {
+	git := vcs.SandboxedGit(state.KernelSrc)
+	commit, err := git.Commit(args.FixesHash)
+	if errors.Is(err, vcs.ErrCommitNotFound) {
 		return args, aflow.BadCallError("commit hash %q not found in the repository", args.FixesHash)
+	}
+	if err != nil {
+		return args, err
 	}
 	// LLM can provide a commit from a different branch.
 	// We want to ensure it is actually reachable from the current commit.
-	reachable, err := vcs.SandboxedGit(state.KernelSrc).ContainedIn(state.KernelCommit, commit.Hash)
-	if err != nil || !reachable {
+	reachable, err := git.ContainedIn(state.KernelCommit, commit.Hash)
+	if err != nil {
+		return args, err
+	}
+	if !reachable {
 		return args, aflow.BadCallError("commit %q is not reachable from the current commit",
 			args.FixesHash)
 	}
