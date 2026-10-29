@@ -8,12 +8,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/syzkaller/pkg/aflow"
+	"github.com/google/syzkaller/pkg/osutil"
 	"github.com/google/syzkaller/pkg/vcs"
 )
 
@@ -73,14 +73,16 @@ func grepper(ctx *aflow.Context, state state, args args) (results, error) {
 	cmdArgs = append(cmdArgs, args.PathPrefixes...)
 	output, err := vcs.SandboxedGit(state.KernelSrc).RunTimeout(time.Hour, cmdArgs...)
 	if err != nil {
-		if exitErr := new(exec.ExitError); errors.As(err, &exitErr) {
-			if exitErr.ExitCode() == 1 && len(output) == 0 {
+		if errors.Is(err, osutil.ErrTimeout) {
+			return results{}, aflow.BadCallError("git grep timed out")
+		}
+		if verr, ok := errors.AsType[*osutil.VerboseError](err); ok {
+			if verr.ExitCode == 1 && len(verr.Output) == 0 {
 				// No matches is a valid result, not a bad call.
 				return results{Output: "no matches"}, nil
 			}
-			// This should mean an invalid expression.
-			if exitErr.ExitCode() == 128 && bytes.Contains(output, []byte("fatal:")) {
-				return results{}, aflow.BadCallError("bad expression: %s", bytes.TrimSpace(output))
+			if verr.ExitCode == 128 && isGrepBadCall(verr.Output) {
+				return results{}, aflow.BadCallError("bad expression: %s", bytes.TrimSpace(verr.Output))
 			}
 		}
 		return results{}, err
@@ -158,4 +160,10 @@ func matchesPerFile(kernelSrc string, args args) (string, error) {
 		fmt.Fprintf(&sb, "... and %v more files\n", len(files)-maxFiles)
 	}
 	return sb.String(), nil
+}
+
+func isGrepBadCall(output []byte) bool {
+	return bytes.Contains(output, []byte("fatal: -e option, ")) ||
+		bytes.Contains(output, []byte("outside repository")) ||
+		bytes.Contains(output, []byte("Invalid pathspec magic"))
 }
