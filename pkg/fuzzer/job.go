@@ -67,18 +67,22 @@ func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *queue.Request {
 	if p == nil {
 		return nil
 	}
+	return &queue.Request{
+		Prog:     fuzzer.mutateProg(p, rnd),
+		ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
+		Stat:     fuzzer.statExecFuzz,
+	}
+}
+
+func (fuzzer *Fuzzer) mutateProg(p *prog.Prog, rnd *rand.Rand) *prog.Prog {
 	newP := p.Clone()
 	newP.Mutate(rnd,
 		prog.RecommendedCalls,
 		fuzzer.ChoiceTable(),
 		fuzzer.Config.NoMutateCalls,
-		fuzzer.Config.Corpus.Programs(),
+		fuzzer.spliceCorpus(rnd),
 	)
-	return &queue.Request{
-		Prog:     newP,
-		ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
-		Stat:     fuzzer.statExecFuzz,
-	}
+	return newP
 }
 
 // triageJob are programs for which we noticed potential new coverage during
@@ -165,48 +169,56 @@ func (job *triageJob) run(fuzzer *Fuzzer) {
 
 func (job *triageJob) handleCalls() {
 	var mu sync.Mutex
+	var smashTier *focusTier
 	var smashCalls []string
 	var wg sync.WaitGroup
 	for call, info := range job.calls {
 		wg.Go(func() {
-			if callName := job.handleCall(call, info); callName != "" {
-				mu.Lock()
-				smashCalls = append(smashCalls, callName)
-				mu.Unlock()
+			tier, callName := job.handleCall(call, info)
+			if tier == nil {
+				return
 			}
+			mu.Lock()
+			if smashTier == nil || slices.Index(job.fuzzer.tiers, tier) < slices.Index(job.fuzzer.tiers, smashTier) {
+				smashTier = tier
+			}
+			smashCalls = append(smashCalls, callName)
+			mu.Unlock()
 		})
 	}
 	wg.Wait()
-	if len(smashCalls) != 0 {
+	if smashTier != nil {
 		slices.Sort(smashCalls)
-		job.startSmash(job.fuzzer.catchAllTier(), job.p, smashCalls)
+		job.startSmash(smashTier, job.p, smashCalls)
 	}
 }
 
-// handleCall triages a single call and returns its name if job.p itself needs to be smashed.
-func (job *triageJob) handleCall(call int, info *triageCall) string {
+// handleCall triages a single call and returns the target tier and call name
+// if job.p itself needs to be smashed.
+func (job *triageJob) handleCall(call int, info *triageCall) (*focusTier, string) {
 	if info.newStableSignal.Empty() {
-		return ""
+		return nil, ""
 	}
 
 	p := job.p
-	if job.flags&ProgMinimized == 0 {
+	tier := job.fuzzer.tierForCall(info)
+	if job.flags&ProgMinimized == 0 && tier.inFocus {
 		p, call = job.minimize(call, info)
 		if p == nil {
-			return ""
+			return nil, ""
 		}
 	}
 	callName := p.CallName(call)
 	if !job.fuzzer.Config.NewInputFilter(callName) {
-		return ""
+		return nil, ""
 	}
-	var smashOrigCall string
-	tier := job.fuzzer.catchAllTier()
-	if job.flags&ProgSmashed == 0 {
+	var smashOrigTier *focusTier
+	if tier.shouldSmash(job.flags) {
 		// If the program was not minimized, all calls share the same program,
-		// and handleCalls smashes it once. Hints and fault injection are per-call.
+		// and handleCalls smashes it once in the highest priority tier.
+		// Hints and fault injection are per-call.
 		if p == job.p {
-			smashOrigCall = callName
+			smashOrigTier = tier
 		} else {
 			job.startSmash(tier, p, []string{callName})
 		}
@@ -214,6 +226,7 @@ func (job *triageJob) handleCall(call int, info *triageCall) string {
 			!job.fuzzer.Config.NoMutateCalls[p.Calls[call].Meta.ID] {
 			tier.hints.submit(job.fuzzer, &hintsJob{
 				exec: tier.hintsQueue,
+				tier: tier,
 				p:    p.Clone(),
 				call: call,
 				info: &JobInfo{
@@ -221,7 +234,7 @@ func (job *triageJob) handleCall(call int, info *triageCall) string {
 					Type:  JobHints,
 					Calls: []string{callName},
 				},
-			})
+			}, job.flags)
 		}
 		if job.fuzzer.Config.FaultInjection && call >= 0 {
 			job.fuzzer.startJob(job.fuzzer.statJobsFaultInjection, &faultInjectionJob{
@@ -240,7 +253,7 @@ func (job *triageJob) handleCall(call int, info *triageCall) string {
 		RawCover: info.rawCover,
 	}
 	job.fuzzer.Config.Corpus.Save(input)
-	return smashOrigCall
+	return smashOrigTier, callName
 }
 
 func (job *triageJob) startSmash(tier *focusTier, p *prog.Prog, calls []string) {
@@ -491,11 +504,7 @@ func (job *smashJob) run(fuzzer *Fuzzer) {
 	const iters = 25
 	rnd := fuzzer.rand()
 	for range iters {
-		p := job.p.Clone()
-		p.Mutate(rnd, prog.RecommendedCalls,
-			fuzzer.ChoiceTable(),
-			fuzzer.Config.NoMutateCalls,
-			fuzzer.Config.Corpus.Programs())
+		p := fuzzer.mutateProg(job.p, rnd)
 		result := fuzzer.execute(job.exec, &queue.Request{
 			Prog:     p,
 			ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
@@ -561,12 +570,13 @@ func (job *faultInjectionJob) run(fuzzer *Fuzzer) {
 	}
 }
 
-// Cap hint mutant executions per job so rare calls with hundreds of duplicate
-// array elements don't occupy one of the tier's hints slots for hours.
+// Cap non-focused hint mutant executions per job so rare calls with hundreds of
+// duplicate array elements don't occupy one of the tier's hints slots for hours.
 const maxHintsJobExecs = 128
 
 type hintsJob struct {
 	exec queue.Executor
+	tier *focusTier
 	p    *prog.Prog
 	call int
 	info *JobInfo
@@ -613,28 +623,76 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
 		return
 	}
 
-	// Then mutate the initial program for every match between
-	// a syscall argument and a comparison operand.
-	// Execute each of such mutants to check if it gives new coverage.
-	remaining := maxHintsJobExecs
-	capped := false
-	p.MutateWithHints(job.call, comps, func(p *prog.Prog) bool {
-		if remaining <= 0 {
-			capped = true
-			return false
-		}
-		remaining--
+	// Mutate the program for every match between a syscall argument and a comparison operand.
+	// In patch testing mode, try comparisons from PCs in the tier's focus area first (uncapped).
+	stopped := false
+	execMutant := func(p *prog.Prog) bool {
 		defer job.info.Execs.Add(1)
 		result := fuzzer.execute(job.exec, &queue.Request{
 			Prog:     p,
 			ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
 			Stat:     fuzzer.statExecHint,
 		})
-		return !result.Stop()
-	})
-	if capped {
-		fuzzer.statJobsHintsCapped.Add(1)
+		if result.Stop() {
+			stopped = true
+			return false
+		}
+		return true
 	}
+	var coverPCs map[uint64]struct{}
+	if job.tier != nil {
+		coverPCs = job.tier.coverPCs
+	}
+	focused, rest := splitFocusedComps(comps, coverPCs)
+	if len(focused) > 0 {
+		p.MutateWithHints(job.call, focused, execMutant)
+	}
+	if !stopped && len(rest) > 0 {
+		remaining := maxHintsJobExecs
+		capped := false
+		p.MutateWithHints(job.call, rest, func(p *prog.Prog) bool {
+			if remaining <= 0 {
+				capped = true
+				return false
+			}
+			remaining--
+			return execMutant(p)
+		})
+		if capped {
+			fuzzer.statJobsHintsCapped.Add(1)
+		}
+	}
+}
+
+func splitFocusedComps(comps prog.CompMap, coverPCs map[uint64]struct{}) (focused, rest prog.CompMap) {
+	if len(coverPCs) == 0 {
+		return nil, comps
+	}
+	for op1, ops2 := range comps {
+		for op2, pcs := range ops2 {
+			inFocus := false
+			for pc := range pcs {
+				if _, ok := coverPCs[pc]; ok {
+					inFocus = true
+					break
+				}
+			}
+			for pc := range pcs {
+				if inFocus {
+					if focused == nil {
+						focused = make(prog.CompMap)
+					}
+					focused.Add(pc, op1, op2, true)
+				} else {
+					if rest == nil {
+						rest = make(prog.CompMap)
+					}
+					rest.Add(pc, op1, op2, true)
+				}
+			}
+		}
+	}
+	return focused, rest
 }
 
 func (job *hintsJob) getInfo() *JobInfo {
