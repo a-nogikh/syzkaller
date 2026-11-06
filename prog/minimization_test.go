@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/google/syzkaller/pkg/hash"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // nolint:gocyclo
@@ -470,4 +472,24 @@ func TestMinimizeCallIndex(t *testing.T) {
 			t.Fatalf("bad call index after minimization")
 		}
 	}
+}
+
+func TestMinimizeSetupOutputPtr(t *testing.T) {
+	target := initTargetTest(t, "linux", "amd64")
+	orig, err := target.Deserialize([]byte(`pipe2(&(0x7f0000000000)={<r0=>0x0, <r1=>0x0}, 0x0)
+write(r0, &(0x7f0000000100)="1155", 0x2)
+`), Strict)
+	require.NoError(t, err)
+
+	nulledPipePtr := false
+	p1, ci := Minimize(orig, 1, MinimizeCorpus, func(p *Prog, callIndex int) bool {
+		if len(p.Calls) == 2 && p.Calls[0].Meta.Name == "pipe2" &&
+			p.Calls[0].Args[0].(*PointerArg).Res == nil {
+			nulledPipePtr = true
+		}
+		return false
+	})
+	assert.False(t, nulledPipePtr, "setup call pointer producing live resource must not be nulled")
+	assert.Equal(t, 1, ci)
+	assert.Equal(t, string(orig.Serialize()), string(p1.Serialize()))
 }
