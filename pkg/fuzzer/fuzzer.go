@@ -84,34 +84,69 @@ func (fuzzer *Fuzzer) RecommendedCalls() int {
 type execQueues struct {
 	triageCandidateQueue *queue.DynamicOrderer
 	candidateQueue       *queue.PlainQueue
-	triageQueue          *queue.DynamicOrderer
-	smashQueue           *queue.PlainQueue
-	source               queue.Source
+	// Tiers in the order of decreasing weight. The last tier is the catch-all one.
+	tiers  []*focusTier
+	source queue.Source
 }
+
+const (
+	// Shares of the smash (and fault injection) and hints jobs in the executions
+	// of a tier. Each running job has at most one request in its queue at a time,
+	// so with a shared queue many concurrent hints jobs (which may run thousands
+	// of mutants each) would take most of the executions from smash jobs.
+	smashShare      = 0.68
+	hintsShare      = 0.32
+	patchSmashShare = 0.70
+	patchHintsShare = 0.30
+)
 
 func newExecQueues(fuzzer *Fuzzer) execQueues {
 	ret := execQueues{
 		triageCandidateQueue: queue.DynamicOrder(),
 		candidateQueue:       queue.Plain(),
-		triageQueue:          queue.DynamicOrder(),
-		smashQueue:           queue.Plain(),
+		tiers:                []*focusTier{newFocusTier(1.0)},
 	}
-	// Alternate smash jobs with exec/fuzz to spread attention to the wider area.
-	skipQueue := 3
+	// Alternate smash/hints jobs with exec/fuzz to spread attention to the wider area.
+	// New fuzzing gets fuzzWeight/(smashShare+hintsShare+fuzzWeight) of these executions:
+	// 1/3 normally and 1/2 in the patch testing mode.
+	smashWeight, hintsWeight := smashShare, hintsShare
+	fuzzWeight := 0.5
 	if fuzzer.Config.PatchTest {
 		// When we do patch fuzzing, we do not focus on finding and persisting
 		// new coverage that much, so it's reasonable to spend more time just
-		// mutating various corpus programs.
-		skipQueue = 2
+		// mutating various corpus programs; unfocused inputs are also not smashed
+		// and fault injection is off, so give focused hints jobs a larger share.
+		smashWeight, hintsWeight = patchSmashShare, patchHintsShare
+		fuzzWeight = 1.0
 	}
 	// Sources are listed in the order, in which they will be polled.
-	ret.source = queue.Order(
+	sources := []queue.Source{
 		ret.triageCandidateQueue,
 		ret.candidateQueue,
-		ret.triageQueue,
-		queue.Alternate(ret.smashQueue, skipQueue),
-		queue.Callback(fuzzer.genFuzz),
-	)
+	}
+	var weighted []queue.WeightedSource
+	totalWeight := 0.0
+	for _, tier := range ret.tiers {
+		sources = append(sources, tier.triageQueue)
+		// Nest smash and hints inside one work-conserving tier source so that
+		// when either queue drains, the other receives the tier's full share
+		// instead of ceding it to new fuzzing.
+		tierJobs := queue.Weighted(fuzzer.rand(),
+			queue.WeightedSource{Source: tier.smashQueue, Weight: smashWeight},
+			queue.WeightedSource{Source: tier.hintsQueue, Weight: hintsWeight},
+		)
+		weighted = append(weighted, queue.WeightedSource{
+			Source: tierJobs,
+			Weight: tier.weight,
+		})
+		totalWeight += tier.weight
+	}
+	weighted = append(weighted, queue.WeightedSource{
+		Source: queue.Callback(fuzzer.genFuzz),
+		Weight: totalWeight * fuzzWeight,
+	})
+	sources = append(sources, queue.Weighted(fuzzer.rand(), weighted...))
+	ret.source = queue.Order(sources...)
 	return ret
 }
 
@@ -158,7 +193,7 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
 		fuzzer.triageProgCall(req.Prog, res.Info.Extra, -1, &triage)
 
 		if len(triage) != 0 {
-			queue, stat := fuzzer.triageQueue, fuzzer.statJobsTriage
+			queue, stat := fuzzer.catchAllTier().triageQueue, fuzzer.statJobsTriage
 			jobType := JobTriage
 			if flags&progCandidate > 0 {
 				queue, stat = fuzzer.triageCandidateQueue, fuzzer.statJobsTriageCandidate
