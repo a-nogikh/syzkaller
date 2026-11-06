@@ -397,3 +397,39 @@ func TestFocusedCandidateSmashAndHints(t *testing.T) {
 	assert.Equal(t, 2, fuzzer.statJobsSmash.Val())
 	assert.Equal(t, 1, fuzzer.statJobsHints.Val())
 }
+
+func TestMinimizeFailure(t *testing.T) {
+	target, err := prog.GetTarget(targets.TestOS, targets.TestArch64)
+	require.NoError(t, err)
+	p, err := target.Deserialize([]byte("test$int(0x1, 0x2, 0x3, 0x4, 0x5)\n"), prog.Strict)
+	require.NoError(t, err)
+
+	makeInfo := func(errno int32, sig ...uint64) *flatrpc.ProgInfo {
+		return &flatrpc.ProgInfo{
+			Calls: []*flatrpc.CallInfo{{Error: errno, Signal: sig}},
+		}
+	}
+	// Signal priority for a non-any call is 1 on error and 3 on success.
+	errSignal := signal.FromRaw([]uint64{100, 101}, signalPrio(p, &flatrpc.CallInfo{Error: 22}, 0))
+	okSignal := signal.FromRaw([]uint64{100, 101}, signalPrio(p, &flatrpc.CallInfo{Error: 0}, 0))
+
+	failure := func(info *flatrpc.ProgInfo) *callFailure {
+		return minimizeFailure(p, info, 0, errSignal)
+	}
+	assert.Nil(t, minimizeFailure(p, nil, 0, errSignal))
+	assert.Nil(t, minimizeFailure(p, makeInfo(22, 1, 2), -1, errSignal))
+	assert.Nil(t, minimizeFailure(p, makeInfo(22, 1, 2), 1, errSignal))
+	// Successful calls are not failures, even if they don't give the new signal.
+	assert.Nil(t, failure(makeInfo(0, 1, 2)))
+	// Failed calls that give some of the failed call's new signal are not failures.
+	assert.Nil(t, failure(makeInfo(22, 1, 100)))
+	// Failed calls cannot satisfy new signal of a successful call (higher signal prio).
+	assert.NotNil(t, minimizeFailure(p, makeInfo(22, 1, 100), 0, okSignal))
+
+	f1 := failure(makeInfo(22, 1, 2))
+	require.NotNil(t, f1)
+	assert.True(t, f1.same(failure(makeInfo(22, 2, 1))))
+	assert.False(t, f1.same(failure(makeInfo(22, 1, 3))))
+	assert.False(t, f1.same(failure(makeInfo(11, 1, 2))))
+	assert.False(t, f1.same(nil))
+}
