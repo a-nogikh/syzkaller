@@ -227,7 +227,7 @@ func TestTierJobQueue(t *testing.T) {
 	fuzzer, _ := newTriageTestFuzzer(t, &Config{
 		Corpus: corpus.NewCorpus(t.Context()),
 	})
-	q := newTierJobQueue(fuzzer.statJobsHints, 2, 2)
+	q := newTierJobQueue(fuzzer.statJobsHints, 2, 10, 3)
 
 	var active, maxActive atomic.Int64
 	var order []string
@@ -253,19 +253,20 @@ func TestTierJobQueue(t *testing.T) {
 		})
 	}
 
-	// Start 2 running jobs, queue 2 pending jobs, and drop a 5th job exceeding maxPending=2.
-	q.submit(fuzzer, makeJob("job1"))
-	q.submit(fuzzer, makeJob("job2"))
-	q.submit(fuzzer, makeJob("job3"))
-	q.submit(fuzzer, makeJob("job4"))
-	q.submit(fuzzer, makeJob("job5_dropped"))
+	// Start 2 running jobs, queue 1 candidate (reaching maxCandidates=3), drop a 4th candidate,
+	// and queue 1 new-input job (which must still be accepted and run ahead of cand3).
+	q.submit(fuzzer, makeJob("cand1"), ProgSmashed)
+	q.submit(fuzzer, makeJob("cand2"), ProgSmashed)
+	q.submit(fuzzer, makeJob("cand3"), ProgSmashed)
+	q.submit(fuzzer, makeJob("cand4_dropped"), ProgSmashed)
+	q.submit(fuzzer, makeJob("new1"), 0)
 
 	require.Eventually(t, func() bool {
 		return active.Load() == 2
 	}, time.Second, time.Millisecond)
 	assert.Equal(t, 2, fuzzer.statJobsHints.Val())
 
-	// Release one slot: job3 must start next.
+	// Release one slot: new1 must start before cand3.
 	step <- struct{}{}
 	require.Eventually(t, func() bool {
 		orderMu.Lock()
@@ -273,7 +274,7 @@ func TestTierJobQueue(t *testing.T) {
 		return len(order) == 3
 	}, time.Second, time.Millisecond)
 	orderMu.Lock()
-	assert.Equal(t, "job3", order[2])
+	assert.Equal(t, "new1", order[2])
 	orderMu.Unlock()
 
 	close(step)
@@ -281,7 +282,7 @@ func TestTierJobQueue(t *testing.T) {
 		return fuzzer.statJobsHints.Val() == 0
 	}, time.Second, time.Millisecond)
 	assert.Equal(t, int64(2), maxActive.Load())
-	assert.Equal(t, []string{"job3", "job4"}, order[2:])
+	assert.Equal(t, []string{"new1", "cand3"}, order[2:])
 }
 
 // newTriageTestFuzzer creates a fuzzer for triageJob.handleCalls tests and returns it
@@ -334,4 +335,65 @@ func TestHandleCallSmashDedup(t *testing.T) {
 	assert.Equal(t, 1, fuzzer.statJobsSmash.Val())
 	assert.Equal(t, 2, fuzzer.statJobsHints.Val())
 	assert.Equal(t, 2, fuzzer.statJobsFaultInjection.Val())
+}
+
+func TestFocusedCandidateSmashAndHints(t *testing.T) {
+	const symbolsPC, filesPC, otherPC = 0x100, 0x200, 0x1
+	fuzzer, p := newTriageTestFuzzer(t, &Config{
+		Corpus: corpus.NewFocusedCorpus(t.Context(), nil, []corpus.FocusArea{
+			{Name: "symbols", CoverPCs: map[uint64]struct{}{symbolsPC: {}}, Weight: 6.0},
+			{Name: "files", CoverPCs: map[uint64]struct{}{filesPC: {}}, Weight: 3.0},
+		}),
+		Comparisons: true,
+		PatchTest:   true,
+	})
+	symbols, files := fuzzer.tiers[0], fuzzer.tiers[1]
+
+	// An unfocused candidate must not start smash or hints jobs.
+	unfocusedJob := &triageJob{
+		p:      p,
+		flags:  ProgFromCorpus | ProgMinimized | ProgSmashed,
+		fuzzer: fuzzer,
+		calls:  map[int]*triageCall{0: triageCallWithPC(otherPC)},
+		info:   &JobInfo{},
+	}
+	unfocusedJob.handleCalls()
+	assert.Equal(t, 0, fuzzer.statJobsSmash.Val(), "unfocused call must not start smash job")
+	assert.Equal(t, 0, fuzzer.statJobsHints.Val(), "unfocused call must not start hints job")
+
+	// Saturate the candidate hints cap of the lower priority "files" tier. When call 0 reaches
+	// "files" and call 1 reaches "symbols", the single smash job must be queued in the
+	// higher priority "symbols" tier, and "symbols" still starts its hints job.
+	files.hints.maxCandidates = 0
+	focusedJob := &triageJob{
+		p:      p,
+		flags:  ProgFromCorpus | ProgMinimized | ProgSmashed,
+		fuzzer: fuzzer,
+		calls: map[int]*triageCall{
+			0: triageCallWithPC(filesPC),
+			1: triageCallWithPC(symbolsPC),
+		},
+		info: &JobInfo{},
+	}
+	focusedJob.handleCalls()
+	assert.Equal(t, 1, fuzzer.statJobsSmash.Val(), "focused candidate must be smashed once despite ProgSmashed")
+	assert.Equal(t, 1, fuzzer.statJobsHints.Val())
+	require.Eventually(t, func() bool {
+		return symbols.smashQueue.Next() != nil && symbols.hintsQueue.Next() != nil
+	}, time.Second, time.Millisecond)
+	assert.Nil(t, files.smashQueue.Next())
+
+	// A candidate in the saturated "files" tier is smashed, but does not start hints jobs.
+	p2 := p.Clone()
+	p2.Calls = p2.Calls[:1]
+	job2 := &triageJob{
+		p:      p2,
+		flags:  ProgFromCorpus | ProgMinimized | ProgSmashed,
+		fuzzer: fuzzer,
+		calls:  map[int]*triageCall{0: triageCallWithPC(filesPC)},
+		info:   &JobInfo{},
+	}
+	job2.handleCalls()
+	assert.Equal(t, 2, fuzzer.statJobsSmash.Val())
+	assert.Equal(t, 1, fuzzer.statJobsHints.Val())
 }
