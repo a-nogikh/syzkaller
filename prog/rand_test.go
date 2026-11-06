@@ -10,6 +10,8 @@ import (
 	"math/rand"
 	"slices"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNotEscaping(t *testing.T) {
@@ -248,4 +250,50 @@ func TestNoGenerate(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Arrays of unions must combine distinct options rather than repeat the same one:
+// with 4 options, independent uniform choice would give 75% distinct adjacent pairs.
+func TestGenerateUnionArray(t *testing.T) {
+	target := initTargetTest(t, "test", "64")
+	r := newRand(target, rand.NewSource(0))
+	s := newState(target, target.DefaultChoiceTable(), nil)
+	arrType := target.SyscallMap["test$union_array"].Args[0].Type.(*PtrType).Elem.(*ArrayType)
+	pairs, distinct := 0, 0
+	for range 1000 {
+		arg, _ := arrType.generate(r, s, DirIn)
+		elems := arg.(*GroupArg).Inner
+		for i := range len(elems) - 1 {
+			pairs++
+			if elems[i].(*UnionArg).Index != elems[i+1].(*UnionArg).Index {
+				distinct++
+			}
+		}
+	}
+	assert.Greater(t, float64(distinct)/float64(pairs), 0.85)
+}
+
+// Single-element arrays of unions must be extended to several elements, but only up to
+// the maxUnionArrayExtendDepth nesting level, so that nested arrays don't blow up the program.
+func TestGenerateUnionArrayDepth(t *testing.T) {
+	target := initTargetTest(t, "test", "64")
+	r := newRand(target, rand.NewSource(0))
+	s := newState(target, target.DefaultChoiceTable(), nil)
+	arrType := target.SyscallMap["test$union_array"].Args[0].Type.(*PtrType).Elem.(*ArrayType)
+	// singleShare returns the share of single-element arrays generated at the given nesting depth.
+	singleShare := func(depth int) float64 {
+		const iters = 2000
+		r.unionArrayDepth = depth
+		single := 0
+		for range iters {
+			arg, _ := arrType.generate(r, s, DirIn)
+			if len(arg.(*GroupArg).Inner) == 1 {
+				single++
+			}
+		}
+		return float64(single) / iters
+	}
+	// Single-element arrays are extended in 3/4 (generateUnionArray) * 1/2 of the cases.
+	assert.Less(t, singleShare(0), 0.75*singleShare(3))
+	assert.Less(t, singleShare(maxUnionArrayExtendDepth), 0.75*singleShare(3))
 }
