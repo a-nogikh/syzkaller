@@ -22,6 +22,7 @@ import (
 	"github.com/google/syzkaller/pkg/execbackend"
 	"github.com/google/syzkaller/pkg/flatrpc"
 	"github.com/google/syzkaller/pkg/fuzzer/queue"
+	"github.com/google/syzkaller/pkg/signal"
 	"github.com/google/syzkaller/pkg/testutil"
 	"github.com/google/syzkaller/prog"
 	"github.com/google/syzkaller/sys/targets"
@@ -78,13 +79,31 @@ func TestFuzz(t *testing.T) {
 		t.Skipf("skipping, broken cross-compiler: %v", sysTarget.BrokenCompiler)
 	}
 	executor := csource.BuildExecutor(t, target, "../..", "-fsanitize-coverage=trace-pc", "-g")
+	// The patch_test subtest uses the coverage reached by the normal subtest
+	// as the focus areas, so it depends on the normal subtest.
+	var pcs []uint64
+	t.Run("normal", func(t *testing.T) {
+		pcs = testFuzz(t, target, executor, false, nil)
+	})
+	t.Run("patch_test", func(t *testing.T) {
+		require.NotEmpty(t, pcs)
+		testFuzz(t, target, executor, true, []corpus.FocusArea{
+			{Name: "high", CoverPCs: map[uint64]struct{}{pcs[0]: {}}, Weight: 6.0},
+			{Name: "low", CoverPCs: map[uint64]struct{}{pcs[len(pcs)-1]: {}}, Weight: 3.0},
+			{Weight: 1.0},
+		})
+	})
+}
 
+func testFuzz(t *testing.T, target *prog.Target, executor string, patchTest bool,
+	areas []corpus.FocusArea) []uint64 {
 	ctx := t.Context()
 
 	corpusUpdates := make(chan corpus.NewItemEvent)
 	fuzzer := NewFuzzer(ctx, &Config{
-		Debug:  true,
-		Corpus: corpus.NewMonitoredCorpus(ctx, corpusUpdates),
+		Debug:     true,
+		Corpus:    corpus.NewFocusedCorpus(ctx, corpusUpdates, areas),
+		PatchTest: patchTest,
 		Logf: func(level int, msg string, args ...any) {
 			if level > 1 {
 				return
@@ -126,6 +145,81 @@ func TestFuzz(t *testing.T) {
 		t.Logf("-----")
 		t.Logf("%s", p.Serialize())
 	}
+	return fuzzer.Config.Corpus.Cover()
+}
+
+func TestCTNeedsRegenerate(t *testing.T) {
+	tests := []struct {
+		patchTest          bool
+		ctFocused, focused bool
+		ctProgs, progs     int
+		want               bool
+	}{
+		{patchTest: false, ctProgs: 0, progs: 33, want: false},
+		{patchTest: false, ctProgs: 0, progs: 34, want: true},
+		{patchTest: false, ctProgs: 100, progs: 433, want: false},
+		{patchTest: false, ctProgs: 100, progs: 434, want: true},
+		// Switching from unfocused to focused programs regenerates even when the count matches.
+		{patchTest: true, ctFocused: false, focused: true, ctProgs: 1, progs: 1, want: true},
+		{patchTest: true, ctFocused: false, focused: true, ctProgs: 100, progs: 1, want: true},
+		// Few programs: regenerate on every new program.
+		{patchTest: true, ctFocused: true, focused: true, ctProgs: 1, progs: 2, want: true},
+		{patchTest: true, ctFocused: true, focused: true, ctProgs: 5, progs: 5, want: false},
+		// Many programs: regenerate when the number grows by 10%.
+		{patchTest: true, ctFocused: true, focused: true, ctProgs: 100, progs: 110, want: false},
+		{patchTest: true, ctFocused: true, focused: true, ctProgs: 100, progs: 111, want: true},
+	}
+	for _, test := range tests {
+		assert.Equal(t, test.want,
+			ctNeedsRegenerate(test.patchTest, test.ctFocused, test.focused, test.ctProgs, test.progs),
+			"%+v", test)
+	}
+}
+
+func TestPatchTestChoiceTable(t *testing.T) {
+	target, err := prog.GetTarget(targets.TestOS, targets.TestArch64)
+	require.NoError(t, err)
+
+	ctx := t.Context()
+	const focusPC = 0x10010
+	fuzzer := NewFuzzer(ctx, &Config{
+		Corpus: corpus.NewFocusedCorpus(ctx, nil, []corpus.FocusArea{
+			{Name: "patch", CoverPCs: map[uint64]struct{}{focusPC: {}}, Weight: 1.0},
+			{Weight: 1.0},
+		}),
+		PatchTest: true,
+		Coverage:  true,
+		EnabledCalls: map[*prog.Syscall]bool{
+			target.SyscallMap["test$res0"]: true,
+			target.SyscallMap["test$int"]:  true,
+		},
+	}, rand.New(rand.NewSource(0)), target)
+
+	// Without focused programs, the table is built from the whole corpus.
+	ct := fuzzer.ChoiceTable()
+	fuzzer.Config.Corpus.Save(corpus.NewInput{
+		Prog:   target.Generate(rand.NewSource(1), 3, ct),
+		Signal: signal.FromRaw([]uint64{100}, 0),
+		Cover:  []uint64{100},
+	})
+	fuzzer.updateChoiceTable(fuzzer.choiceTablePrograms())
+	assert.Equal(t, 1, fuzzer.ctProgs)
+	assert.False(t, fuzzer.ctFocused)
+
+	// Once a focused program appears, the table must be rebuilt from focused programs
+	// even when len(FocusedPrograms()) == ctProgs.
+	fuzzer.Config.Corpus.Save(corpus.NewInput{
+		Prog:   target.Generate(rand.NewSource(999), 2, ct),
+		Signal: signal.FromRaw([]uint64{focusPC}, 0),
+		Cover:  []uint64{focusPC},
+	})
+	require.Len(t, fuzzer.Config.Corpus.FocusedPrograms(), 1)
+	assert.Eventually(t, func() bool {
+		fuzzer.ChoiceTable()
+		fuzzer.ctMu.RLock()
+		defer fuzzer.ctMu.RUnlock()
+		return fuzzer.ctProgs == 1 && fuzzer.ctFocused
+	}, 10*time.Second, 10*time.Millisecond)
 }
 
 func BenchmarkFuzzer(b *testing.B) {

@@ -67,18 +67,22 @@ func mutateProgRequest(fuzzer *Fuzzer, rnd *rand.Rand) *queue.Request {
 	if p == nil {
 		return nil
 	}
+	return &queue.Request{
+		Prog:     fuzzer.mutateProg(p, rnd),
+		ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
+		Stat:     fuzzer.statExecFuzz,
+	}
+}
+
+func (fuzzer *Fuzzer) mutateProg(p *prog.Prog, rnd *rand.Rand) *prog.Prog {
 	newP := p.Clone()
 	newP.Mutate(rnd,
 		prog.RecommendedCalls,
 		fuzzer.ChoiceTable(),
 		fuzzer.Config.NoMutateCalls,
-		fuzzer.Config.Corpus.Programs(),
+		fuzzer.spliceCorpus(rnd),
 	)
-	return &queue.Request{
-		Prog:     newP,
-		ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
-		Stat:     fuzzer.statExecFuzz,
-	}
+	return newP
 }
 
 // triageJob are programs for which we noticed potential new coverage during
@@ -165,56 +169,65 @@ func (job *triageJob) run(fuzzer *Fuzzer) {
 
 func (job *triageJob) handleCalls() {
 	var mu sync.Mutex
+	var smashTier *focusTier
 	var smashCalls []string
 	var wg sync.WaitGroup
 	for call, info := range job.calls {
 		wg.Go(func() {
-			if callName := job.handleCall(call, info); callName != "" {
-				mu.Lock()
-				smashCalls = append(smashCalls, callName)
-				mu.Unlock()
+			tier, callName := job.handleCall(call, info)
+			if tier == nil {
+				return
 			}
+			mu.Lock()
+			if smashTier == nil || slices.Index(job.fuzzer.tiers, tier) < slices.Index(job.fuzzer.tiers, smashTier) {
+				smashTier = tier
+			}
+			smashCalls = append(smashCalls, callName)
+			mu.Unlock()
 		})
 	}
 	wg.Wait()
-	if len(smashCalls) != 0 {
+	if smashTier != nil {
 		slices.Sort(smashCalls)
-		job.startSmash(job.fuzzer.catchAllTier(), job.p, smashCalls)
+		job.startSmash(smashTier, job.p, smashCalls)
 	}
 }
 
-// handleCall triages a single call and returns its name if job.p itself needs to be smashed.
-func (job *triageJob) handleCall(call int, info *triageCall) string {
+// handleCall triages a single call and returns the target tier and call name
+// if job.p itself needs to be smashed.
+func (job *triageJob) handleCall(call int, info *triageCall) (*focusTier, string) {
 	if info.newStableSignal.Empty() {
-		return ""
+		return nil, ""
 	}
 
 	p := job.p
-	if job.flags&ProgMinimized == 0 {
+	tier := job.fuzzer.tierForCall(info)
+	if job.flags&ProgMinimized == 0 && tier.inFocus {
 		p, call = job.minimize(call, info)
 		if p == nil {
-			return ""
+			return nil, ""
 		}
 	}
 	callName := p.CallName(call)
 	if !job.fuzzer.Config.NewInputFilter(callName) {
-		return ""
+		return nil, ""
 	}
-	var smashOrigCall string
-	tier := job.fuzzer.catchAllTier()
-	if job.flags&ProgSmashed == 0 {
+	var smashOrigTier *focusTier
+	if tier.shouldSmash(job.flags) {
 		// If the program was not minimized, all calls share the same program,
-		// and handleCalls smashes it once. Hints and fault injection are per-call.
+		// and handleCalls smashes it once in the highest priority tier.
+		// Hints and fault injection are per-call.
 		if p == job.p {
-			smashOrigCall = callName
+			smashOrigTier = tier
 		} else {
 			job.startSmash(tier, p, []string{callName})
 		}
-		if job.fuzzer.Config.Comparisons && call >= 0 {
+		if job.fuzzer.Config.Comparisons && call >= 0 && tier.tryStartHints() {
 			job.fuzzer.startJob(job.fuzzer.statJobsHints, &hintsJob{
-				exec: tier.hintsQueue,
-				p:    p.Clone(),
-				call: call,
+				exec:    tier.hintsQueue,
+				p:       p.Clone(),
+				call:    call,
+				running: &tier.hintsJobs,
 				info: &JobInfo{
 					Name:  p.String(),
 					Type:  JobHints,
@@ -239,7 +252,7 @@ func (job *triageJob) handleCall(call int, info *triageCall) string {
 		RawCover: info.rawCover,
 	}
 	job.fuzzer.Config.Corpus.Save(input)
-	return smashOrigCall
+	return smashOrigTier, callName
 }
 
 func (job *triageJob) startSmash(tier *focusTier, p *prog.Prog, calls []string) {
@@ -490,11 +503,7 @@ func (job *smashJob) run(fuzzer *Fuzzer) {
 	const iters = 25
 	rnd := fuzzer.rand()
 	for range iters {
-		p := job.p.Clone()
-		p.Mutate(rnd, prog.RecommendedCalls,
-			fuzzer.ChoiceTable(),
-			fuzzer.Config.NoMutateCalls,
-			fuzzer.Config.Corpus.Programs())
+		p := fuzzer.mutateProg(job.p, rnd)
 		result := fuzzer.execute(job.exec, &queue.Request{
 			Prog:     p,
 			ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
@@ -561,13 +570,15 @@ func (job *faultInjectionJob) run(fuzzer *Fuzzer) {
 }
 
 type hintsJob struct {
-	exec queue.Executor
-	p    *prog.Prog
-	call int
-	info *JobInfo
+	exec    queue.Executor
+	p       *prog.Prog
+	call    int
+	running *atomic.Int64 // number of running hints jobs in the tier
+	info    *JobInfo
 }
 
 func (job *hintsJob) run(fuzzer *Fuzzer) {
+	defer job.running.Add(-1)
 	// First execute the original program several times to get comparisons from KCOV.
 	// Additional executions lets us filter out flaky values, which seem to constitute ~30-40%.
 	p := job.p
