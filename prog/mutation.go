@@ -48,6 +48,8 @@ type MutateOpts struct {
 	InsertWeight       int
 	MutateArgWeight    int
 	RemoveCallWeight   int
+	// Co-mutate resource producer calls more often when inserting their consumers.
+	FocusProducer bool
 }
 
 func (o MutateOpts) weight() int {
@@ -203,10 +205,81 @@ func (ctx *mutator) insertCall() bool {
 	s := analyze(ctx.ct, ctx.corpus, p, c)
 	calls := r.generateCall(s, p, idx)
 	p.insertBefore(c, calls)
+	// The inserted calls start at idx, so this removes them from the front.
+	removed := 0
 	for len(p.Calls) > ctx.ncalls {
 		p.RemoveCall(idx)
+		removed++
+	}
+	// mutateCallArgs may insert helper calls, so only co-mutate below ncalls.
+	if removed < len(calls) && len(p.Calls) < ctx.ncalls {
+		ctx.mutateResourceProducer(idx, calls[removed:])
 	}
 	return true
+}
+
+const (
+	// Probability (as one of N) to mutate the producer call of a resource
+	// used by the newly inserted calls.
+	mutateProducerOneOf = 4
+	// If the producer's resources are also used by other calls, mutating
+	// the producer may break them, so do it less often.
+	mutateSharedProducerOneOf = 10
+)
+
+// mutateResourceProducer mutates a configuration argument of an earlier call that produced
+// a resource used by the newly inserted calls (which start at idx). Reaching deeper kernel
+// paths often requires both a new consumer call and non-default flags of the producer call.
+func (ctx *mutator) mutateResourceProducer(idx int, newCalls []*Call) {
+	p, r := ctx.p, ctx.r
+	newArgs := make(map[*ResultArg]bool)
+	used := make(map[*ResultArg]bool)
+	for _, c := range newCalls {
+		ForeachArg(c, func(arg Arg, _ *ArgCtx) {
+			if a, ok := arg.(*ResultArg); ok {
+				newArgs[a] = true
+				if a.Res != nil {
+					used[a.Res] = true
+				}
+			}
+		})
+	}
+	var producers []*Call
+	for _, c := range p.Calls[:idx] {
+		ForeachArg(c, func(arg Arg, _ *ArgCtx) {
+			if a, ok := arg.(*ResultArg); ok && used[a] && !slices.Contains(producers, c) {
+				producers = append(producers, c)
+			}
+		})
+	}
+	if len(producers) == 0 {
+		return
+	}
+	prod := producers[r.Intn(len(producers))]
+	oneOf := mutateProducerOneOf
+	if isSharedProducer(prod, newArgs) {
+		oneOf = mutateSharedProducerOneOf
+	}
+	if ctx.opts.FocusProducer {
+		// Twice as often in the patch testing mode.
+		oneOf /= 2
+	}
+	if r.oneOf(oneOf) {
+		ctx.mutateCallArgs(slices.Index(p.Calls, prod), 1, true)
+	}
+}
+
+// isSharedProducer returns whether resources produced by prod are used by anything except newArgs.
+func isSharedProducer(prod *Call, newArgs map[*ResultArg]bool) bool {
+	shared := false
+	ForeachArg(prod, func(arg Arg, _ *ArgCtx) {
+		if a, ok := arg.(*ResultArg); ok {
+			for use := range a.uses {
+				shared = shared || !newArgs[use]
+			}
+		}
+	})
+	return shared
 }
 
 // Removes a random call from program.
@@ -231,6 +304,15 @@ func (ctx *mutator) mutateArg() bool {
 	if idx < 0 {
 		return false
 	}
+	return ctx.mutateCallArgs(idx, ctx.opts.MutateArgCount, false)
+}
+
+// mutateCallArgs mutates a random argument of the call at idx, and then continues
+// mutating more arguments with probability 1-1/maxArgs after each mutation.
+// If configOnly is set, only configuration arguments (like flags) are mutated:
+// the arguments must not contain resources, strings and file names.
+func (ctx *mutator) mutateCallArgs(idx, maxArgs int, configOnly bool) bool {
+	p, r := ctx.p, ctx.r
 	c := p.Calls[idx]
 	if c.Meta.Attrs.KFuzzTest {
 		tmp := r.genKFuzzTest
@@ -242,21 +324,31 @@ func (ctx *mutator) mutateArg() bool {
 	if ctx.noMutate[c.Meta.ID] {
 		return false
 	}
+	const maxRetries = 10
 	updateSizes := true
-	for stop, ok := false, false; !stop; stop = ok && r.oneOf(ctx.opts.MutateArgCount) {
+	mutated := false
+	for stop, ok, retries := false, false, 0; !stop; stop = ok && r.oneOf(maxArgs) {
 		ok = true
-		ma := &mutationArgs{target: p.Target, ignoreLengths: c.Meta.Attrs.KFuzzTest}
+		ma := &mutationArgs{
+			target:        p.Target,
+			ignoreLengths: c.Meta.Attrs.KFuzzTest,
+			configOnly:    configOnly,
+		}
 		ForeachArg(c, ma.collectArg)
 		if len(ma.args) == 0 {
-			return false
+			return mutated
 		}
 		s := analyze(ctx.ct, ctx.corpus, p, c)
 		arg, argCtx := ma.chooseArg(r.Rand)
 		calls, ok1 := p.Target.mutateArg(r, s, arg, argCtx, &updateSizes)
 		if !ok1 {
+			if retries++; retries >= maxRetries {
+				return mutated
+			}
 			ok = false
 			continue
 		}
+		mutated = true
 		moreCalls, fieldsPatched := r.patchConditionalFields(c, s)
 		calls = append(calls, moreCalls...)
 		p.insertBefore(c, calls)
@@ -273,7 +365,7 @@ func (ctx *mutator) mutateArg() bool {
 			p.Target.assignSizesCall(c)
 		}
 	}
-	return true
+	return mutated
 }
 
 // Select a call based on the complexity of the arguments.
@@ -581,9 +673,35 @@ type mutationArgs struct {
 	target        *Target
 	ignoreSpecial bool
 	ignoreLengths bool
+	configOnly    bool
 	prioSum       float64
 	args          []mutationArg
 	argsBuffer    [16]mutationArg
+}
+
+// isConfigArg returns whether arg is a configuration argument (like flags) that can be
+// mutated without breaking resource links, corrupting lengths/pointers/VMAs, or changing
+// the objects (e.g. files) the call refers to.
+func isConfigArg(arg Arg) bool {
+	// Reject LenType only at the root: composite args (e.g. netlink attributes) may
+	// contain internal length fields that assignSizesCall recomputes after mutation.
+	if _, isLen := arg.Type().(*LenType); isLen {
+		return false
+	}
+	ok := true
+	ForeachSubArg(arg, func(arg Arg, ctx *ArgCtx) {
+		switch typ := arg.Type().(type) {
+		case *ResourceType, *PtrType, *VmaType:
+			ok = false
+			ctx.Stop = true
+		case *BufferType:
+			if typ.Kind == BufferFilename || typ.Kind == BufferString || typ.Kind == BufferGlob {
+				ok = false
+				ctx.Stop = true
+			}
+		}
+	})
+	return ok
 }
 
 type mutationArg struct {
@@ -607,6 +725,9 @@ func (ma *mutationArgs) collectArg(arg Arg, ctx *ArgCtx) {
 	ctx.Stop = stopRecursion
 
 	if prio == dontMutate {
+		return
+	}
+	if ma.configOnly && !isConfigArg(arg) {
 		return
 	}
 
