@@ -16,20 +16,29 @@ import (
 
 // Calculation of syscall choice tables.
 //
-// When adding a call to a program after a given (bias) call, ChoiceTable combines
-// static type analysis and dynamic corpus history:
+// When adding a call to a program (given a bias call or a prefix of preceding calls),
+// ChoiceTable combines static type analysis and dynamic corpus history:
 //
 //  1. Static (callTags -> tagCalls): calcResourceUsage assigns each shared resource/type a tag:
 //     - resources and their supertypes (e.g. "res-fd", "res-fd-sock", "res-fd-sock-sock_in"),
 //     - pointers to structs/unions and arrays of them (e.g. "ptrto-sockaddr_in", "ptrto-iovec"),
 //     - strings with subkinds (e.g. "str-filesystem"), "filename", and "vma".
-//     Instead of an O(N^2) call-to-call matrix, callTags[callID] maps a call to its tags
-//     (weighted toward outputs and scaled by capped sqrt(tagSum) so huge tags like "res-fd"
-//     don't drown out specific ones), and tagCalls[tagID] maps a tag to its consumer calls
-//     (weighted toward inputs). Static selection walks callID -> tagID -> targetCallID.
+//     Instead of an O(N^2) matrix, callTags[callID] maps a call to its tags (weighted toward
+//     outputs and scaled by capped sqrt(tagSum) so huge tags like "res-fd" don't drown out
+//     specific ones), and tagCalls[tagID] maps a tag to its consumer calls (weighted toward
+//     inputs). Static selection walks callID -> tagID -> targetCallID, and boosts candidates
+//     that share specific resource tags (<= maxSpecificTagCalls) with multiple prefix calls.
 //
-//  2. Dynamic (dynamicCalls): dynamicCalls[callID] lists syscalls that appear after callID
-//     in corpus programs, weighted by sqrt(number of such programs).
+//  2. Dynamic (dynamicCalls + callToProgs):
+//     - dynamicCalls[callID] lists syscalls that appear after callID in corpus programs,
+//     weighted by sqrt(number of such programs).
+//     - callToProgs[callID] lists multi-call corpus programs containing callID.
+//     Given a multi-call prefix, chooseDynamic samples candidates in two ways:
+//     (a) it inspects a few corpus programs containing the prefix's rarest, most recent, or
+//     bias call; if a corpus program shares >= 2 calls with the prefix, it samples a call that
+//     follows them in that program (preferring calls that appear in fewer corpus programs);
+//     (b) it samples candidates from dynamicCalls and boosts those that follow multiple calls
+//     in the prefix (with higher weight for more recent prefix calls).
 
 func (target *Target) prepareEnabledSyscalls(corpus []*Prog, enabled map[*Syscall]bool) map[*Syscall]bool {
 	if enabled == nil {
@@ -181,6 +190,16 @@ const (
 	// on each retry, so narrow 2-call tags don't mostly pick the bias call.
 	selfLoopRetries     = 4
 	selfLoopAcceptOneOf = 4
+	// Maximum tag size considered specific when boosting multi-prefix consumers
+	// (tighter for non-resource ptrto-*/str-* tags so broad networking tags don't match).
+	maxSpecificTagCalls    = 600
+	maxSpecificNonResCalls = 200
+	// Base weight of a candidate sampled for a multi-call prefix (see chooseStatic and
+	// chooseDynamic) before any bonuses for matching several prefix calls.
+	baseCandWeight = 10
+	// A candidate gets the multi-prefix bonuses only if it's connected
+	// to at least that many distinct prefix calls.
+	minMatchedPrefixCalls = 2
 )
 
 type prioItem struct {
@@ -223,8 +242,20 @@ func (pl *prioList) sample(r *rand.Rand) int {
 	return (*pl)[idx].id
 }
 
+// relWeight returns id's share of the list's total weight in per-mille (1..1000), or 0 if absent.
+// The list must be sorted by id.
+func (pl *prioList) relWeight(id int) int32 {
+	idx, ok := slices.BinarySearchFunc(*pl, id, func(item prioItem, id int) int {
+		return cmp.Compare(item.id, id)
+	})
+	if !ok {
+		return 0
+	}
+	return max(1, pl.itemWeight(idx)*1000/pl.total())
+}
+
 // ChoiceTable allows making a weighted choice of a syscall for a given syscall
-// based on static resource/type priorities and dynamic corpus colocation.
+// or program prefix based on static resource/type priorities and dynamic corpus colocation.
 type ChoiceTable struct {
 	target      *Target
 	calls       []*Syscall
@@ -234,13 +265,21 @@ type ChoiceTable struct {
 	// (e.g. "res-fd-sock", "ptrto-sockaddr_in", "str-filesystem", "filename", "vma"):
 	// callTags[callID] stores the tagIDs used by callID and their cumulative weights.
 	// tagCalls[tagID] stores the consumer callIDs for tagID and their cumulative weights.
-	callTags []prioList
-	tagCalls []prioList
+	// minOutTagLen[callID] stores the smallest consumer count among resource tags produced by callID (0 if none).
+	// specificTag[tagID] is true for specific resource, struct/union pointer, and string subkind tags.
+	callTags     []prioList
+	tagCalls     []prioList
+	minOutTagLen []int
+	specificTag  []bool
 
-	// Sparse dynamic priority table:
+	// Sparse dynamic priority table and corpus program index:
 	// dynamicCalls[callID] stores the syscalls that appear after callID in the corpus,
 	// sorted by id, with cumulative sqrt(count) weights.
-	dynamicCalls []prioList
+	// callToProgs[callID] stores deduplicated call ID sequences of multi-call corpus
+	// programs containing callID.
+	dynamicCalls      []prioList
+	callToProgs       [][][]int
+	numMultiCallProgs int
 }
 
 func (target *Target) BuildChoiceTable(corpus []*Prog, enabled map[*Syscall]bool) *ChoiceTable {
@@ -266,6 +305,8 @@ func (ct *ChoiceTable) buildStaticPriorities(enabled map[*Syscall]bool) {
 	tagNames := slices.Sorted(maps.Keys(uses))
 	ct.callTags = make([]prioList, len(ct.target.Syscalls))
 	ct.tagCalls = make([]prioList, 0, len(tagNames))
+	ct.minOutTagLen = make([]int, len(ct.target.Syscalls))
+	ct.specificTag = make([]bool, 0, len(tagNames))
 
 	for _, tag := range tagNames {
 		weightMap := uses[tag]
@@ -291,7 +332,12 @@ func (ct *ChoiceTable) buildStaticPriorities(enabled map[*Syscall]bool) {
 			// Higher priority when the target call uses the resource as an input.
 			consumers.add(w.call, w.in*tagDirWeight+w.inout)
 		}
+		isResource := strings.HasPrefix(tag, "res-")
+		// Hyphenated tags are "res-*", "ptrto-*", and "str-*" (excluding "filename", "vma", and aux "res<name>").
+		isSpecific := isResource && len(consumers) <= maxSpecificTagCalls ||
+			strings.Contains(tag, "-") && len(consumers) <= maxSpecificNonResCalls
 		ct.tagCalls = append(ct.tagCalls, consumers)
+		ct.specificTag = append(ct.specificTag, isSpecific)
 
 		// Weight the tag by (tagDirWeight*out + in) * sqrt(min(tagSum, maxStaticTagSumScale)) so
 		// resources produced by the bias call are preferred over resources it only consumes,
@@ -299,18 +345,37 @@ func (ct *ChoiceTable) buildStaticPriorities(enabled map[*Syscall]bool) {
 		tagScale := max(1, int32(math.Sqrt(float64(min(consumers.total(), maxStaticTagSumScale)))))
 		for _, w := range callWeights {
 			ct.callTags[w.call].add(tagID, (w.out*tagDirWeight+w.in)*tagScale)
+			if isResource && w.out > 0 &&
+				(ct.minOutTagLen[w.call] == 0 || len(consumers) < ct.minOutTagLen[w.call]) {
+				ct.minOutTagLen[w.call] = len(consumers)
+			}
 		}
 	}
 }
 
 func (ct *ChoiceTable) buildDynamicPriorities(corpus []*Prog) {
 	ct.dynamicCalls = make([]prioList, len(ct.target.Syscalls))
+	ct.callToProgs = make([][][]int, len(ct.target.Syscalls))
 	pairCounts := make(map[int]map[int]int)
 	for _, p := range corpus {
-		var ids []int
+		var ids, unique []int
 		for _, c := range p.Calls {
-			if ct.Generatable(c.Meta.ID) {
-				ids = append(ids, c.Meta.ID)
+			id := c.Meta.ID
+			if !ct.Generatable(id) {
+				continue
+			}
+			ids = append(ids, id)
+			if !slices.Contains(unique, id) {
+				unique = append(unique, id)
+			}
+		}
+		if len(ids) < 2 {
+			continue
+		}
+		if len(unique) >= 2 {
+			ct.numMultiCallProgs++
+			for _, id := range unique {
+				ct.callToProgs[id] = append(ct.callToProgs[id], unique)
 			}
 		}
 		for i, id0 := range ids {
@@ -369,13 +434,34 @@ func (ct *ChoiceTable) randomCall(r *rand.Rand) int {
 	return ct.calls[r.Intn(len(ct.calls))].ID
 }
 
+// chooseCalls chooses the next call for the program prefix calls.
+func (ct *ChoiceTable) chooseCalls(r *rand.Rand, calls []*Call) int {
+	return ct.chooseWithContext(r, -1, calls)
+}
+
+// choose chooses the next call after the bias call (or a random one if bias < 0).
 func (ct *ChoiceTable) choose(r *rand.Rand, bias int) int {
+	return ct.chooseWithContext(r, bias, nil)
+}
+
+func (ct *ChoiceTable) chooseWithContext(r *rand.Rand, bias int, contextCalls []*Call) int {
 	if r.Intn(100) < 5 {
 		// Let's make 5% decisions totally at random.
 		return ct.randomCall(r)
 	}
+	prefix := ct.uniquePrefix(contextCalls)
 	if bias < 0 {
-		bias = ct.randomCall(r)
+		if len(prefix) > 0 {
+			// Pick the primary bias from the prefix with a mild recency preference
+			// (uniform in half of the cases, the same as sampleRecent otherwise).
+			idx := r.Intn(len(prefix))
+			if r.Intn(2) == 0 {
+				idx = max(idx, r.Intn(len(prefix)))
+			}
+			bias = prefix[idx]
+		} else {
+			bias = ct.randomCall(r)
+		}
 	} else if !ct.Generatable(bias) {
 		fmt.Printf("bias to disabled or non-generatable syscall %v\n", ct.target.Syscalls[bias].Name)
 		panic("disabled or non-generatable syscall")
@@ -383,14 +469,33 @@ func (ct *ChoiceTable) choose(r *rand.Rand, bias int) int {
 	var res int
 	row := ct.dynamicCalls[bias]
 	if dynProb := min(maxDynamicPercent, dynamicPercentPerCall*len(row)); r.Intn(100) < dynProb {
-		res = row.sample(r)
+		res = ct.chooseDynamic(r, bias, prefix)
 	} else {
-		res = ct.chooseStaticSingle(r, bias)
+		res = ct.chooseStatic(r, bias, prefix)
 	}
 	if !ct.Generatable(res) {
 		panic("selected disabled or non-generatable syscall")
 	}
 	return res
+}
+
+// uniquePrefix returns the unique generatable call IDs in calls, ordered by their most recent occurrence.
+func (ct *ChoiceTable) uniquePrefix(calls []*Call) []int {
+	var prefix []int
+	for _, c := range slices.Backward(calls) {
+		id := c.Meta.ID
+		if ct.Generatable(id) && !slices.Contains(prefix, id) {
+			prefix = append(prefix, id)
+		}
+	}
+	slices.Reverse(prefix)
+	return prefix
+}
+
+// sampleRecent samples a prefix call with a preference for more recent ones
+// (the probability grows linearly with the position in the prefix).
+func sampleRecent(r *rand.Rand, prefix []int) int {
+	return prefix[max(r.Intn(len(prefix)), r.Intn(len(prefix)))]
 }
 
 // chooseStaticSingle chooses the next call based on the static priorities of a single bias call.
@@ -407,4 +512,249 @@ func (ct *ChoiceTable) chooseStaticSingle(r *rand.Rand, bias int) int {
 		}
 	}
 	return bias
+}
+
+const (
+	// Number of candidates sampled by chooseStatic for a multi-call prefix.
+	staticCands = 2
+	// Bonus of a static candidate for each prefix call it shares a specific tag with
+	// is staticMatchBonusScale/sqrt(number of consumers of the most specific shared tag).
+	staticMatchBonusScale = 30
+)
+
+// chooseStatic chooses the next call based on the static priorities of the bias call
+// and other calls in the prefix.
+func (ct *ChoiceTable) chooseStatic(r *rand.Rand, bias int, prefix []int) int {
+	if len(prefix) <= 1 {
+		return ct.chooseStaticSingle(r, bias)
+	}
+	// Sample staticCands candidates (one from the primary bias and the rest from
+	// resource-producing or recent prefix calls) and boost candidates that connect to
+	// several distinct prefix calls via specific resource tags.
+	var cands prioList
+	for i := range staticCands {
+		b := bias
+		if i > 0 {
+			b = ct.sampleProducerPrefixCall(r, bias, prefix)
+		}
+		cand := ct.chooseStaticSingle(r, b)
+		w := int32(baseCandWeight)
+		matchedPrefix := 0
+		bonusSum := int32(0)
+		for _, pid := range prefix {
+			if pid != cand {
+				if minLen := ct.minSharedSpecificTagLen(pid, cand); minLen > 0 {
+					matchedPrefix++
+					bonusSum += max(1, int32(staticMatchBonusScale/math.Sqrt(float64(minLen))))
+				}
+			}
+		}
+		if matchedPrefix >= minMatchedPrefixCalls {
+			w += bonusSum
+		}
+		cands.add(cand, w)
+	}
+	return cands.sample(r)
+}
+
+// Weight of a prefix call in sampleProducerPrefixCall is
+// producerWeightScale/sqrt(number of consumers of its most specific output resource tag).
+const producerWeightScale = 100
+
+// sampleProducerPrefixCall samples a prefix call other than bias that produces a resource,
+// preferring producers of more specific ones. If there are none, it samples a recent prefix call.
+func (ct *ChoiceTable) sampleProducerPrefixCall(r *rand.Rand, bias int, prefix []int) int {
+	var producers prioList
+	for _, pid := range prefix {
+		if pid == bias {
+			continue
+		}
+		if minLen := ct.minOutTagLen[pid]; minLen > 0 {
+			producers.add(pid, max(1, int32(producerWeightScale/math.Sqrt(float64(minLen)))))
+		}
+	}
+	if len(producers) == 0 {
+		return sampleRecent(r, prefix)
+	}
+	return producers.sample(r)
+}
+
+// minSharedSpecificTagLen returns the number of consumers of the most specific resource tag
+// shared by callA and callB, or 0 if they don't share specific resource tags.
+func (ct *ChoiceTable) minSharedSpecificTagLen(callA, callB int) int {
+	// Since callTags slices are sorted by tagID, find the smallest shared specific tag in a linear merge scan.
+	tagsA, tagsB := ct.callTags[callA], ct.callTags[callB]
+	minLen := 0
+	for i, j := 0, 0; i < len(tagsA) && j < len(tagsB); {
+		idA, idB := tagsA[i].id, tagsB[j].id
+		if idA == idB {
+			if ct.specificTag[idA] {
+				if n := len(ct.tagCalls[idA]); minLen == 0 || n < minLen {
+					minLen = n
+				}
+			}
+			i++
+			j++
+		} else if idA < idB {
+			i++
+		} else {
+			j++
+		}
+	}
+	return minLen
+}
+
+const (
+	// Number of corpus programs inspected per seed call (see dynamicSeeds).
+	followupProgsPerSeed = 4
+	// Number of candidates sampled from dynamicCalls for a multi-call prefix,
+	// dynamicBiasCands of them from the bias call and the rest from other prefix calls.
+	dynamicCands     = 5
+	dynamicBiasCands = 2
+	// Bonus of a dynamic candidate for each prefix call it followed in the corpus is
+	// recency * (dynamicMatchBonus + min(maxDynamicRelBonus, relWeight/dynamicRelBonusDiv)),
+	// where relWeight is the candidate's per-mille share in the prefix call's dynamicCalls,
+	// and recency grows from 1 for the oldest prefix call to maxRecencyWeight for the newest.
+	dynamicMatchBonus  = 3
+	maxDynamicRelBonus = 20
+	dynamicRelBonusDiv = 10
+	maxRecencyWeight   = 3
+)
+
+// chooseDynamic chooses the next call based on the corpus programs that contain the bias call
+// and other calls in the prefix.
+func (ct *ChoiceTable) chooseDynamic(r *rand.Rand, bias int, prefix []int) int {
+	row := ct.dynamicCalls[bias]
+	if len(prefix) <= 1 || len(row) == 1 {
+		return row.sample(r)
+	}
+
+	var cands prioList
+
+	// Part 1: Check a few corpus programs for the rarest, most recent, and bias prefix calls.
+	// If a sampled program shares several calls with our prefix, pick a call that follows them.
+	for _, seedPID := range ct.dynamicSeeds(bias, prefix) {
+		progs := ct.callToProgs[seedPID]
+		for range min(followupProgsPerSeed, len(progs)) {
+			seq := progs[r.Intn(len(progs))]
+			if cand, score := ct.sampleProgFollowup(r, seq, prefix); score > 0 {
+				cands.add(cand, score)
+			}
+		}
+	}
+
+	// Part 2: Sample candidate syscalls using pairwise dynamicCalls tables (from bias and
+	// from other calls in the prefix), and boost candidates that commonly follow multiple
+	// calls in our prefix (weighting more recent prefix calls higher).
+	for i := range dynamicCands {
+		srcCall := bias
+		if i >= dynamicBiasCands {
+			if other := sampleRecent(r, prefix); len(ct.dynamicCalls[other]) > 0 {
+				srcCall = other
+			}
+		}
+		cand := ct.dynamicCalls[srcCall].sample(r)
+		w := int32(baseCandWeight)
+		matchedPrefix := 0
+		bonusSum := int32(0)
+		for idx, pid := range prefix {
+			if rw := ct.dynamicCalls[pid].relWeight(cand); rw > 0 {
+				matchedPrefix++
+				recency := int32(1 + idx*(maxRecencyWeight-1)/(len(prefix)-1))
+				bonusSum += recency * (dynamicMatchBonus + min(maxDynamicRelBonus, rw/dynamicRelBonusDiv))
+			}
+		}
+		if matchedPrefix >= minMatchedPrefixCalls {
+			w += bonusSum
+		}
+		cands.add(cand, w)
+	}
+	return cands.sample(r)
+}
+
+// dynamicSeeds returns the prefix calls whose corpus programs are inspected for followups:
+// the rarest one (its programs are the most likely to be specific to our prefix),
+// the most recent one (recency), and the bias call (consistency with the single-call choice).
+func (ct *ChoiceTable) dynamicSeeds(bias int, prefix []int) []int {
+	rarest := bias
+	for _, pid := range prefix {
+		if n := len(ct.callToProgs[pid]); n > 0 &&
+			(len(ct.callToProgs[rarest]) == 0 || n < len(ct.callToProgs[rarest])) {
+			rarest = pid
+		}
+	}
+	var seeds []int
+	for _, pid := range [3]int{rarest, prefix[len(prefix)-1], bias} {
+		if !slices.Contains(seeds, pid) {
+			seeds = append(seeds, pid)
+		}
+	}
+	return seeds
+}
+
+// Followups that come after all matched prefix calls in the corpus program
+// score inOrderFollowupBonus times higher.
+const inOrderFollowupBonus = 2
+
+// sampleProgFollowup samples a novel call (not already in prefix) that follows the matched
+// prefix calls in a corpus program's deduplicated call sequence seq, or returns 0 score if
+// seq doesn't share enough calls with prefix or has no novel follow-up calls.
+func (ct *ChoiceTable) sampleProgFollowup(r *rand.Rand, seq, prefix []int) (int, int32) {
+	matched, firstPos, lastPos := 0, -1, -1
+	for pos, id := range seq {
+		if slices.Contains(prefix, id) {
+			matched++
+			if firstPos < 0 {
+				firstPos = pos
+			}
+			lastPos = pos
+		}
+	}
+	if matched < minMatchedPrefixCalls {
+		return 0, 0
+	}
+	inOrder := lastPos+1 < len(seq)
+	var followups []int
+	if inOrder {
+		// Since seq is deduplicated, calls after lastPos are guaranteed not to be in prefix.
+		followups = seq[lastPos+1:]
+	} else {
+		// If nothing follows the last matched call, look for unmatched calls after the first one.
+		for _, id := range seq[firstPos+1 : lastPos] {
+			if !slices.Contains(prefix, id) {
+				followups = append(followups, id)
+			}
+		}
+		if len(followups) == 0 {
+			return 0, 0
+		}
+	}
+	cand := followups[r.Intn(len(followups))]
+	score := int32(matched) * followupWeight(len(ct.callToProgs[cand]), ct.numMultiCallProgs)
+	if inOrder {
+		score *= inOrderFollowupBonus
+	}
+	return cand, score
+}
+
+const (
+	// Followup weight is followupWeightScale*sqrt(N/df), clamped to
+	// [minFollowupWeight, maxFollowupWeight], where N is the number of multi-call corpus
+	// programs floored at minEffectiveCorpus.
+	followupWeightScale = 4.0
+	minFollowupWeight   = 2
+	maxFollowupWeight   = 40
+	minEffectiveCorpus  = 100
+)
+
+// followupWeight returns the weight of a followup candidate that appears in df out of n
+// multi-call corpus programs. Specialized syscalls (small df/n) are preferred over generic
+// syscalls like close/mmap that appear in most programs. Flooring n at minEffectiveCorpus
+// keeps the weights of small focused corpora in the (minFollowupWeight, maxFollowupWeight)
+// range, while large continuous corpora keep scale-invariant weights.
+func followupWeight(df, n int) int32 {
+	df = max(1, df)
+	n = max(minEffectiveCorpus, n)
+	w := int32(followupWeightScale * math.Sqrt(float64(n)/float64(df)))
+	return min(maxFollowupWeight, max(minFollowupWeight, w))
 }
