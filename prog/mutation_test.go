@@ -5,10 +5,12 @@ package prog
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"math/rand"
 	"testing"
 
+	"github.com/google/syzkaller/pkg/image"
 	"github.com/google/syzkaller/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -553,6 +555,114 @@ func buildTestContext(test [2]string, target *Target) (rs rand.Source, ct *Choic
 	ct = target.BuildChoiceTable(nil, enabled)
 	rs = rand.NewSource(0)
 	return
+}
+
+func TestInsertCallMutatesProducer(t *testing.T) {
+	target := initTargetTest(t, "test", "64")
+	p, err := target.Deserialize([]byte("r0 = mutate5(&(0x7f0000000000)='./file0\\x00', 0x3)\n"), Strict)
+	require.NoError(t, err)
+	enabled := map[*Syscall]bool{
+		target.SyscallMap["mutate5"]: true,
+		target.SyscallMap["mutate6"]: true,
+	}
+	ct := target.BuildChoiceTable(nil, enabled)
+	opts := MutateOpts{
+		ExpectedIterations: 1,
+		InsertWeight:       100,
+	}
+	focusOpts := opts
+	focusOpts.FocusProducer = true
+
+	// producerMutated returns whether p1 is the result of inserting mutate6 after mutate5
+	// with the flags of mutate5 co-mutated.
+	producerMutated := func(p1 *Prog) bool {
+		if len(p1.Calls) != 2 || p1.Calls[0].Meta.Name != "mutate5" || p1.Calls[1].Meta.Name != "mutate6" {
+			return false
+		}
+		filename := p1.Calls[0].Args[0].(*PointerArg).Res.(*DataArg).Data()
+		assert.Equal(t, []byte("./file0\x00"), filename, "configOnly mutation must not mutate the filename")
+		return p1.Calls[0].Args[1].(*ConstArg).Val != 0x3
+	}
+
+	coMutated, focusMutated := 0, 0
+	for i := range 400 {
+		p1 := p.Clone()
+		p1.MutateWithOpts(rand.NewSource(int64(i)), 4, ct, nil, nil, opts)
+		if producerMutated(p1) {
+			coMutated++
+		}
+		p2 := p.Clone()
+		p2.MutateWithOpts(rand.NewSource(int64(i)), 4, ct, nil, nil, focusOpts)
+		if producerMutated(p2) {
+			focusMutated++
+		}
+	}
+	require.Positive(t, coMutated, "expected insertCall to co-mutate producer call")
+	assert.Greater(t, focusMutated, coMutated, "FocusProducer should co-mutate more frequently")
+
+	// When inserting reaches ncalls (ncalls == 2), mutateResourceProducer must not run.
+	rs := rand.NewSource(0)
+	for range 100 {
+		p1 := p.Clone()
+		p1.MutateWithOpts(rs, 2, ct, nil, nil, opts)
+		require.False(t, producerMutated(p1), "must not co-mutate producer when len(p.Calls) == ncalls")
+	}
+}
+
+func TestIsConfigArg(t *testing.T) {
+	target := initTargetTest(t, "linux", "amd64")
+	p, err := target.Deserialize([]byte(`pipe2(&(0x7f0000000000)={<r0=>0x0, <r1=>0x0}, 0x80000)
+r2 = openat(0xffffffffffffff9c, &(0x7f0000000100)='./file0\x00', 0x42, 0x0)
+r3 = bpf$OBJ_GET_PROG(0x7, &(0x7f0000000200)=@generic={&(0x7f0000000300)='./file0\x00', 0x0, 0x0, 0x0}, 0x18)
+mmap(&(0x7f0000400000/0x1000)=nil, 0x1000, 0x3, 0x22, 0xffffffffffffffff, 0x0)
+writev(r0, &(0x7f0000000500)=[{&(0x7f0000000600)='abc', 0x3}], 0x1)
+`), Strict)
+	require.NoError(t, err)
+	pipe, open, bpfGet, mmapCall, writev := p.Calls[0], p.Calls[1], p.Calls[2], p.Calls[3], p.Calls[4]
+	assert.False(t, isConfigArg(pipe.Args[0]), "pointer to produced fds")
+	assert.True(t, isConfigArg(pipe.Args[1]), "flags")
+	assert.False(t, isConfigArg(open.Args[0]), "fd")
+	assert.False(t, isConfigArg(open.Args[1]), "pointer to file name")
+	assert.False(t, isConfigArg(open.Args[1].(*PointerArg).Res), "file name")
+	assert.True(t, isConfigArg(open.Args[2]), "flags")
+	assert.False(t, isConfigArg(mmapCall.Args[0]), "vma")
+	assert.False(t, isConfigArg(mmapCall.Args[1]), "vma len")
+	assert.True(t, isConfigArg(mmapCall.Args[2]), "mmap prot")
+	assert.False(t, isConfigArg(writev.Args[1].(*PointerArg).Res), "array containing pointers")
+
+	bpfUnion := bpfGet.Args[1].(*PointerArg).Res.(*UnionArg)
+	bpfFileFlags := bpfUnion.Option.(*GroupArg).Inner[2]
+	assert.False(t, isConfigArg(bpfGet.Args[1]), "pointer to union")
+	assert.False(t, isConfigArg(bpfUnion), "union containing file name")
+	assert.True(t, isConfigArg(bpfFileFlags), "flags inside struct")
+	assert.False(t, isConfigArg(bpfGet.Args[2]), "len argument")
+}
+
+func TestMutateCallArgsRetryLimit(t *testing.T) {
+	target := initTargetTest(t, "test", "64")
+	ct := target.DefaultChoiceTable()
+
+	// Empty compressed_image deterministically fails mutation (retry = true).
+	// With configOnly = true, it is the only candidate argument; mutateCallArgs must bound retries.
+	emptyImg := base64.StdEncoding.EncodeToString(image.Compress(nil))
+	pImg, err := target.Deserialize(fmt.Appendf(nil, `serialize3(&(0x7f0000000000)="$%s")`, emptyImg), Strict)
+	require.NoError(t, err)
+	ctx := &mutator{
+		p:      pImg,
+		r:      newRand(target, rand.NewSource(0)),
+		ncalls: 4,
+		ct:     ct,
+		opts:   DefaultMutateOpts,
+	}
+	require.False(t, ctx.mutateCallArgs(0, 1, true))
+
+	// A call with only a string pointer and its LenType has no config arguments to mutate.
+	pStrLen, err := target.Deserialize([]byte(`mutate7(&(0x7f0000000000)='abc\x00', 0x4)`), Strict)
+	require.NoError(t, err)
+	orig := pStrLen.Serialize()
+	ctx.p = pStrLen
+	require.False(t, ctx.mutateCallArgs(0, 1, true))
+	assert.Equal(t, orig, pStrLen.Serialize())
 }
 
 func BenchmarkStoreLoadInt(b *testing.B) {
