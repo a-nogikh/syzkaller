@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,42 +160,56 @@ func (job *triageJob) run(fuzzer *Fuzzer) {
 	if stop {
 		return
 	}
+	job.handleCalls()
+}
+
+func (job *triageJob) handleCalls() {
+	var mu sync.Mutex
+	var smashCalls []string
 	var wg sync.WaitGroup
 	for call, info := range job.calls {
 		wg.Go(func() {
-			job.handleCall(call, info)
+			if callName := job.handleCall(call, info); callName != "" {
+				mu.Lock()
+				smashCalls = append(smashCalls, callName)
+				mu.Unlock()
+			}
 		})
 	}
 	wg.Wait()
+	if len(smashCalls) != 0 {
+		slices.Sort(smashCalls)
+		job.startSmash(job.fuzzer.catchAllTier(), job.p, smashCalls)
+	}
 }
 
-func (job *triageJob) handleCall(call int, info *triageCall) {
+// handleCall triages a single call and returns its name if job.p itself needs to be smashed.
+func (job *triageJob) handleCall(call int, info *triageCall) string {
 	if info.newStableSignal.Empty() {
-		return
+		return ""
 	}
 
 	p := job.p
 	if job.flags&ProgMinimized == 0 {
 		p, call = job.minimize(call, info)
 		if p == nil {
-			return
+			return ""
 		}
 	}
 	callName := p.CallName(call)
 	if !job.fuzzer.Config.NewInputFilter(callName) {
-		return
+		return ""
 	}
+	var smashOrigCall string
 	tier := job.fuzzer.catchAllTier()
 	if job.flags&ProgSmashed == 0 {
-		job.fuzzer.startJob(job.fuzzer.statJobsSmash, &smashJob{
-			exec: tier.smashQueue,
-			p:    p.Clone(),
-			info: &JobInfo{
-				Name:  p.String(),
-				Type:  JobSmash,
-				Calls: []string{p.CallName(call)},
-			},
-		})
+		// If the program was not minimized, all calls share the same program,
+		// and handleCalls smashes it once. Hints and fault injection are per-call.
+		if p == job.p {
+			smashOrigCall = callName
+		} else {
+			job.startSmash(tier, p, []string{callName})
+		}
 		if job.fuzzer.Config.Comparisons && call >= 0 {
 			job.fuzzer.startJob(job.fuzzer.statJobsHints, &hintsJob{
 				exec: tier.hintsQueue,
@@ -203,7 +218,7 @@ func (job *triageJob) handleCall(call int, info *triageCall) {
 				info: &JobInfo{
 					Name:  p.String(),
 					Type:  JobHints,
-					Calls: []string{p.CallName(call)},
+					Calls: []string{callName},
 				},
 			})
 		}
@@ -224,6 +239,19 @@ func (job *triageJob) handleCall(call int, info *triageCall) {
 		RawCover: info.rawCover,
 	}
 	job.fuzzer.Config.Corpus.Save(input)
+	return smashOrigCall
+}
+
+func (job *triageJob) startSmash(tier *focusTier, p *prog.Prog, calls []string) {
+	job.fuzzer.startJob(job.fuzzer.statJobsSmash, &smashJob{
+		exec: tier.smashQueue,
+		p:    p.Clone(),
+		info: &JobInfo{
+			Name:  p.String(),
+			Type:  JobSmash,
+			Calls: calls,
+		},
+	})
 }
 
 func (job *triageJob) deflake(exec func(*queue.Request, ProgFlags) *queue.Result) (stop bool) {
