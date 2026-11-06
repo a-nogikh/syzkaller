@@ -58,11 +58,11 @@ func Minimize(p0 *Prog, callIndex0 int, mode MinimizeMode, pred0 func(*Prog, int
 	dedup := make(map[string]bool)
 	pred := func(p *Prog, callIndex int, what *stat.Val, path string) bool {
 		// Note: path is unused, but is useful for manual debugging.
-		what.Add(1)
 		p.sanitizeFix()
 		p.debugValidate()
 		id := hash.String(p.Serialize())
 		if _, ok := dedup[id]; !ok {
+			what.Add(1)
 			dedup[id] = pred0(p, callIndex)
 		}
 		return dedup[id]
@@ -345,6 +345,15 @@ func (typ *PtrType) minimize(ctx *minimizeArgsCtx, arg Arg, path string) bool {
 		return false
 	}
 	if path1 := path + ">"; !ctx.triedPaths[path1] {
+		// In corpus minimization, if the pointee produces resources used outside of it
+		// (e.g. pipe fds used by the following calls), nulling the pointer would most
+		// likely break the program and waste an execution. Note: this may make
+		// minimization less precise if the resource users are not actually important.
+		if ctx.mode == MinimizeCorpus && ctx.callIndex0 >= 0 &&
+			ctx.call != ctx.p.Calls[ctx.callIndex0] && hasExternalResultUse(a.Res) {
+			ctx.triedPaths[path1] = true
+			return ctx.do(a.Res, "", path)
+		}
 		removeArg(a.Res)
 		replaceArg(a, MakeSpecialPointerArg(a.Type(), a.Dir(), 0))
 		ctx.target.assignSizesCall(ctx.call)
@@ -355,6 +364,25 @@ func (typ *PtrType) minimize(ctx *minimizeArgsCtx, arg Arg, path string) bool {
 		return true
 	}
 	return ctx.do(a.Res, "", path)
+}
+
+// hasExternalResultUse returns whether arg produces resources that are used outside of it.
+// See also isSharedProducer in mutation.go, which checks the same for a whole call.
+func hasExternalResultUse(arg Arg) bool {
+	inner := make(map[*ResultArg]bool)
+	ForeachSubArg(arg, func(arg Arg, _ *ArgCtx) {
+		if res, ok := arg.(*ResultArg); ok {
+			inner[res] = true
+		}
+	})
+	for res := range inner {
+		for use := range res.uses {
+			if !inner[use] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (typ *ArrayType) minimize(ctx *minimizeArgsCtx, arg Arg, path string) bool {
