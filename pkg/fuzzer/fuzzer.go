@@ -102,7 +102,7 @@ func newExecQueues(fuzzer *Fuzzer) execQueues {
 	ret := execQueues{
 		triageCandidateQueue: queue.DynamicOrder(),
 		candidateQueue:       queue.Plain(),
-		tiers:                []*focusTier{newFocusTier(1.0)},
+		tiers:                []*focusTier{newFocusTier(fuzzer, 1.0)},
 	}
 	// Alternate smash/hints jobs with exec/fuzz to spread attention to the wider area.
 	// New fuzzing gets fuzzWeight/(smashShare+hintsShare+fuzzWeight) of these executions:
@@ -336,12 +336,19 @@ func (fuzzer *Fuzzer) genFuzz() *queue.Request {
 }
 
 func (fuzzer *Fuzzer) startJob(stat *stat.Val, newJob job) {
+	fuzzer.startJobWithDone(stat, newJob, nil)
+}
+
+func (fuzzer *Fuzzer) startJobWithDone(stat *stat.Val, newJob job, onDone func()) {
 	fuzzer.Logf(2, "started %T", newJob)
 	// Account the job before starting the goroutine, so that the stats
 	// reflect all started jobs right away.
 	stat.Add(1)
 	fuzzer.statJobs.Add(1)
 	go func() {
+		if onDone != nil {
+			defer onDone()
+		}
 		defer stat.Add(-1)
 		defer fuzzer.statJobs.Add(-1)
 

@@ -211,7 +211,7 @@ func (job *triageJob) handleCall(call int, info *triageCall) string {
 			job.startSmash(tier, p, []string{callName})
 		}
 		if job.fuzzer.Config.Comparisons && call >= 0 {
-			job.fuzzer.startJob(job.fuzzer.statJobsHints, &hintsJob{
+			tier.hints.submit(job.fuzzer, &hintsJob{
 				exec: tier.hintsQueue,
 				p:    p.Clone(),
 				call: call,
