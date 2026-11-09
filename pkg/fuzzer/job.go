@@ -212,7 +212,7 @@ func (job *triageJob) handleCall(call int, info *triageCall) string {
 		}
 		if job.fuzzer.Config.Comparisons && call >= 0 &&
 			!job.fuzzer.Config.NoMutateCalls[p.Calls[call].Meta.ID] {
-			job.fuzzer.startJob(job.fuzzer.statJobsHints, &hintsJob{
+			tier.hints.submit(job.fuzzer, &hintsJob{
 				exec: tier.hintsQueue,
 				p:    p.Clone(),
 				call: call,
@@ -561,6 +561,10 @@ func (job *faultInjectionJob) run(fuzzer *Fuzzer) {
 	}
 }
 
+// Cap hint mutant executions per job so rare calls with hundreds of duplicate
+// array elements don't occupy one of the tier's hints slots for hours.
+const maxHintsJobExecs = 128
+
 type hintsJob struct {
 	exec queue.Executor
 	p    *prog.Prog
@@ -605,20 +609,32 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
 	job.info.Logf("stable comps: %d", comps.Len())
 	fuzzer.hintsLimiter.Limit(comps)
 	job.info.Logf("stable comps (after the hints limiter): %d", comps.Len())
+	if len(comps) == 0 {
+		return
+	}
 
 	// Then mutate the initial program for every match between
 	// a syscall argument and a comparison operand.
 	// Execute each of such mutants to check if it gives new coverage.
-	p.MutateWithHints(job.call, comps,
-		func(p *prog.Prog) bool {
-			defer job.info.Execs.Add(1)
-			result := fuzzer.execute(job.exec, &queue.Request{
-				Prog:     p,
-				ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
-				Stat:     fuzzer.statExecHint,
-			})
-			return !result.Stop()
+	remaining := maxHintsJobExecs
+	capped := false
+	p.MutateWithHints(job.call, comps, func(p *prog.Prog) bool {
+		if remaining <= 0 {
+			capped = true
+			return false
+		}
+		remaining--
+		defer job.info.Execs.Add(1)
+		result := fuzzer.execute(job.exec, &queue.Request{
+			Prog:     p,
+			ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
+			Stat:     fuzzer.statExecHint,
 		})
+		return !result.Stop()
+	})
+	if capped {
+		fuzzer.statJobsHintsCapped.Add(1)
+	}
 }
 
 func (job *hintsJob) getInfo() *JobInfo {

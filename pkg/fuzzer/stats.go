@@ -22,6 +22,9 @@ type Stats struct {
 	statJobsSmash           *stat.Val
 	statJobsFaultInjection  *stat.Val
 	statJobsHints           *stat.Val
+	statJobsHintsPending    *stat.Val
+	statJobsHintsDropped    *stat.Val
+	statJobsHintsCapped     *stat.Val
 	statExecTime            *stat.Val
 	statExecGenerate        *stat.Val
 	statExecFuzz            *stat.Val
@@ -61,7 +64,10 @@ func newStats(target *prog.Target) Stats {
 		statJobsFaultInjection: stat.New("fault jobs", "Running fault injection jobs", stat.StackedGraph("jobs")),
 		statJobsHints: stat.New("hints jobs", "Running hints jobs", stat.StackedGraph("jobs"),
 			stat.Link("/jobs?type="+string(JobHints))),
-		statExecTime: stat.New("prog exec time", "Test program execution time (ms)", stat.Distribution{}),
+		statJobsHintsPending: stat.New("hints jobs pending", "Pending hints jobs waiting to start", stat.NoGraph),
+		statJobsHintsDropped: stat.New("hints jobs dropped", "Pending hints jobs dropped due to queue limit", stat.NoGraph),
+		statJobsHintsCapped:  stat.New("hints jobs capped", "Hints jobs truncated by the per-job execution cap", stat.NoGraph),
+		statExecTime:         stat.New("prog exec time", "Test program execution time (ms)", stat.Distribution{}),
 		statExecGenerate: stat.New("exec gen", "Executions of generated programs", stat.Rate{},
 			stat.StackedGraph("exec")),
 		statExecFuzz: stat.New("exec fuzz", "Executions of mutated programs",

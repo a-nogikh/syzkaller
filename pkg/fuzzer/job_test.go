@@ -6,7 +6,10 @@ package fuzzer
 import (
 	"fmt"
 	"math/rand"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/syzkaller/pkg/corpus"
 	"github.com/google/syzkaller/pkg/cover"
@@ -212,6 +215,76 @@ func TestHintsJobSkipsRunsWithoutComps(t *testing.T) {
 	job.run(fuzzer)
 	assert.Equal(t, 3, seedRuns)
 	assert.Positive(t, hintRuns)
+}
+
+type fnJob func(*Fuzzer)
+
+func (fn fnJob) run(fuzzer *Fuzzer) {
+	fn(fuzzer)
+}
+
+func TestTierJobQueue(t *testing.T) {
+	fuzzer, _ := newTriageTestFuzzer(t, &Config{
+		Corpus: corpus.NewCorpus(t.Context()),
+	})
+	q := newTierJobQueue(fuzzer.statJobsHints, fuzzer.statJobsHintsPending, fuzzer.statJobsHintsDropped, 2, 2)
+
+	var active, maxActive atomic.Int64
+	var order []string
+	var orderMu sync.Mutex
+	record := func(name string) {
+		orderMu.Lock()
+		order = append(order, name)
+		orderMu.Unlock()
+	}
+	step := make(chan struct{})
+	makeJob := func(name string) job {
+		return fnJob(func(*Fuzzer) {
+			cur := active.Add(1)
+			for {
+				prev := maxActive.Load()
+				if cur <= prev || maxActive.CompareAndSwap(prev, cur) {
+					break
+				}
+			}
+			record(name)
+			<-step
+			active.Add(-1)
+		})
+	}
+
+	// Start 2 running jobs, queue 2 pending jobs, and evict the oldest pending job on a 5th submit.
+	q.submit(fuzzer, makeJob("job1"))
+	q.submit(fuzzer, makeJob("job2"))
+	q.submit(fuzzer, makeJob("job3_dropped"))
+	q.submit(fuzzer, makeJob("job4"))
+	q.submit(fuzzer, makeJob("job5"))
+
+	require.Eventually(t, func() bool {
+		return active.Load() == 2
+	}, time.Second, time.Millisecond)
+	assert.Equal(t, 2, fuzzer.statJobsHints.Val())
+	assert.Equal(t, 2, fuzzer.statJobsHintsPending.Val())
+	assert.Equal(t, 1, fuzzer.statJobsHintsDropped.Val())
+
+	// Release one slot: job4 must start next.
+	step <- struct{}{}
+	require.Eventually(t, func() bool {
+		orderMu.Lock()
+		defer orderMu.Unlock()
+		return len(order) == 3
+	}, time.Second, time.Millisecond)
+	orderMu.Lock()
+	assert.Equal(t, "job4", order[2])
+	orderMu.Unlock()
+
+	close(step)
+	require.Eventually(t, func() bool {
+		return fuzzer.statJobsHints.Val() == 0
+	}, time.Second, time.Millisecond)
+	assert.Equal(t, int64(2), maxActive.Load())
+	assert.Equal(t, []string{"job4", "job5"}, order[2:])
+	assert.Equal(t, 0, fuzzer.statJobsHintsPending.Val())
 }
 
 // newTriageTestFuzzer creates a fuzzer for triageJob.handleCalls tests and returns it
