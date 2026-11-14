@@ -121,13 +121,24 @@ func (p *Prog) MutateWithHints(callIndex int, comps CompMap, exec func(p *Prog) 
 		doMore = exec(p)
 		return doMore
 	}
-	ForeachArg(c, func(arg Arg, ctx *ArgCtx) {
+	// Mutate integer arguments before byte-by-byte buffer sliding windows so scalar
+	// flags, commands, and magic constants are always tested first.
+	for _, constOnly := range []bool{true, false} {
 		if !doMore {
-			ctx.Stop = true
-			return
+			break
 		}
-		generateHints(comps, arg, ctx.Field, execValidate)
-	})
+		ForeachArg(c, func(arg Arg, ctx *ArgCtx) {
+			if !doMore {
+				ctx.Stop = true
+				return
+			}
+			_, isConst := arg.(*ConstArg)
+			if isConst != constOnly {
+				return
+			}
+			generateHints(comps, arg, ctx.Field, execValidate)
+		})
+	}
 }
 
 func generateHints(compMap CompMap, arg Arg, field *Field, exec func() bool) {
@@ -188,7 +199,7 @@ func checkConstArg(arg *ConstArg, field *Field, compMap CompMap, exec func() boo
 	// Note: because shrinkExpand returns a map, order of programs is non-deterministic.
 	// This can affect test coverage reports.
 replacerLoop:
-	for _, replacer := range shrinkExpand(original, compMap, arg.Type().TypeBitSize(), false) {
+	for _, replacer := range shrinkExpand(original, compMap, arg.Type().TypeBitSize(), false, false) {
 		if field != nil && len(field.relatedFields) != 0 {
 			for related := range field.relatedFields {
 				if related.(uselessHinter).uselessHint(replacer) {
@@ -210,14 +221,19 @@ func checkDataArg(arg *DataArg, compMap CompMap, exec func() bool) {
 	bytes := make([]byte, 8)
 	data := arg.Data()
 	size := min(len(data), maxDataLength)
-	for i := range size {
+	doMore := true
+	for i := 0; i < size && doMore; i++ {
 		original := make([]byte, 8)
 		copy(original, data[i:])
 		val := binary.LittleEndian.Uint64(original)
-		for _, replacer := range shrinkExpand(val, compMap, 64, false) {
+		// Zero and 0xff padding in buffers matches compMap[0]/compMap[-1] at every byte
+		// offset, generating thousands of redundant mutants. Still check aligned header
+		// words at the start of the buffer, but skip 0/0xff source windows elsewhere.
+		skipFill := i >= 8 || i%4 != 0
+		for _, replacer := range shrinkExpand(val, compMap, 64, false, skipFill) {
 			binary.LittleEndian.PutUint64(bytes, replacer)
 			copy(data[i:], bytes)
-			doMore := exec()
+			doMore = exec()
 			// Neutralization of the candidate may have replaced the argument's buffer
 			// (see DataArg.SetData). Switch back to the one we are mutating, otherwise
 			// the argument remains stuck at the neutralized value.
@@ -244,7 +260,7 @@ func checkCompressedArg(arg *DataArg, compMap CompMap, exec func() bool) {
 		original := make([]byte, 8)
 		copy(original, data[i:])
 		val := binary.LittleEndian.Uint64(original)
-		for _, replacer := range shrinkExpand(val, compMap, 64, true) {
+		for _, replacer := range shrinkExpand(val, compMap, 64, true, true) {
 			binary.LittleEndian.PutUint64(bytes, replacer)
 			copy(data[i:], bytes)
 			arg.SetData(image.Compress(data))
@@ -297,7 +313,7 @@ func checkCompressedArg(arg *DataArg, compMap CompMap, exec func() bool) {
 // check the extension.
 // As with shrink we ignore cases when the other operand is wider.
 // Note that executor sign extends all the comparison operands to int64.
-func shrinkExpand(v uint64, compMap CompMap, bitsize uint64, image bool) []uint64 {
+func shrinkExpand(v uint64, compMap CompMap, bitsize uint64, image, skipFill bool) []uint64 {
 	v = truncateToBitSize(v, bitsize)
 	limit := uint64(1<<bitsize - 1)
 	var replacers map[uint64]bool
@@ -316,14 +332,12 @@ func shrinkExpand(v uint64, compMap CompMap, bitsize uint64, image bool) []uint6
 			}
 			mutant = v | ^((1 << size) - 1)
 		}
-		if image {
+		if image && width < 4 {
 			// For images we can produce too many mutants for small integers.
-			if width < 4 {
-				continue
-			}
-			if mutant == 0 || (mutant|^((1<<size)-1)) == ^uint64(0) {
-				continue
-			}
+			continue
+		}
+		if (image || skipFill) && (mutant == 0 || (mutant|^((1<<size)-1)) == ^uint64(0)) {
+			continue
 		}
 		// Use big-endian match/replace for both blobs and ints.
 		// Sometimes we have unmarked blobs (no little/big-endian info);

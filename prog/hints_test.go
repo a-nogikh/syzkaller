@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/syzkaller/pkg/image"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type ConstArgTest struct {
@@ -582,7 +583,7 @@ func TestHintsShrinkExpand(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(fmt.Sprintf("%v", test.name), func(t *testing.T) {
-			res := shrinkExpand(test.in, test.comps, 64, false)
+			res := shrinkExpand(test.in, test.comps, 64, false, false)
 			if !reflect.DeepEqual(res, test.res) {
 				t.Fatalf("\ngot : %v\nwant: %v", res, test.res)
 			}
@@ -763,6 +764,62 @@ func TestHintsData(t *testing.T) {
 				test.comps, test.in, got, test.out)
 		}
 	}
+}
+
+func TestHintsConstBeforeData(t *testing.T) {
+	target := initTargetTest(t, "linux", "amd64")
+	p, err := target.Deserialize([]byte(`write(0xffffffffffffffff, &(0x7f0000000000)="1122334455667788", 0x1234)`), Strict)
+	require.NoError(t, err)
+	comps := CompMap{
+		0x44332211: compSet(0xdeadbeef),
+		0x1234:     compSet(0x5678),
+	}
+	var order []string
+	p.MutateWithHints(0, comps, func(newP *Prog) bool {
+		if newP.Calls[0].Args[2].(*ConstArg).Val == 0x5678 {
+			order = append(order, "const")
+		} else {
+			order = append(order, "data")
+		}
+		return true
+	})
+	assert.Equal(t, []string{"const", "data"}, order)
+}
+
+func TestHintsDataZeroFillAndEarlyStop(t *testing.T) {
+	target := initTargetTest(t, "test", "64")
+	meta := target.SyscallMap["test$hint_data"]
+	typ := meta.Args[0].Type.(*PtrType).Elem
+
+	// 64-byte zero-padded buffer with a non-zero magic dword at unaligned offset 21.
+	buf := make([]byte, 64)
+	copy(buf[21:], []byte{0xef, 0xbe, 0xad, 0xde})
+	dataArg := MakeDataArg(typ, DirIn, slices.Clone(buf))
+	comps := CompMap{
+		0:          compSet(0x11223344),
+		0xdeadbeef: compSet(0xcafebabe),
+	}
+	var mutants [][]byte
+	checkDataArg(dataArg, comps, func() bool {
+		mutants = append(mutants, slices.Clone(dataArg.Data()))
+		return true
+	})
+	// Zero-fill only produces 3 mutants (LE 4B/8B, BE 4B, BE 8B) at offsets 0 and 4
+	// instead of 180+ across all 64 offsets, plus 1 mutant for the magic at offset 21.
+	assert.Len(t, mutants, 7)
+	assert.True(t, slices.ContainsFunc(mutants, func(m []byte) bool {
+		return slices.Equal(m[21:25], []byte{0xbe, 0xba, 0xfe, 0xca})
+	}))
+	assert.Equal(t, buf, dataArg.Data())
+
+	// Returning false from exec must stop checkDataArg immediately without calling exec at later offsets.
+	var calls int
+	checkDataArg(dataArg, comps, func() bool {
+		calls++
+		return false
+	})
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, buf, dataArg.Data())
 }
 
 func TestInplaceIntersect(t *testing.T) {
