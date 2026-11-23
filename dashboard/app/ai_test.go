@@ -3425,7 +3425,7 @@ func TestAIBisectCauseScheduling(t *testing.T) {
 	require.Empty(t, c.pollAIWorkflow(t, ai.WorkflowBisectCause).ID)
 }
 
-func TestAIBisectCauseRateLimit(t *testing.T) {
+func TestAIBisectCauseBacklogLimit(t *testing.T) {
 	c := NewSpannerCtx(t)
 	defer c.Close()
 
@@ -3442,6 +3442,7 @@ func TestAIBisectCauseRateLimit(t *testing.T) {
 	// Each poll comes from a new agent: an agent that polls again while it has an unfinished job
 	// is considered restarted, and gets its job again.
 	agents := 0
+	var jobs []string // IDs of the returned jobs
 	poll := func(workflows ...ai.WorkflowType) string {
 		t.Helper()
 		var req []dashapi.AIWorkflow
@@ -3453,6 +3454,7 @@ func TestAIBisectCauseRateLimit(t *testing.T) {
 		if resp.ID == "" {
 			return ""
 		}
+		jobs = append(jobs, resp.ID)
 		return fmt.Sprintf("%v: %v", resp.Workflow, resp.Args["BugTitle"])
 	}
 	const (
@@ -3464,23 +3466,21 @@ func TestAIBisectCauseRateLimit(t *testing.T) {
 	}
 	c.advanceTime(25 * time.Hour)
 
-	// Old bugs get at most one job per backlogBisectCauseWindow.
+	// Old bugs get a job only if no cause bisection job is in progress.
 	require.Contains(t, poll(ai.WorkflowBisectCause), oldJob)
 	require.Empty(t, poll(ai.WorkflowBisectCause))
-	c.advanceTime(backlogBisectCauseWindow + time.Second)
+	require.NoError(t, c.agentClient.AIJobDone(&dashapi.AIJobDoneReq{ID: jobs[0], Error: "failed"}))
 	require.Contains(t, poll(ai.WorkflowBisectCause), oldJob)
 	require.Empty(t, poll(ai.WorkflowBisectCause))
 
 	// A job for a new bug is created right away.
-	halfWindow := backlogBisectCauseWindow / 2
-	c.advanceTime(halfWindow)
 	reportCrash(oldBugs, "KASAN: slab-use-after-free in new")
 	require.Equal(t, "bisect-cause: KASAN: slab-use-after-free in new", poll(ai.WorkflowBisectCause))
 	require.Empty(t, poll(ai.WorkflowBisectCause))
-	// It counts towards the limit: the next old bug has to wait for backlogBisectCauseWindow after it.
-	c.advanceTime(halfWindow + time.Minute)
+	// It counts towards the limit: the next old bug has to wait until it's finished too.
+	require.NoError(t, c.agentClient.AIJobDone(&dashapi.AIJobDoneReq{ID: jobs[1], Error: "failed"}))
 	require.Empty(t, poll(ai.WorkflowBisectCause))
-	c.advanceTime(halfWindow)
+	require.NoError(t, c.agentClient.AIJobDone(&dashapi.AIJobDoneReq{ID: jobs[2], Error: "failed"}))
 	require.Contains(t, poll(ai.WorkflowBisectCause), oldJob)
 
 	// Create the assessment-security jobs of all the bugs above (the old ones and the new one),

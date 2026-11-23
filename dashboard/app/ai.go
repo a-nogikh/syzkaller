@@ -2198,11 +2198,11 @@ const (
 	reproCPatchAge        = 30 * 24 * time.Hour
 
 	maxAutoBisectCauseAttempts = 2
-	// Cause bisection of bugs older than bisectCauseNewBugAge is rate limited, so that the backlog
-	// of old bugs does not take over the agents. New bugs are bisected right away.
+	// Cause bisection of bugs older than bisectCauseNewBugAge starts only while there are fewer than
+	// maxBacklogBisectCauseJobs unfinished cause bisection jobs, so that the backlog of old bugs
+	// does not take over the agents. New bugs are bisected right away.
 	bisectCauseNewBugAge      = 24 * time.Hour
 	maxBacklogBisectCauseJobs = 1
-	backlogBisectCauseWindow  = 30 * time.Minute
 )
 
 // Automatic retries of failed or aborted jobs of these workflows are capped
@@ -2226,18 +2226,18 @@ func canAutoCreateReproC(ctx context.Context, ns string) (bool, error) {
 // canCreateAIJobFunc says whether an automatic job of the workflow can be created for the bug now.
 type canCreateAIJobFunc func(bug *Bug, typ ai.WorkflowType) bool
 
-// bisectCauseRateLimit returns a function that applies the rate limit on cause bisection of old bugs:
-// it rejects a cause bisection job for an old bug if the namespace has reached the limit.
-// All cause bisection jobs count towards the limit, including the jobs for new bugs.
-func bisectCauseRateLimit(ctx context.Context, ns string, reqWorkflows []dashapi.AIWorkflow) (
+// jobsInProgressLimit returns a function that limits automatic creation of jobs by the number of
+// unfinished jobs in the namespace. It applies to cause bisection of old bugs: such a job is rejected
+// if the namespace has reached the limit. All cause bisection jobs count towards the limit,
+// including the jobs for new bugs.
+func jobsInProgressLimit(ctx context.Context, ns string, reqWorkflows []dashapi.AIWorkflow) (
 	canCreateAIJobFunc, error) {
 	backlog := false
 	isBisectCause := func(w dashapi.AIWorkflow) bool { return w.Type == ai.WorkflowBisectCause }
 	if slices.ContainsFunc(reqWorkflows, isBisectCause) {
-		since := timeNow(ctx).Add(-backlogBisectCauseWindow)
-		count, err := aidb.CountJobsSince(ctx, ns, ai.WorkflowBisectCause, since)
+		count, err := aidb.CountUnfinishedJobs(ctx, ns, ai.WorkflowBisectCause)
 		if err != nil {
-			return nil, fmt.Errorf("failed to check bisect-cause rate limit for %v: %w", ns, err)
+			return nil, fmt.Errorf("failed to count bisect-cause jobs in progress for %v: %w", ns, err)
 		}
 		backlog = count < maxBacklogBisectCauseJobs
 	}
@@ -2274,7 +2274,7 @@ func autoCreateAIJobs(ctx context.Context, reqWorkflows []dashapi.AIWorkflow, cl
 		if len(workflowsForNS) == 0 {
 			continue
 		}
-		canCreate, err := bisectCauseRateLimit(ctx, ns, workflowsForNS)
+		canCreate, err := jobsInProgressLimit(ctx, ns, workflowsForNS)
 		if err != nil {
 			return false, err
 		}
@@ -2300,7 +2300,7 @@ func findPendingJobs(ctx context.Context, ns string, date int64, reqWorkflows []
 			Filter("Status=", BugStatusOpen).
 			Filter("AIPendingWorkflows=", string(req.Type))
 		if req.Type == ai.WorkflowBisectCause {
-			// New bugs go first. If the newest bug is rate limited, so are all others.
+			// New bugs go first. If the newest bug has to wait, so do all others.
 			query = query.Order("-FirstTime")
 		}
 		var bugs []*Bug
