@@ -118,10 +118,17 @@ func makeBugAIPatch(cfg *AIConfig, jobs []*aidb.PatchJob, jobReports map[string]
 	if slices.ContainsFunc(jobs, func(job *aidb.PatchJob) bool { return job.Correct.Valid }) {
 		patch.State = AIPatchDecided
 	}
-	var lastReported time.Time
+	// The bug may be held and released via any version of the patch, the last request wins.
+	var lastReported, held, unheld time.Time
 	for _, job := range jobs {
 		if job.LastComment.Valid && job.LastComment.Time.After(patch.LastComment) {
 			patch.LastComment = job.LastComment.Time
+		}
+		if job.Held.Valid && job.Held.Time.After(held) {
+			held = job.Held.Time
+		}
+		if job.Unheld.Valid && job.Unheld.Time.After(unheld) {
+			unheld = job.Unheld.Time
 		}
 		for _, report := range jobReports[job.ID] {
 			if !report.ReportedAt.Valid {
@@ -139,6 +146,7 @@ func makeBugAIPatch(cfg *AIConfig, jobs []*aidb.PatchJob, jobReports map[string]
 			}
 		}
 	}
+	patch.Held = held.After(unheld)
 	// Datastore does not preserve the full precision of timestamps.
 	patch.Posted = patch.Posted.Truncate(time.Second)
 	patch.LastComment = patch.LastComment.Truncate(time.Second)

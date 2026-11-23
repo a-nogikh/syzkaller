@@ -48,6 +48,10 @@ func TestAIPatchSync(t *testing.T) {
 	want.LastComment = c.mockedTime
 	require.Equal(t, want, c.syncAIPatch(t, extID))
 
+	c.holdAIPatch(t, "<v1>", "<hold>", true)
+	want.Held = true
+	require.Equal(t, want, c.syncAIPatch(t, extID))
+
 	// A new version continues the review of the same patch.
 	c.advanceTime(time.Hour)
 	iteration := c.pollAIWorkflow(t, ai.WorkflowPatchIteration)
@@ -56,6 +60,11 @@ func TestAIPatchSync(t *testing.T) {
 	c.pollAndConfirmReport(t, "lore", "<v2>")
 	want.JobID = iteration.ID
 	want.Link = lore.LinkToThread("<v2>")
+	require.Equal(t, want, c.syncAIPatch(t, extID))
+
+	// The bug is held for the whole patch, so any version can be used to release it.
+	c.holdAIPatch(t, "<v2>", "<unhold>", false)
+	want.Held = false
 	require.Equal(t, want, c.syncAIPatch(t, extID))
 
 	c.rejectAIPatch(t, "<v2>")
@@ -105,6 +114,34 @@ func TestAIPatchSyncFailedJob(t *testing.T) {
 	require.Equal(t, BugAIPatch{JobID: jobID, State: AIPatchFailed}, c.syncAIPatch(t, extID))
 }
 
+func TestAIPatchSyncUnauthorizedHold(t *testing.T) {
+	c := NewSpannerCtx(t)
+	defer c.Close()
+
+	c.SetAIConfig("ains", &AIConfig{
+		Stages: []AIPatchStageConfig{
+			{Name: "moderation", ServingIntegration: "lore", MailingList: "moderation@test.com"},
+		},
+		AllowedCommandAuthors: []string{"reviewer@test.com"},
+	})
+
+	extID, jobID := c.setupAIPatchJob(t)
+	c.finishAIPatchJob(t, jobID, nil)
+	c.pollAndConfirmReport(t, "lore", "<patch>")
+
+	resp, err := c.globalClient.AIReportCommand(&dashapi.SendExternalCommandReq{
+		Source:       dashapi.AIJobSourceLore,
+		RootExtID:    "<patch>",
+		MessageExtID: "<hold>",
+		Author:       "someone@test.com",
+		DKIM:         true,
+		Hold:         &dashapi.HoldCommand{},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, resp.Error)
+	require.False(t, c.syncAIPatch(t, extID).Held)
+}
+
 // syncAIPatch syncs AI patches with the AI database and returns the resulting state for the bug.
 func (ctx *Ctx) syncAIPatch(t *testing.T, extID string) BugAIPatch {
 	t.Helper()
@@ -124,6 +161,25 @@ func (ctx *Ctx) commentOnAIPatch(t *testing.T, patchExtID, commentExtID string, 
 		OwnEmail:     ownEmail,
 		Comment:      &dashapi.CommentCommand{Body: "A comment"},
 	})
+	require.NoError(t, err)
+	require.Empty(t, resp.Error)
+}
+
+// holdAIPatch sends #syz hold (or #syz unhold) in reply to the patch.
+func (ctx *Ctx) holdAIPatch(t *testing.T, patchExtID, commandExtID string, hold bool) {
+	t.Helper()
+	req := &dashapi.SendExternalCommandReq{
+		Source:       dashapi.AIJobSourceLore,
+		RootExtID:    patchExtID,
+		MessageExtID: commandExtID,
+		Author:       "someone@test.com",
+	}
+	if hold {
+		req.Hold = &dashapi.HoldCommand{}
+	} else {
+		req.Unhold = &dashapi.UnholdCommand{}
+	}
+	resp, err := ctx.globalClient.AIReportCommand(req)
 	require.NoError(t, err)
 	require.Empty(t, resp.Error)
 }
