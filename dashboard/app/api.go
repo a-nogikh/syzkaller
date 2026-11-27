@@ -1690,15 +1690,19 @@ func getText(ctx context.Context, tag string, id int64) ([]byte, string, error) 
 	if err := db.Get(ctx, db.NewKey(ctx, tag, "", id, nil), text); err != nil {
 		return nil, "", fmt.Errorf("failed to read text %v: %w", tag, err)
 	}
-	d, err := gzip.NewReader(bytes.NewBuffer(text.Text))
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to read text %v: %w", tag, err)
-	}
-	data, err := io.ReadAll(d)
+	data, err := decompressText(text)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read text %v: %w", tag, err)
 	}
 	return data, text.Namespace, nil
+}
+
+func decompressText(text *Text) ([]byte, error) {
+	d, err := gzip.NewReader(bytes.NewBuffer(text.Text))
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(d)
 }
 
 // limitLength essentially does return s[:max],
